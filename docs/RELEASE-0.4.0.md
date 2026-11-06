@@ -29,7 +29,9 @@ Proxy/VPN binding and a kill switch, Brave Search API integration, moving all wo
 
 ## Verify the release file
 
-Validation before publication: 403 automated tests passed, dependency auditing reported no known vulnerabilities, and an isolated Electron run exercised the new settings, metadata, image viewer, cleanup choices and checksum worker with no app errors or external test requests. Live public metadata checks returned Steam requirements/review counts and valid GitHub release metadata. Packaged Electron protections and the native helper's build record are checked during the release build.
+Validation before publication: 409 automated tests passed, dependency auditing reported no known vulnerabilities, and an isolated Electron run exercised the new settings, metadata, image viewer, cleanup choices and checksum worker with no app errors or external test requests. Live public metadata checks returned Steam requirements/review counts and valid GitHub release metadata. Packaged Electron protections and the native helper's build record are checked during the release build.
+
+CodeQL includes the new C# helper. Its informational native-code notes are reviewed in [Security](https://github.com/khattabhunter/ravenshelf/blob/v0.4.0/SECURITY.md); necessary Windows file-handle calls remain visible to scanning rather than being suppressed.
 
 ```powershell
 Get-FileHash .\Ravenshelf-0.4.0-Windows.exe -Algorithm SHA256

@@ -50,6 +50,27 @@ test('Windows helper atomically replaces only the fixture executable and preserv
   assert.equal((await fs.promises.readdir(f.root)).some(x=>x.startsWith('.ravenshelf-update-')),false);
 });
 
+test('native updater accepts real Windows short-path aliases without losing directory or file checks',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t);await f.updater.check();const prepared=await f.updater.prepareInstall({pid:2147483647});
+  const source=path.join(f.root,'short-paths.cs'),probe=path.join(f.root,'short-paths.exe');
+  // Ask Windows for actual aliases; invented ~1 paths do not exercise .NET's
+  // expansion. No short-name policy, filesystem setting, or TEMP override changes.
+  await fs.promises.writeFile(source,'using System; using System.IO; using System.Text; using System.Runtime.InteropServices; using System.Web.Script.Serialization; class ShortPaths { [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetShortPathName(string value,StringBuilder result,uint capacity); static void Main(string[] args) { var result=new string[args.Length][]; for(int i=0;i<args.Length;i++){var buffer=new StringBuilder(32768); uint length=GetShortPathName(args[i],buffer,(uint)buffer.Capacity); if(length==0||length>=buffer.Capacity)throw new IOException("Fixture path alias unavailable."); string shortPath=buffer.ToString(); result[i]=new[]{shortPath,Path.GetFullPath(shortPath)};} Console.Write(new JavaScriptSerializer().Serialize(result)); } }');
+  const compiler=path.join(process.env.SystemRoot||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
+  await execFile(compiler,['/nologo','/target:exe','/reference:System.Web.Extensions.dll','/out:'+probe,source],{windowsHide:true,timeout:15000});
+  const originals=[prepared.helper,prepared.job,f.executable,f.updater.ready.staged,path.dirname(prepared.job)];
+  const aliases=JSON.parse((await execFile(probe,originals,{windowsHide:true,timeout:15000})).stdout);
+  for(let i=0;i<originals.length;i++)assert.equal((await fs.promises.realpath(aliases[i][0])).toLowerCase(),(await fs.promises.realpath(originals[i])).toLowerCase());
+  const expanded=aliases.filter(([shortPath,fullPath])=>shortPath.toLowerCase()!==fullPath.toLowerCase()).length;
+  t.diagnostic(`Windows expanded ${expanded} of ${aliases.length} fixture paths; unchanged aliases are allowed on volumes without short names.`);
+  const job=JSON.parse(await fs.promises.readFile(prepared.job));job.target=aliases[2][0];job.staged=aliases[3][0];job.result=aliases[4][0]+'\\result.json';
+  await fs.promises.writeFile(prepared.job,JSON.stringify(job));
+  await execFile(aliases[0][0],[aliases[1][0]],{windowsHide:true,timeout:15000});
+  assert.deepEqual(await fs.promises.readFile(f.executable),bytes);assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
+  assert.equal(JSON.parse(await fs.promises.readFile(path.join(path.dirname(prepared.job),'result.json'),'utf8')).success,true);
+  const backups=(await fs.promises.readdir(f.root)).filter(x=>x.startsWith('.ravenshelf-rollback-'));assert.equal(backups.length,1);assert.deepEqual(await fs.promises.readFile(path.join(f.root,backups[0])),f.old);
+});
+
 test('a modified bundled helper cannot be prepared for execution',{skip:process.platform!=='win32'},async t=>{
   const f=await fixture(t);await f.updater.check();
   const original=fs.promises.readFile,bundled=path.resolve(__dirname,'../src/ravenshelf-updater.exe');
@@ -71,6 +92,11 @@ for(const [label,change]of [
   ['a network-share target',(job)=>{job.target='\\\\localhost\\share\\Ravenshelf.exe';}],
   ['an escaping staged path',(job)=>{job.staged=path.join(path.dirname(job.staged),'..','update.exe');}],
   ['an escaping result path',(job)=>{job.result=path.join(path.dirname(job.result),'..','result.json');}],
+  ['raw parent traversal even when it returns to the same target',(job)=>{job.target=path.dirname(job.target)+'\\profile\\..\\Ravenshelf.exe';}],
+  ['a raw current-directory segment',(job)=>{job.target=path.dirname(job.target)+'\\.\\Ravenshelf.exe';}],
+  ['a raw duplicate separator',(job)=>{job.target=path.dirname(job.target)+'\\\\Ravenshelf.exe';}],
+  ['a trailing-dot filename',(job)=>{job.target+='.';}],
+  ['a trailing-space filename',(job)=>{job.target+=' ';}],
   ['an unrelated executable name',(job)=>{job.target=job.target.replace('Ravenshelf.exe','Other.exe');}],
   ['a non-boolean restart request',(job)=>{job.restart='true';}],
 ])test(`native updater rejects ${label} without changing the app`,{skip:process.platform!=='win32'},async t=>{

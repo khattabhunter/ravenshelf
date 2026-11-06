@@ -29,26 +29,44 @@ internal static class RavenshelfUpdater
         public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
         public long Size { get { return ((long)SizeHigh << 32) | SizeLow; } }
     }
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern SafeFileHandle CreateFile(string name, uint access, uint sharing, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation information);
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern uint GetFileType(SafeFileHandle handle);
 
     static Exception Invalid() { return new InvalidDataException("Invalid or changed update data."); }
-    static string OrdinaryPath(string value)
+    static void ValidateSegment(string segment)
+    {
+        if (segment.Length == 0 || segment == "." || segment == ".." || segment.EndsWith(".") || segment.EndsWith(" ") ||
+            segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || Regex.IsMatch(segment, @"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)", RegexOptions.IgnoreCase)) throw Invalid();
+    }
+    static void ValidatePathText(string value)
     {
         if (String.IsNullOrEmpty(value) || !Regex.IsMatch(value, @"^[A-Za-z]:\\") || value.IndexOf('/') >= 0 || value.Substring(2).IndexOf(':') >= 0) throw Invalid();
+        foreach (string segment in value.Substring(3).Split('\\')) ValidateSegment(segment);
+    }
+    static string OrdinaryPath(string value)
+    {
+        // Validate the original spelling before normalization can erase traversal,
+        // trailing dots/spaces or duplicate separators. GetFullPath may legitimately
+        // expand a Windows 8.3 alias, including the CI runner's TEMP directory.
+        ValidatePathText(value);
         string full = Path.GetFullPath(value);
-        if (!String.Equals(full, value, StringComparison.OrdinalIgnoreCase)) throw Invalid();
-        foreach (string segment in full.Substring(3).Split('\\'))
-        {
-            if (segment.Length == 0 || segment == "." || segment == ".." || segment.EndsWith(".") || segment.EndsWith(" ") ||
-                segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || Regex.IsMatch(segment, @"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)", RegexOptions.IgnoreCase)) throw Invalid();
-        }
+        ValidatePathText(full);
         LockDirectory(Path.GetDirectoryName(full));
         return full;
+    }
+    static string ChildPath(string directory, string filename)
+    {
+        // A validated single filename cannot replace the directory as a rooted
+        // Path.Combine argument could. OrdinaryPath validates and locks ancestry.
+        ValidateSegment(filename);
+        return OrdinaryPath(directory.TrimEnd('\\') + "\\" + filename);
     }
     static void LockDirectory(string directory)
     {
@@ -57,14 +75,15 @@ internal static class RavenshelfUpdater
         if (!String.IsNullOrEmpty(parent)) LockDirectory(parent);
         SafeFileHandle handle = CreateFile(directory, 0x80, ShareRead | ShareWrite, IntPtr.Zero, Existing, OpenReparsePoint | BackupSemantics, IntPtr.Zero);
         if (handle.IsInvalid) { handle.Dispose(); throw Invalid(); }
+        bool retained = false;
         try
         {
             FileInformation information;
             if (!GetFileInformationByHandle(handle, out information) || GetFileType(handle) != 1 ||
                 (information.Attributes & DirectoryAttribute) == 0 || (information.Attributes & ReparseAttribute) != 0) throw Invalid();
-            DirectoryLocks.Add(handle); LockedDirectories.Add(directory);
+            DirectoryLocks.Add(handle); LockedDirectories.Add(directory); retained = true;
         }
-        catch { handle.Dispose(); throw; }
+        finally { if (!retained) handle.Dispose(); }
     }
     static FileInformation Information(FileStream stream)
     {
@@ -76,21 +95,26 @@ internal static class RavenshelfUpdater
     }
     static FileStream Open(string file, bool create)
     {
-        OrdinaryPath(file);
+        file = OrdinaryPath(file);
         // Deny concurrent writes and deletion while validating or copying a file.
         SafeFileHandle handle = CreateFile(file, create ? Read | Write : Read, create ? 0 : ShareRead, IntPtr.Zero,
             create ? NewFile : Existing, OpenReparsePoint, IntPtr.Zero);
         if (handle.IsInvalid) { handle.Dispose(); throw new IOException("Update file unavailable."); }
         FileStream stream = null;
-        try { stream = new FileStream(handle, create ? FileAccess.ReadWrite : FileAccess.Read, 65536, false); Information(stream); return stream; }
-        catch { if (stream != null) stream.Dispose(); else handle.Dispose(); throw; }
+        bool retained = false;
+        try
+        {
+            stream = new FileStream(handle, create ? FileAccess.ReadWrite : FileAccess.Read, 65536, false);
+            Information(stream); retained = true; return stream;
+        }
+        finally { if (!retained) { if (stream != null) stream.Dispose(); else handle.Dispose(); } }
     }
     static string Hash(FileStream file, long expectedSize, bool requireExecutable)
     {
         FileInformation before = Information(file);
         if (before.Size < 64 || before.Size > MaximumSize || (expectedSize >= 0 && before.Size != expectedSize)) throw Invalid();
         file.Position = 0;
-        if (requireExecutable && (file.ReadByte() != 0x4d || file.ReadByte() != 0x5a)) throw Invalid();
+        if (requireExecutable && (file.ReadByte() != 0x4d || file.ReadByte() != 0x5a)) { throw Invalid(); }
         file.Position = 0;
         string digest;
         using (SHA256 sha = SHA256.Create()) digest = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
@@ -107,20 +131,26 @@ internal static class RavenshelfUpdater
     {
         object value; if (!data.TryGetValue(name, out value) || (!(value is int) && !(value is long))) throw Invalid(); return Convert.ToInt64(value);
     }
-    static void Result(string root, bool success, bool restored)
+    static bool Result(string root, bool success, bool restored)
     {
-        if (root == null) return;
+        if (root == null) return false;
         try
         {
             // Never follow or overwrite a preexisting result file, including a hard link.
-            using (FileStream result = Open(Path.Combine(root, "result.json"), true))
+            using (FileStream result = Open(ChildPath(root, "result.json"), true))
             {
                 string json = success ? "{\"success\":true,\"versionInstalled\":true}" :
                     "{\"success\":false,\"restored\":" + (restored ? "true" : "false") + ",\"message\":\"Automatic update could not finish. Check Ravenshelf before trying again.\"}";
                 byte[] bytes = Encoding.UTF8.GetBytes(json); result.Write(bytes, 0, bytes.Length); result.Flush(true);
             }
+            return true;
         }
-        catch { /* Fixed results are best effort and never expose exception text. */ }
+        // A result is best effort: a preexisting, locked, or unavailable result
+        // must never cause an overwrite or leak exception/path details.
+        catch (InvalidDataException) { return false; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (System.Security.SecurityException) { return false; }
     }
     static void WaitForApplication(int pid)
     {
@@ -135,18 +165,52 @@ internal static class RavenshelfUpdater
         int code = Marshal.GetHRForException(error) & 0xffff;
         return code == 5 || code == 32 || code == 33;
     }
+    static bool Restore(string backup, string target, string previousHash, string expectedHash)
+    {
+        try
+        {
+            using (FileStream old = Open(backup, false)) if (Hash(old, -1, true) != previousHash) throw Invalid();
+            if (File.Exists(target))
+            {
+                using (FileStream current = Open(target, false)) if (Hash(current, -1, true) != expectedHash) throw Invalid();
+                File.Replace(backup, target, null, true);
+            }
+            else File.Move(backup, target);
+            return true;
+        }
+        // Preserve the rollback copy when a target changed or cannot be accessed.
+        catch (InvalidDataException) { return false; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (System.Security.SecurityException) { return false; }
+        catch (CryptographicException) { return false; }
+        catch (NotSupportedException) { return false; }
+    }
+    static int Failure(string root, bool replaced, string backup, string target, string previousHash, string expectedHash)
+    {
+        bool restored = replaced && backup != null && target != null && Restore(backup, target, previousHash, expectedHash);
+        Result(root, false, restored); return 1;
+    }
+    static bool DeleteTemporary(string file)
+    {
+        try { File.Delete(file); return true; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (System.Security.SecurityException) { return false; }
+    }
     [STAThread]
     static int Main(string[] args)
     {
         string jobRoot = null, target = null, temporary = null, backup = null, previousHash = null, expectedHash = null;
-        bool replaced = false, restored = false;
+        bool replaced = false;
         try
         {
             if (args.Length != 1) throw Invalid();
             string job = OrdinaryPath(args[0]);
             if (Path.GetFileName(job) != "job.json") throw Invalid();
             jobRoot = Path.GetDirectoryName(job);
-            if (!String.Equals(Path.GetDirectoryName(typeof(RavenshelfUpdater).Assembly.Location), jobRoot, StringComparison.OrdinalIgnoreCase)) throw Invalid();
+            string helper = OrdinaryPath(typeof(RavenshelfUpdater).Assembly.Location);
+            if (!String.Equals(Path.GetDirectoryName(helper), jobRoot, StringComparison.OrdinalIgnoreCase)) throw Invalid();
             Dictionary<string, object> data;
             using (FileStream input = Open(job, false))
             {
@@ -167,10 +231,10 @@ internal static class RavenshelfUpdater
             if (size < 64 || size > MaximumSize || pid <= 0 || pid > Int32.MaxValue) throw Invalid();
             target = OrdinaryPath(Text(data, "target"));
             string staged = OrdinaryPath(Text(data, "staged"));
-            if (!String.Equals(staged, Path.Combine(jobRoot, "update.exe"), StringComparison.OrdinalIgnoreCase) ||
-                !String.Equals(OrdinaryPath(Text(data, "result")), Path.Combine(jobRoot, "result.json"), StringComparison.OrdinalIgnoreCase) ||
+            if (!String.Equals(staged, ChildPath(jobRoot, "update.exe"), StringComparison.OrdinalIgnoreCase) ||
+                !String.Equals(OrdinaryPath(Text(data, "result")), ChildPath(jobRoot, "result.json"), StringComparison.OrdinalIgnoreCase) ||
                 !Regex.IsMatch(Path.GetFileName(target), @"^Ravenshelf[-\w. ()]*\.exe$", RegexOptions.IgnoreCase) ||
-                String.Equals(target, typeof(RavenshelfUpdater).Assembly.Location, StringComparison.OrdinalIgnoreCase)) throw Invalid();
+                String.Equals(target, helper, StringComparison.OrdinalIgnoreCase)) throw Invalid();
             string parent = Path.GetDirectoryName(target);
             using (FileStream source = Open(staged, false))
             {
@@ -179,10 +243,10 @@ internal static class RavenshelfUpdater
                 WaitForApplication((int)pid);
                 // Fresh unpredictable names prevent planted predictable temporary links.
                 string unique = Guid.NewGuid().ToString("N");
-                temporary = Path.Combine(parent, ".ravenshelf-update-" + unique + ".exe");
+                temporary = ChildPath(parent, ".ravenshelf-update-" + unique + ".exe");
                 // Use a different unannounced nonce for the backup: observing
                 // temporary-file creation must not reveal its future filename.
-                backup = Path.Combine(parent, ".ravenshelf-rollback-" + Guid.NewGuid().ToString("N") + ".exe");
+                backup = ChildPath(parent, ".ravenshelf-rollback-" + Guid.NewGuid().ToString("N") + ".exe");
                 OrdinaryPath(backup); if (File.Exists(backup) || Directory.Exists(backup)) throw Invalid();
                 using (FileStream destination = Open(temporary, true)) { source.Position = 0; source.CopyTo(destination, 65536); destination.Flush(true); }
                 for (int attempt = 0; attempt < 120; attempt++)
@@ -210,28 +274,19 @@ internal static class RavenshelfUpdater
             }
             Result(jobRoot, true, false); return 0;
         }
-        catch
-        {
-            if (replaced && backup != null && target != null)
-            {
-                try
-                {
-                    using (FileStream old = Open(backup, false)) if (Hash(old, -1, true) != previousHash) throw Invalid();
-                    if (File.Exists(target))
-                    {
-                        using (FileStream current = Open(target, false)) if (Hash(current, -1, true) != expectedHash) throw Invalid();
-                        File.Replace(backup, target, null, true);
-                    }
-                    else File.Move(backup, target);
-                    restored = true;
-                }
-                catch { /* Do not overwrite a target changed by somebody else. */ }
-            }
-            Result(jobRoot, false, restored); return 1;
-        }
+        catch (InvalidDataException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (IOException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (UnauthorizedAccessException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (ArgumentException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (InvalidOperationException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (NotSupportedException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (System.Security.SecurityException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (System.ComponentModel.Win32Exception) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
+        catch (CryptographicException) { return Failure(jobRoot, replaced, backup, target, previousHash, expectedHash); }
         finally
         {
-            if (temporary != null) try { File.Delete(temporary); } catch { }
+            // Best effort cleanup is limited to the helper's own temporary file.
+            if (temporary != null) DeleteTemporary(temporary);
             for (int i = DirectoryLocks.Count - 1; i >= 0; i--) DirectoryLocks[i].Dispose();
         }
     }
