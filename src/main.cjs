@@ -49,8 +49,10 @@ function handle(name,fn){ipcMain.handle('atlas:'+name,async(event,value)=>{
   if(!win || event.sender!==win.webContents || event.senderFrame!==win.webContents.mainFrame || event.senderFrame.url!=='atlas://app/index.html')throw new Error('Invalid app request.');
   return fn(value);
 });}
-function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null};}
+let updateSequence=0;
+function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,updateSequence:++updateSequence};}
 function publishState(){if(win&&!win.isDestroyed())win.webContents.send('atlas:state',appState());}
+function publishProgress(downloads){if(win&&!win.isDestroyed())win.webContents.send('atlas:progress',{updateSequence:++updateSequence,downloads});}
 function compactGame(value){
   if(!value||typeof value!=='object')return null;
   let url;try{url=safeURL(value.url);}catch{return null;}
@@ -163,6 +165,7 @@ app.whenReady().then(async()=>{
     await new Promise((resolve,reject)=>execFile(shutdown,['/s','/t','0'],{windowsHide:true,timeout:15000},error=>error?reject(new Error('Windows could not perform the shutdown request.')):resolve()));
   }});
   manager.on('state',()=>{completion.refresh();publishState();});
+  manager.on('progress',publishProgress);
   win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Ravenshelf',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.

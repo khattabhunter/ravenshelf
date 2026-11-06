@@ -1,6 +1,6 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.3.1 for Windows, a maintenance prerelease.
+This guide describes Ravenshelf 0.3.2 for Windows, a maintenance prerelease.
 
 ## Start and update Ravenshelf
 
@@ -74,6 +74,8 @@ Files of at least 16 MiB can use parallel sections when the host supplies reliab
 Settings apply when a file starts or resumes. Older `.atlas-part` downloads retain one connection to preserve their saved progress. Downloads started with the newer section-based system can resume with 1, 2 or 4 connections.
 
 The speed display uses a recent five-second average. Your internet connection, other traffic, server limits and host load all affect throughput. Reduce simultaneous files or connections if a host repeatedly limits requests.
+
+From 0.3.2, progress counters refresh together about twice per second, updating active download cards without redrawing completed history. Pause, errors, completion and scan results still update immediately. This reduces interface work; it does not increase a file host's bandwidth or guarantee faster downloads.
 
 ### Pause, restart and partial files
 

@@ -4,13 +4,13 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.1)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.2)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.3.1 maintenance prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.1) and download `Ravenshelf-0.3.1-Windows.exe` from **Assets**.
+1. Open the [v0.3.2 maintenance prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.2) and download `Ravenshelf-0.3.2-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -42,13 +42,13 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.3.1-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.3.2-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.3.1-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.3.2-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
 A matching checksum detects a mismatch with the published file; provenance records its build origin. Neither certifies that software is malware-free, and the executable remains unsigned.
@@ -60,7 +60,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 | Discover | Images, descriptions, listed sizes, newest repacks, monthly popular games and genre sections including Action RPG, RPG and real-time strategy. |
 | Background catalogue refresh | Checks at startup and every five minutes while Ravenshelf is open, including when minimized. |
 | Personal library | Favorites and named collections. |
-| Downloads | Batch queues, progress, pause/resume, retry, persistent partial downloads and duplicate-file protection. |
+| Downloads | Batch queues, lightweight progress updates, pause/resume, retry, persistent partial downloads and duplicate-file protection. |
 | Multiple connections | Up to four connections per large file, with validated ranges and automatic fallback to one. |
 | Defender scans | Automatic Microsoft Defender scan of each finished file, with the result on its card and a **Scan again** button. |
 | Link handling | Supported host adapters, encrypted paste expansion, protected host windows, link export and JDownloader handoff. |
@@ -70,7 +70,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Host support
 
-| Source | Status in 0.3.1 |
+| Source | Status in 0.3.2 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |

@@ -23,7 +23,7 @@ function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'u
 class DownloadManager extends EventEmitter {
   constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null}) {
     super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile;
-    this.running=new Map(); this.tasks=new Set(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
+    this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     const stored=loadJSON(stateFile,{});
     this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],defenderScan:true,...stored.settings};
     this.settings.defenderScan=this.settings.defenderScan!==false;
@@ -47,7 +47,16 @@ class DownloadManager extends EventEmitter {
     // Scans interrupted by closing the app run again on the next start.
     for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
     if(this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
-    this.timer=setInterval(()=>{if(this.running.size) this.save();},2000); this.timer.unref();
+    this.timer=setInterval(()=>{
+      if(this.running.size){
+        const warning=this.headerStorageWarning;this.save();
+        // Storage failures/recovery must reach the UI even without a lifecycle change.
+        if(warning!==this.headerStorageWarning)this.changed();
+      }
+    },2000); this.timer.unref();
+    // One cadence for the whole queue. File I/O and durable checkpoints do not
+    // depend on renderer notifications, and important state changes stay immediate.
+    this.progressTimer=setInterval(()=>this.publishProgress(),500);this.progressTimer.unref();
   }
   state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning}; }
   persisted(d){
@@ -62,6 +71,17 @@ class DownloadManager extends EventEmitter {
     atomicJSON(this.stateFile,{settings:this.settings,downloads});
   }
   changed(){this.emit('state',this.state());}
+  publishProgress(){
+    if(this.stopping)return;
+    const downloads=[];
+    for(const {download:d,rateMeter}of this.progressMeters.values()){
+      if(d.status!=='downloading')continue;
+      d.speed=rateMeter.sample(d.received);
+      // Explicit allowlist: no credentials, paths, URLs, settings or scan results.
+      downloads.push({id:d.id,received:d.received,total:d.total,speed:d.speed,activeConnections:d.activeConnections});
+    }
+    if(downloads.length)this.emit('progress',downloads);
+  }
   updateSettings(patch){this.settings={...this.settings,...patch};this.settings.defenderScan=this.settings.defenderScan!==false;this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
   add({links,gameTitle}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
@@ -117,9 +137,9 @@ class DownloadManager extends EventEmitter {
     if(offset && !d.etag && !d.lastModified){offset=0;d.received=0;}
     let lastActivity=Date.now();
     const watchdog=setInterval(()=>{if(Date.now()-lastActivity>60000)controller.abort(new Error('The host stopped responding. Retry to resume.'));},5000);
-    let handle,rateTimer,refreshPromise;
+    let handle,refreshPromise;
     const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
-    rateTimer=setInterval(()=>{if(d.status==='downloading'){d.speed=rateMeter.sample(d.received);this.changed();}},500);
+    this.progressMeters.set(d.id,{download:d,rateMeter});
     const refreshHeaders=()=>{
       if(!refreshPromise)refreshPromise=(async()=>{
         if(!this.resolveLink)throw new Error('Saved sign-in details are unavailable. Check this download link again before resuming.');
@@ -172,7 +192,7 @@ class DownloadManager extends EventEmitter {
       if(result.prefixBytes){d.etag=result.etag;d.lastModified=result.lastModified;}
       offset=fs.existsSync(partial)?fs.statSync(partial).size:0;
       if(offset&&!d.etag&&!d.lastModified)offset=0;
-      d.received=offset;rateMeter.reset(offset);return false;
+      d.received=offset;rateMeter.reset(offset);this.changed();return false;
     };
     try{
       const saved=readState(workspace);let triedParallel=false;
@@ -209,6 +229,8 @@ class DownloadManager extends EventEmitter {
       else {await res.body?.cancel();throw new Error('The host did not return a downloadable file.');}
       d.etag=res.headers.get('etag');if(d.etag?.startsWith('W/'))d.etag=null;
       d.lastModified=res.headers.get('last-modified');
+      // Mode/host details are lifecycle state, not part of numeric progress deltas.
+      this.changed();
       handle=await fs.promises.open(partial,offset?'a':'w');
       rateMeter.reset(d.received);
       for await (const chunk of res.body){
@@ -225,7 +247,7 @@ class DownloadManager extends EventEmitter {
       await publish(partial);
     }catch(err){
       if(d.status==='downloading'){d.status='error';d.error=err.message||'Download failed.';}
-    }finally{clearInterval(watchdog);clearInterval(rateTimer);if(handle)await handle.close();d.activeConnections=0;}
+    }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);if(handle)await handle.close();d.activeConnections=0;}
   }
   queueScan(d){
     if(['queued','scanning'].includes(d.scan?.status)&&(this.scanning===d.id||this.scanQueue.includes(d.id)))return;
@@ -249,6 +271,6 @@ class DownloadManager extends EventEmitter {
   }
   // Manual closing stays responsive. Queued/running scan states are persisted
   // and resumed on next launch; automatic completion waits for scans beforehand.
-  async stop(){this.stopping=true;clearInterval(this.timer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}await Promise.allSettled([...this.tasks]);this.save();}
+  async stop(){this.stopping=true;clearInterval(this.timer);clearInterval(this.progressTimer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}await Promise.allSettled([...this.tasks]);this.progressMeters.clear();this.save();}
 }
 module.exports={DownloadManager,safeName,atomicJSON,loadJSON};

@@ -33,7 +33,9 @@ const icons = {
   book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1zm0 0v15"/>',
 };
 
-const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.3.1' };
+const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.3.2' };
+const downloadsById = new Map(), activeDownloads = new Map(), downloadCards = new Map();
+let hasDownloadSnapshot = false, lastUpdateSequence = -1;
 const catalog = { page: 1, search: '', section: 'newest', games: [], hasMore: false, loading: false, request: 0 };
 let catalogAutoReady = false;
 let catalogCheckSeen = null;
@@ -511,18 +513,13 @@ function statusLabel(item) {
   if (item.status === 'error') return 'Needs attention';
   return { queued: 'Queued', paused: 'Paused', cancelled: 'Cancelled' }[item.status] || item.status || 'Queued';
 }
-function updateDownloadCard(node, item) {
-  node.className = `download-item ${item.status || ''}`;
-  $('.download-name', node).textContent = item.name || item.filename || fileName(item);
-  $('.download-game', node).textContent = item.gameTitle || 'Imported download';
-  $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : 'file'));
+function updateDownloadProgress(node, item) {
   const received = Math.max(0, Number(item.received) || 0), total = Math.max(0, Number(item.total) || 0);
   const progress = item.status === 'completed' ? 100 : total ? Math.min(100, received / total * 100) : 0;
   const progressNode = $('.download-progress', node);
   progressNode.setAttribute('aria-label', `${item.name || 'File'} download progress`);
   if (total || item.status === 'completed') progressNode.setAttribute('aria-valuenow', String(Math.round(progress))); else progressNode.removeAttribute('aria-valuenow');
   $('.download-progress-fill', node).style.width = `${progress}%`;
-  const status = $('.download-status', node); status.textContent = statusLabel(item); status.className = `download-status ${item.status || ''}`;
   let detail = `${formatBytes(received, '0 B')} / ${formatBytes(total, 'Unknown size')}`;
   if (item.status === 'downloading') detail += ` · ${formatBytes(item.speed, '0 B')}/s${total ? ` · ${Math.round(progress)}%` : ''}`;
   $('.download-transfer', node).textContent = detail;
@@ -537,6 +534,14 @@ function updateDownloadCard(node, item) {
   if (item.connectionNote && ['downloading', 'paused', 'error'].includes(item.status)) connectionText += `${connectionText ? ' · ' : ''}${item.connectionNote}`;
   connections.textContent = connectionText;
   connections.hidden = !connectionText;
+}
+function updateDownloadCard(node, item) {
+  node.className = `download-item ${item.status || ''}`;
+  $('.download-name', node).textContent = item.name || item.filename || fileName(item);
+  $('.download-game', node).textContent = item.gameTitle || 'Imported download';
+  $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : 'file'));
+  const status = $('.download-status', node); status.textContent = statusLabel(item); status.className = `download-status ${item.status || ''}`;
+  updateDownloadProgress(node, item);
   const error = $('.download-error', node); error.textContent = item.error || ''; error.hidden = !item.error;
   const scan = $('.download-scan', node), scanInfo = scanText(item);
   scan.hidden = !scanInfo; scan.className = `download-scan ${scanInfo?.tone || ''}`;
@@ -583,6 +588,7 @@ function makeDownloadCard(item) {
 }
 function renderDownloads() {
   const downloads = state.downloads || [];
+  downloadCards.clear();
   $('#stat-active').textContent = downloads.filter(item => item.status === 'downloading').length;
   $('#stat-speed').textContent = `${formatBytes(downloads.reduce((sum, item) => sum + (item.status === 'downloading' ? Number(item.speed) || 0 : 0), 0), '0 B')}/s`;
   $('#stat-completed').textContent = downloads.filter(item => item.status === 'completed').length;
@@ -600,6 +606,7 @@ function renderDownloads() {
   visible.forEach((item, index) => {
     let node = existing.get(String(item.id));
     if (node) updateDownloadCard(node, item); else node = makeDownloadCard(item);
+    downloadCards.set(String(item.id), node);
     if (list.children[index] !== node) list.insertBefore(node, list.children[index] || null);
   });
 }
@@ -761,9 +768,21 @@ function updateBadges() {
 }
 function applyState(next) {
   if (!next || typeof next !== 'object') return;
+  if (next.updateSequence !== undefined) {
+    if (!Number.isSafeInteger(next.updateSequence) || next.updateSequence < 0 || next.updateSequence <= lastUpdateSequence) return;
+    lastUpdateSequence = next.updateSequence;
+  }
   const previousFavorites = JSON.stringify(state.settings.favorites || []);
   const previousCollections=JSON.stringify(state.settings.collections||[]);
-  if (Array.isArray(next.downloads)) state.downloads = next.downloads;
+  if (Array.isArray(next.downloads)) {
+    state.downloads = next.downloads;
+    downloadsById.clear(); activeDownloads.clear();
+    for (const item of state.downloads) {
+      downloadsById.set(String(item.id), item);
+      if (item.status === 'downloading') activeDownloads.set(String(item.id), item);
+    }
+    hasDownloadSnapshot = true;
+  }
   if (next.settings) state.settings = { ...state.settings, ...next.settings };
   if (next.version) state.version = next.version;
   if (typeof next.headerStorageWarning === 'string') state.headerStorageWarning = next.headerStorageWarning;
@@ -781,6 +800,28 @@ function applyState(next) {
     if (currentView === 'library') renderLibrary();
   }
   if(JSON.stringify(state.settings.collections||[])!==previousCollections&&currentView==='library')renderLibrary();
+}
+function applyProgress(next) {
+  // A delta cannot create a queue, revive a completed file or overwrite a newer
+  // action/getState reply. Full snapshots remain authoritative on startup/reload.
+  if (!hasDownloadSnapshot || !next || !Array.isArray(next.downloads) ||
+      !Number.isSafeInteger(next.updateSequence) || next.updateSequence <= lastUpdateSequence) return;
+  lastUpdateSequence = next.updateSequence;
+  for (const progress of next.downloads) {
+    if (!progress || typeof progress.id !== 'string') continue;
+    const item = downloadsById.get(progress.id);
+    if (!item || item.status !== 'downloading' ||
+        !['received', 'total', 'speed'].every(key => Number.isFinite(progress[key]) && progress[key] >= 0) ||
+        !Number.isInteger(progress.activeConnections) || progress.activeConnections < 0 || progress.activeConnections > 4) continue;
+    item.received = progress.received; item.total = progress.total;
+    item.speed = progress.speed; item.activeConnections = progress.activeConnections;
+    const card = currentView === 'downloads' ? downloadCards.get(progress.id) : null;
+    if (card) updateDownloadProgress(card, item);
+  }
+  if (currentView === 'downloads') {
+    const speed = [...activeDownloads.values()].reduce((sum, item) => sum + (Number(item.speed) || 0), 0);
+    $('#stat-speed').textContent = `${formatBytes(speed, '0 B')}/s`;
+  }
 }
 function wireEvents() {
   $$('[data-view]').forEach(node => node.addEventListener('click', () => showView(node.dataset.view)));
@@ -864,6 +905,7 @@ async function start() {
     return;
   }
   if (typeof api.onState === 'function') api.onState(applyState);
+  if (typeof api.onProgress === 'function') api.onProgress(applyProgress);
   try { applyState(await api.getState()); }
   catch (error) { toast(`Couldn’t load your saved preferences: ${errorText(error)}`, true); }
   try{const sections=await api.getCatalogSections();if(Array.isArray(sections)&&sections.length)catalogSections=sections;}

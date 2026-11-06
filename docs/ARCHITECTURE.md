@@ -1,6 +1,6 @@
 # Architecture
 
-Ravenshelf 0.3.1 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Ravenshelf account service or hosted backend.
+Ravenshelf 0.3.2 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Ravenshelf account service or hosted backend.
 
 ## Main components
 
@@ -63,6 +63,14 @@ Some servers mishandle bounded range headers but support valid open-ended ranges
 
 Transfer checks validate the representation and expected byte counts. Optional Defender scans are a separate check, not a guarantee about archive contents. Ravenshelf does not automatically extract archives, run installers or verify publisher hashes.
 
+## Progress delivery
+
+From 0.3.2, the download manager uses one 500 ms timer to sample active rate meters and emit a combined progress batch. `atlas:progress` carries only `id`, `received`, `total`, `speed` and `activeConnections` for each active file. It does not include credentials, URLs, paths, settings or queue history. The renderer receives this through the fixed `onProgress` preload subscription; the Electron event object is not exposed.
+
+Full `atlas:state` snapshots and progress batches share an increasing `updateSequence`. The renderer ignores stale messages and ignores progress before its first full download snapshot. A progress batch can update only known, actively downloading records and their permitted numeric fields. Cached cards receive counter/connection changes, and aggregate speed is updated without rebuilding history cards or action controls. Hidden views keep their model current and render it when opened.
+
+Queue lifecycle, scan, completion-control and other state changes retain the immediate full-state path. Progress alone does not invoke completion-policy refreshes; the completion scheduler also keeps its own timer and final readiness checks. Periodic persistence explicitly publishes a change when the header-storage warning changes. The progress path does not alter file writes, range validation, checkpoints, host requests or scan-result interpretation.
+
 ## Persistence and refresh
 
 Preferences, queue state and collections are stored in `library.json` under Electron's application profile. Installed-game scan results and renderer-cache version state are separate files. Host and gameplay browser sessions use separate persistent partitions. These files can contain sensitive local paths and request data and are excluded from the repository.
@@ -75,7 +83,7 @@ Queue completion actions are not persisted as an armed preference. Both close an
 
 ## Tests and builds
 
-`npm test` uses Node's test runner with local fixtures, injected transports and simulated clocks. Coverage includes queue/file integrity, range fallback, provider parsing, host policies, installed metadata, IPC behavior, renderer refresh/results, scan-result interpretation, completion/scan ordering and header-encryption failures. `npm run verify:build` separately checks the packaged fuse settings after a build. These checks do not establish current availability or speed of external hosts.
+`npm test` uses Node's test runner with local fixtures, injected transports and simulated clocks. Coverage includes queue/file integrity, range fallback, provider parsing, host policies, installed metadata, IPC behavior, renderer refresh/results, scan-result interpretation, completion/scan ordering and header-encryption failures. Progress regressions cover stale/full-message ordering, permitted fields, subscription cleanup, hidden views and preserving historical cards and security state. `npm run verify:build` separately checks the packaged fuse settings after a build. These checks do not establish current availability or speed of external hosts.
 
 The **Test** workflow runs the offline suite on Windows with Node 24. The manually dispatched **Build Windows preview** workflow installs locked dependencies, runs tests, builds the portable executable and uploads it with a SHA-256 checksum as a temporary workflow artifact. It does not publish a GitHub release. Actions are pinned to reviewed release commit IDs.
 

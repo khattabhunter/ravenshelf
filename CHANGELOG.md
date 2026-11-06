@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 — Progress update maintenance prerelease
+
+### Changed
+
+- Combined regular progress reports into one batch every 500 ms for active transfers. These updates contain file IDs and numeric counters, without repeatedly sending queue history, settings, URLs or credentials.
+- Progress updates refresh cached active cards and aggregate speed without redrawing completed history or rebuilding action controls. Full snapshots remain available on startup and reload.
+- Full snapshots and progress messages share a sequence so late messages cannot overwrite newer progress or lifecycle state. Progress cannot change transfer status, scan results or settings.
+- Pause, error, completion, scan and privacy-warning changes continue to publish immediately. Changes to the header-storage warning during periodic saving are now explicitly published instead of relying on a later progress snapshot.
+
+Offline regressions cover the progress bridge, ordering, card updates and security-state preservation. Controlled responsiveness checks use fixtures and do not measure external filehost speed. The 0.3.1 security fixes and existing transfer checks remain in place. See [the release notes](docs/RELEASE-0.3.2.md).
+
 ## 0.3.1 — Maintenance prerelease
 
 ### Fixed
