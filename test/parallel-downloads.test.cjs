@@ -292,8 +292,8 @@ test('host with malformed bounded ranges but valid open-ended ranges still downl
   assert.equal(host.active, 0);
 });
 
-test('HTML challenges are rejected even when a large file was expected', async t => {
-  const host = rangeHost(() => ({ headers: { 'content-type': 'text/html; charset=UTF-8' } }));
+for(const type of ['text/html; charset=UTF-8','text/javascript','text/xml'])test(`${type} responses are rejected even when a large file was expected`, async t => {
+  const host = rangeHost(() => ({ headers: { 'content-type': type } }));
   const f = fixture(t, host);
   const d = f.add();
   await finished(f.manager);

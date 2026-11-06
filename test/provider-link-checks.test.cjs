@@ -188,6 +188,8 @@ test('GET fallback rejects invalid range metadata and HTML rather than claiming 
     {status:206,headers:{'content-length':'1','content-range':'bytes 0-0/9007199254740992'}},
     {status:200,headers:{'content-type':'text/html'}},
     {status:200,headers:{'content-type':'application/xhtml+xml'}},
+    {status:200,headers:{'content-type':'text/javascript'}},
+    {status:200,headers:{'content-type':'text/xml'}},
   ]){
     const f=fixture({file:(_url,request)=>request.method==='HEAD'?response(null,{status:405}):fileResponse(options)});
     const result=await f.resolve();

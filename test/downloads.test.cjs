@@ -352,7 +352,7 @@ test('hard-linked partial files are refused before a download can modify another
   assert.equal(fs.readFileSync(path.join(manager.downloads[0].folder,'part01.rar.atlas-part'),'utf8'),'abc');
 });
 
-for(const type of ['application/javascript','text/javascript','application/xml'])test(`single downloads reject ${type} before creating an archive`,async t=>{
+for(const type of ['application/javascript','text/javascript','application/xml','text/xml'])test(`single downloads reject ${type} before creating an archive`,async t=>{
   const {manager}=fixture(t,async()=>response('unexpected active page',{'content-type':type}));
   manager.add({gameTitle:'Game',links:[link('active-page')]});await finished(manager);
   const d=manager.downloads[0];assert.equal(d.status,'error');

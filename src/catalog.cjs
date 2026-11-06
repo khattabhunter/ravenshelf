@@ -68,7 +68,7 @@ async function cached(key,loader,ttl=5*60*1000,forceRefresh=false){
   const task=(async()=>{const data=await loader();if(cache.size>=100)cache.delete(cache.keys().next().value);cache.set(key,{time:Date.now(),data});return data;})();
   pending.set(key,task);try{return structuredClone(await task);}finally{pending.delete(key);}
 }
-async function mapLimit(items,limit,fn){const output=new Array(items.length);let next=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;output[i]=await fn(items[i],i);}}));return output;}
+async function mapLimit(items,limit,fn){const output=new Array(items.length);let next=0;await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;output[i]=await fn(items[i]);}}));return output;}
 function catalogVersion(title){
   const text=clean(title);
   const version=text.match(/(?:^|[\s,–—])v\s*(\d[\w.]*(?:[/-]\d[\w.]*)?)/i);

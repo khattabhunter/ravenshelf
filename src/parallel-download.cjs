@@ -62,7 +62,7 @@ function validRange(response,start,end,total){
   if(response.status!==206)return false;
   const encoding=response.headers.get('content-encoding');
   if(encoding&&encoding.toLowerCase()!=='identity')return false;
-  if(/text\/html|application\/(?:json|xhtml|xml|javascript)/i.test(response.headers.get('content-type')||''))return false;
+  if(/text\/(?:html|xml|javascript)|application\/(?:json|xhtml|xml|javascript)/i.test(response.headers.get('content-type')||''))return false;
   const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range')||'');
   if(!match)return false;
   const [a,b,size]=match.slice(1).map(Number);

@@ -296,7 +296,7 @@ async function probeDirect(url, filename, host, referer,fetcher=safeFetch) {
   if(response.status===404||response.status===410) return {url,filename,size:0,host,status:'unavailable',message:'File not found or deleted.'};
   if(!response.ok) return {url,filename,size:0,host,status:'manual',message:`The host returned HTTP ${response.status}; open it in your browser.`};
   const type=response.headers.get('content-type')||'';
-  if(/text\/html|application\/(json|xml|xhtml|javascript)/i.test(type)) return {url,filename,size:0,host,status:'manual',message:'This is a web page, not a verified file download.'};
+  if(/text\/(?:html|xml|javascript)|application\/(json|xml|xhtml|javascript)/i.test(type)) return {url,filename,size:0,host,status:'manual',message:'This is a web page, not a verified file download.'};
   if(![200,206].includes(response.status))return {url,filename,size:0,host,status:'manual',message:'The host did not return a verified file response.'};
   let size=Number(response.headers.get('content-length'))||0;
   if(response.status===206){

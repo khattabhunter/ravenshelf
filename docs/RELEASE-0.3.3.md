@@ -20,6 +20,11 @@ Download **Ravenshelf-0.3.3-Windows.exe** from the release assets, close the old
 - Single streams reject HTML, JSON, XML and script responses. Recently modified files without a strong ETag are not resumed using a weak timestamp alone.
 - A failed or paused reset cannot associate old partial bytes with a new file validator. Unconsumed response streams are cancelled after local file failures.
 - CodeQL now runs the broader **security-and-quality** suite. Test and release workflows also audit locked dependencies.
+- The expanded scan also identified an unused catalogue callback argument and downloader assignment; both were removed. The new manifest-replacement test creates its replacement exclusively.
+
+## Validation
+
+296 automated tests cover downloads, byte integrity, resume/fallback, hostile file replacement, bounded metadata, error privacy, renderer progress and the existing security safeguards. Dependency auditing includes runtime and build dependencies. Review the repository's code-scanning alert list as well as the workflow status: a completed scan is not itself a finding-free result.
 
 ## Upgrade behavior and limits
 

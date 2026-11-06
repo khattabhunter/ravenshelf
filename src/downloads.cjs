@@ -214,7 +214,7 @@ class DownloadManager extends EventEmitter {
       d.activeConnections=1;
       let res=await request(headers);responseBody=res.body;
       if(!triedParallel&&!saved?.disabled&&connections>1&&!offset&&res.status===200&&Number(res.headers.get('content-length'))>=MIN_PARALLEL_SIZE){
-        await res.body?.cancel();d.activeConnections=0;triedParallel=true;
+        await res.body?.cancel();d.activeConnections=0;
         if(await parallel())return;
         headers=offset?{Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified}:{};
         d.activeConnections=1;res=await request(headers);responseBody=res.body;
@@ -224,7 +224,7 @@ class DownloadManager extends EventEmitter {
       const encoding=res.headers.get('content-encoding');
       if(encoding&&encoding.toLowerCase()!=='identity'){await res.body?.cancel();throw new Error('Host ignored the uncompressed transfer request. Use another mirror to preserve reliable byte ranges.');}
       const type=(res.headers.get('content-type')||'').toLowerCase();
-      if(/text\/(?:html|javascript)|application\/(?:json|xhtml|xml|javascript)/.test(type)){await res.body?.cancel();throw new Error('The host returned a web page instead of a file. Open the protected host.');}
+      if(/text\/(?:html|xml|javascript)|application\/(?:json|xhtml|xml|javascript)/.test(type)){await res.body?.cancel();throw new Error('The host returned a web page instead of a file. Open the protected host.');}
       if(offset&&res.status===200){offset=0;d.received=0;}
       let expectedResponse=0;
       if(res.status===206){
