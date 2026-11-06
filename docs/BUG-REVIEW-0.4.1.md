@@ -14,6 +14,8 @@ The current main-branch findings were fetched from GitHub before changes: 12 ope
 
 No query, finding or scanning language was disabled. These notes do not establish an exploitable flaw, and their absence would not establish that all bugs are absent.
 
+The fresh scan also identified a redundant empty-value check in the new storage scanner (`js/trivial-conditional`, alert 33). It was removed; the caller already handles an unset folder, and absolute-path validation still rejects empty or relative paths. Storage regression tests passed after the cleanup.
+
 The surrounding updater audit found real JavaScript lifecycle bugs that those notes did not identify: shutdown did not await staging cleanup, and a failed job write could leave an exclusively-created helper blocking the next attempt. These have regression coverage and are fixed.
 
 The transfer audit also reproduced a single-connection retry loop after all bytes had arrived but the stream failed before clean EOF. A matching HTTP 416 size now permits exactly one last-byte request with If-Range; existing validator, file identity, response-length and clean-EOF checks still apply. Unknown or mismatched 416 sizes do not trigger this recovery.

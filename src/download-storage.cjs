@@ -10,7 +10,7 @@ const same=(a,b)=>a.ino!==0n&&a.dev===b.dev&&a.ino===b.ino&&a.birthtimeNs===b.bi
 function inside(root,target){const relative=path.relative(root,target);return !path.isAbsolute(relative)&&relative!=='..'&&!relative.startsWith('..'+path.sep);}
 function safeName(name){return typeof name==='string'&&name.length>0&&name.length<=255&&!/[\\/<>:"|?*\0-\x1f\x7f]/.test(name)&&!/[. ]$/.test(name)&&!/^\.{1,2}$/.test(name)&&!/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(name);}
 function supportedRoot(value){
-  if(typeof value!=='string'||!value||value.length>2048||!path.isAbsolute(value)||/^[\\/]{2}/.test(value)||/[\0-\x1f]/.test(value))return false;
+  if(typeof value!=='string'||value.length>2048||!path.isAbsolute(value)||/^[\\/]{2}/.test(value)||/[\0-\x1f]/.test(value))return false;
   const root=path.resolve(value),home=path.resolve(os.homedir());
   if(root===path.parse(root).root||inside(root,home))return false;
   const broad=[home,...['Downloads','Desktop','Documents','Pictures','Videos','Music','AppData'].map(name=>path.join(home,name)),process.env.APPDATA,process.env.LOCALAPPDATA,process.env.WINDIR,process.env.SystemRoot,process.env.ProgramFiles,process.env['ProgramFiles(x86)'],process.env.ProgramData].filter(Boolean).map(value=>key(path.resolve(value)));
