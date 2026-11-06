@@ -1,0 +1,47 @@
+# Dependencies and packaged builds
+node_modules/
+/dist/
+/dist-*/
+/release/
+*.exe
+*.msi
+*.zip
+*.7z
+*.rar
+*.iso
+
+# Personal configuration, credentials and local application state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+library.json
+installed-games.json
+renderer-cache.json
+/userData/
+/profiles/
+/.local-test-profile/
+/downloads/
+/Atlas/
+*.atlas-part
+.atlas-segments-*/
+
+# Test scratch data, captured pages and research
+/test/.*-fixtures/
+/test/.*-profile/
+/test/.review-profile/
+/test/.unused-*/
+/work/
+/research/
+/coverage/
+*.log
+*.tmp
+*.dmp
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

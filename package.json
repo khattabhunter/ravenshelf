@@ -1,0 +1,57 @@
+{
+  "name": "atlas-repack-library",
+  "version": "0.2.3",
+  "private": true,
+  "description": "A local visual catalogue and batch download manager",
+  "author": "Atlas Library contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khattabhunter/atlas-library.git"
+  },
+  "homepage": "https://github.com/khattabhunter/atlas-library#readme",
+  "bugs": {
+    "url": "https://github.com/khattabhunter/atlas-library/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "cheerio": "1.2.0",
+    "undici": "8.12.4"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "overrides": {
+    "minimatch@>=7.0.0 <11.0.1": "11.0.5"
+  },
+  "build": {
+    "appId": "local.atlas.repacklibrary",
+    "productName": "Atlas Library",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "LICENSE",
+      "NOTICE.md"
+    ],
+    "asar": true,
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Atlas-Library-${version}-Windows.exe"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a problem with Atlas itself.
+title: '[Bug]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check existing issues first. Do not attach your profile folder, download queue, browser cookies, credentials, signed download URLs or personal file paths. Report security vulnerabilities using the guidance in SECURITY.md instead of posting exploitable details here.
+  - type: input
+    id: version
+    attributes:
+      label: Atlas version
+      placeholder: 'Example: 0.2.3'
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: 'Example: Windows 11 x64'
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected feature
+      options:
+        - Catalogue or search
+        - Link checking
+        - Downloads or pause/resume
+        - Installed-game scan
+        - Completion action
+        - App startup or other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the selected host name and settings when relevant. Do not include private or signed download links.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the exact error text. Redact personal details in screenshots or logs.
+    validations:
+      required: true

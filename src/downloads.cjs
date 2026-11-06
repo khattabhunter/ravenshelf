@@ -1,0 +1,192 @@
+'use strict';
+const fs=require('node:fs');
+const path=require('node:path');
+const crypto=require('node:crypto');
+const {EventEmitter}=require('node:events');
+const {safeFetch,safeURL}=require('./net.cjs');
+const {RateMeter}=require('./rate-meter.cjs');
+const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace}=require('./parallel-download.cjs');
+const APP_VERSION=require('../package.json').version;
+function safeName(value,fallback='download') {
+  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
+  if(!s || s==='.' || s==='..') s=fallback;
+  if(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(s)) s='_'+s;
+  return s;
+}
+function atomicJSON(file,data) {
+  fs.mkdirSync(path.dirname(file),{recursive:true});
+  fs.writeFileSync(file+'.tmp',JSON.stringify(data,null,2));
+  fs.renameSync(file+'.tmp',file);
+}
+function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
+class DownloadManager extends EventEmitter {
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink}) {
+    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink;
+    this.running=new Map(); this.tasks=new Set(); this.stopping=false;
+    const stored=loadJSON(stateFile,{});
+    this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],...stored.settings};
+    this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);
+    this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));
+    this.downloads=Array.isArray(stored.downloads)?stored.downloads:[];
+    for(const d of this.downloads){if(['queued','downloading'].includes(d.status))d.status='paused';d.speed=0;d.activeConnections=0;}
+    this.timer=setInterval(()=>{if(this.running.size) this.save();},2000); this.timer.unref();
+  }
+  state(){ return {downloads:this.downloads.map(({headers,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION}; }
+  save(){atomicJSON(this.stateFile,{settings:this.settings,downloads:this.downloads});}
+  changed(){this.emit('state',this.state());}
+  updateSettings(patch){this.settings={...this.settings,...patch};this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
+  add({links,gameTitle}) {
+    if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
+    const folderName=safeName(gameTitle,'Imported files').slice(0,100);
+    const folder=path.join(this.settings.downloadDir,folderName); fs.mkdirSync(folder,{recursive:true});
+    const added=[];
+    for(const link of links){
+      if(link.status!=='ready')continue;
+      safeURL(link.url);
+      if(this.downloads.some(d=>d.sourceUrl===(link.sourceUrl||link.url)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled'))continue;
+      const original=safeName(link.filename || new URL(link.url).pathname.split('/').pop());
+      const ext=path.extname(original),stem=original.slice(0,original.length-ext.length);
+      let name=original, i=1;
+      const conflicts=candidate=>this.downloads.some(d=>d.folder.toLowerCase()===folder.toLowerCase()&&[d.name.toLowerCase(),(d.name+'.atlas-part').toLowerCase()].some(p=>p===candidate.toLowerCase()||p===(candidate+'.atlas-part').toLowerCase()));
+      while(fs.existsSync(path.join(folder,name))||fs.existsSync(path.join(folder,name+'.atlas-part'))||conflicts(name)) name=`${stem} (${i++})${ext}`;
+      const requestHeaders={...link.headers};if(link.referer)requestHeaders.Referer=safeURL(link.referer).href;
+      const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};
+      this.downloads.push(d);added.push(d.id);
+    }
+    this.save();this.changed();this.pump();return {added:added.length,ids:added};
+  }
+  action(id,action){
+    const d=this.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
+    if(action==='pause'&&['queued','downloading'].includes(d.status)){d.status='paused';this.running.get(id)?.abort();}
+    else if(action==='cancel'&&!['completed','cancelled'].includes(d.status)){d.status='cancelled';this.running.get(id)?.abort();}
+    else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';}
+    d.speed=0;if(d.status!=='downloading')d.activeConnections=0;this.save();this.changed();this.pump();return this.state();
+  }
+  pump(){
+    if(this.stopping)return;
+    while(this.running.size<this.settings.concurrency){
+      const d=this.downloads.find(x=>x.status==='queued'&&!this.running.has(x.id));if(!d)break;
+      const controller=new AbortController();this.running.set(d.id,controller);
+      const task=this.run(d,controller).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=err.message;}}).finally(()=>{
+        this.running.delete(d.id);d.speed=0;d.activeConnections=0;this.save();this.changed();this.pump();
+      });
+      this.tasks.add(task);task.finally(()=>this.tasks.delete(task));
+    }
+  }
+  async run(d,controller){
+    d.status='downloading';d.error='';d.speed=0;d.connectionMode='checking';d.connectionNote='';d.activeConnections=0;this.changed();
+    const partial=path.join(d.folder,d.name+'.atlas-part'), final=path.join(d.folder,d.name);
+    const workspace=workspaceFor(partial,d.id),connections=normalizeConnections(this.settings.connectionsPerFile);
+    fs.mkdirSync(d.folder,{recursive:true});
+    let offset=fs.existsSync(partial)?fs.statSync(partial).size:0;
+    d.received=offset;
+    // A resumed request without a strong validator could join two different versions.
+    if(offset && !d.etag && !d.lastModified){offset=0;d.received=0;}
+    let lastActivity=Date.now();
+    const watchdog=setInterval(()=>{if(Date.now()-lastActivity>60000)controller.abort(new Error('The host stopped responding. Retry to resume.'));},5000);
+    let handle,rateTimer,refreshPromise;
+    const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
+    rateTimer=setInterval(()=>{if(d.status==='downloading'){d.speed=rateMeter.sample(d.received);this.changed();}},500);
+    const request=async(extraHeaders,signal=controller.signal)=>{
+      signal.throwIfAborted();
+      const originalUrl=d.url;
+      let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
+      lastActivity=Date.now();
+      if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url){
+        await res.body?.cancel();
+        if(originalUrl===d.url){
+          if(!refreshPromise)refreshPromise=(async()=>{
+            const fresh=await this.resolveLink(d.sourceUrl);
+            if(fresh.status!=='ready')throw new Error(fresh.message||'This link needs a browser check.');
+            d.url=safeURL(fresh.url).href;d.headers={...fresh.headers};if(fresh.referer)d.headers.Referer=safeURL(fresh.referer).href;
+          })().finally(()=>{refreshPromise=null;});
+          await refreshPromise;
+        }
+        signal.throwIfAborted();
+        res=await this.fetcher(d.url,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
+      }
+      return res;
+    };
+    const publish=async(file)=>{
+      controller.signal.throwIfAborted();
+      // Hard linking publishes without another full copy and never overwrites.
+      try{await fs.promises.link(file,final);}catch(err){
+        if(!['ENOTSUP','EPERM','EXDEV'].includes(err.code))throw err;
+        await fs.promises.copyFile(file,final,fs.constants.COPYFILE_EXCL);
+      }
+      if(file===partial)await fs.promises.unlink(partial);
+      else await fs.promises.unlink(partial).catch(error=>{if(error.code!=='ENOENT')throw error;});
+      await removeWorkspace(workspace).catch(()=>{d.connectionNote='Download complete. Some temporary files could not be removed.';});
+      d.total=d.received;d.status='completed';d.completedAt=new Date().toISOString();
+    };
+    const parallel=async()=>{
+      d.connectionMode='checking';d.activeConnections=0;this.changed();
+      const result=await downloadRanges({workspace,partialPath:partial,sourceId:d.id,request,signal:controller.signal,connections,
+        onProgress:(received,total)=>{d.received=received;d.total=total;},
+        onActivity:()=>{lastActivity=Date.now();},
+        onConnections:count=>{d.activeConnections=d.status==='downloading'?count:0;},
+        onMode:(mode,note)=>{d.connectionMode=mode;d.connectionNote=note;this.changed();}});
+      if(result.path){d.received=result.total;d.total=result.total;d.etag=result.etag;d.lastModified=result.lastModified;await publish(result.path);return true;}
+      d.connectionMode='single';d.connectionNote=result.note;
+      if(result.reset&&fs.existsSync(partial))fs.truncateSync(partial,0);
+      if(result.prefixBytes){d.etag=result.etag;d.lastModified=result.lastModified;}
+      offset=fs.existsSync(partial)?fs.statSync(partial).size:0;
+      if(offset&&!d.etag&&!d.lastModified)offset=0;
+      d.received=offset;rateMeter.reset(offset);return false;
+    };
+    try{
+      const saved=readState(workspace);let triedParallel=false;
+      if((saved&&!saved.disabled)||(connections>1&&!offset&&d.total>=MIN_PARALLEL_SIZE&&!saved?.disabled)){
+        triedParallel=true;if(await parallel())return;
+      }
+      if(saved?.disabled)d.connectionNote=saved.note||'Using one connection for this file.';
+      let headers=offset?{Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified}:{};
+      d.activeConnections=1;
+      let res=await request(headers);
+      if(!triedParallel&&!saved?.disabled&&connections>1&&!offset&&res.status===200&&Number(res.headers.get('content-length'))>=MIN_PARALLEL_SIZE){
+        await res.body?.cancel();d.activeConnections=0;triedParallel=true;
+        if(await parallel())return;
+        headers=offset?{Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified}:{};
+        d.activeConnections=1;res=await request(headers);
+      }
+      d.connectionMode='single';if(!d.connectionNote)d.connectionNote=connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
+      if(!res.ok){await res.body?.cancel();throw new Error(`Host returned HTTP ${res.status}. Check the source link or retry.`);}
+      const encoding=res.headers.get('content-encoding');
+      if(encoding&&encoding.toLowerCase()!=='identity'){await res.body?.cancel();throw new Error('Host ignored the uncompressed transfer request. Use another mirror to preserve reliable byte ranges.');}
+      const type=(res.headers.get('content-type')||'').toLowerCase();
+      if(/text\/html|application\/(?:json|xhtml)/.test(type)){await res.body?.cancel();throw new Error('The host returned a web page instead of a file. Open the protected host.');}
+      if(offset&&res.status===200){offset=0;d.received=0;}
+      let expectedResponse=0;
+      if(res.status===206){
+        const range=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get('content-range')||'');
+        if(!range || Number(range[1])!==offset || Number(range[2])<offset || Number(range[2])>=Number(range[3])) {await res.body?.cancel();throw new Error('Host sent an invalid resume range. File was not modified.');}
+        if(offset&&d.etag&&d.etag!==res.headers.get('etag')){await res.body?.cancel();throw new Error('The host could not verify the saved file version. Cancel and queue it again.');}
+        if(offset&&!d.etag&&d.lastModified&&d.lastModified!==res.headers.get('last-modified')){await res.body?.cancel();throw new Error('The file changed on the host. Cancel and queue it again.');}
+        d.total=Number(range[3]);
+        expectedResponse=Number(range[2])-Number(range[1])+1;
+        if(res.headers.has('content-length')&&Number(res.headers.get('content-length'))!==expectedResponse){await res.body?.cancel();throw new Error('Host returned inconsistent range and file lengths.');}
+      }else if(res.status===200){d.total=Number(res.headers.get('content-length'))||0;}
+      else {await res.body?.cancel();throw new Error('The host did not return a downloadable file.');}
+      d.etag=res.headers.get('etag');if(d.etag?.startsWith('W/'))d.etag=null;
+      d.lastModified=res.headers.get('last-modified');
+      handle=await fs.promises.open(partial,offset?'a':'w');
+      rateMeter.reset(d.received);
+      for await (const chunk of res.body){
+        if(controller.signal.aborted)throw controller.signal.reason||new Error('Paused');
+        let pos=0;while(pos<chunk.length){const result=await handle.write(chunk,pos,chunk.length-pos);pos+=result.bytesWritten;}
+        d.received+=chunk.length;lastActivity=Date.now();
+        if(d.total&&d.received>d.total)throw new Error('Host sent more bytes than expected.');
+      }
+      if(controller.signal.aborted)throw controller.signal.reason||new Error('Paused');
+      if(expectedResponse&&d.received-offset!==expectedResponse)throw new Error('Transfer length did not match the requested range.');
+      if(d.total&&d.received!==d.total)throw new Error('Transfer ended early. Retry to resume.');
+      if(!d.received)throw new Error('The host returned an empty file.');
+      await handle.sync();await handle.close();handle=null;
+      await publish(partial);
+    }catch(err){
+      if(d.status==='downloading'){d.status='error';d.error=err.message||'Download failed.';}
+    }finally{clearInterval(watchdog);clearInterval(rateTimer);if(handle)await handle.close();d.activeConnections=0;}
+  }
+  async stop(){this.stopping=true;clearInterval(this.timer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}await Promise.allSettled([...this.tasks]);this.save();}
+}
+module.exports={DownloadManager,safeName,atomicJSON,loadJSON};

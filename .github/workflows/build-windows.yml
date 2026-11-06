@@ -1,0 +1,47 @@
+name: Build Windows preview
+
+# Run manually from Actions. This creates an artifact, not a public release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Portable Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run offline tests
+        run: npm test
+      - name: Build unsigned portable application
+        run: npm run dist -- --config.compression=normal
+      - name: Write SHA-256 checksum
+        shell: pwsh
+        run: |
+          $executables = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Atlas-Library-*-Windows.exe' -File)
+          if ($executables.Count -ne 1) { throw 'Expected one portable executable.' }
+          $checksum = Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256
+          '{0}  {1}' -f $checksum.Hash.ToLowerInvariant(), $executables[0].Name |
+            Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding utf8
+      - name: Upload Windows build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: atlas-windows-x64-${{ github.run_number }}
+          path: |
+            dist/Atlas-Library-*-Windows.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,168 @@
+name: Publish Windows prerelease
+
+# Run deliberately from main after reviewing the source and versioned release notes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-public-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build Windows
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate version and release availability
+        id: prepare
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Expected a numeric three-part package version.');
+            const notes = fs.readFileSync(`docs/RELEASE-${version}.md`, 'utf8').trim();
+            if (!notes) throw new Error('Versioned release notes must not be empty.');
+            const tag = `v${version}`;
+            let existingTag = false;
+            try {
+              await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
+              existingTag = true;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (existingTag) throw new Error(`${tag} already exists; this workflow never replaces a tag.`);
+            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            if (releases.some(release => release.tag_name === tag)) {
+              throw new Error(`A release or draft for ${tag} already exists; inspect it before retrying.`);
+            }
+            core.setOutput('version', version);
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run offline tests
+        run: npm test
+      - name: Build unsigned portable application
+        run: npm run dist -- --config.compression=normal
+      - name: Write SHA-256 checksum
+        shell: pwsh
+        run: |
+          $executables = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Atlas-Library-*-Windows.exe' -File)
+          if ($executables.Count -ne 1) { throw 'Expected one portable executable.' }
+          $checksum = Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256
+          '{0}  {1}' -f $checksum.Hash.ToLowerInvariant(), $executables[0].Name |
+            Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding utf8
+      - name: Preserve release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: atlas-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/Atlas-Library-*-Windows.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish reviewed build
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download tested build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: atlas-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-files
+      - name: Verify files and publish prerelease
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ATLAS_RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const crypto = require('node:crypto');
+            const version = process.env.ATLAS_RELEASE_VERSION;
+            if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid release version.');
+            const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+            if (version !== packageVersion) throw new Error('Build and source versions do not match.');
+            const tag = `v${version}`;
+            const executable = `Atlas-Library-${version}-Windows.exe`;
+            const filenames = fs.readdirSync('release-files').sort();
+            if (JSON.stringify(filenames) !== JSON.stringify([executable, 'SHA256SUMS.txt'].sort())) {
+              throw new Error('Expected exactly the executable and checksum file.');
+            }
+            const data = fs.readFileSync(`release-files/${executable}`);
+            if (!data.length) throw new Error('Executable is empty.');
+            const checksum = crypto.createHash('sha256').update(data).digest('hex');
+            const manifest = fs.readFileSync('release-files/SHA256SUMS.txt', 'utf8').trim();
+            if (manifest !== `${checksum}  ${executable}`) throw new Error('Build checksum does not match.');
+            const body = fs.readFileSync(`docs/RELEASE-${version}.md`, 'utf8').trim();
+            if (!body) throw new Error('Release notes are empty.');
+
+            // Recheck immediately before writing. Never replace an existing tag or release.
+            let existingTag = false;
+            try {
+              await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
+              existingTag = true;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (existingTag) throw new Error(`${tag} already exists; publication stopped.`);
+            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            if (releases.some(release => release.tag_name === tag)) {
+              throw new Error(`A release or draft for ${tag} already exists; publication stopped.`);
+            }
+            const { data: release } = await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: tag,
+              target_commitish: context.sha,
+              name: `Atlas Library ${version} — Preview`,
+              body,
+              draft: true,
+              prerelease: true,
+              make_latest: 'false'
+            });
+            for (const name of [executable, 'SHA256SUMS.txt']) {
+              const asset = name === executable ? data : fs.readFileSync(`release-files/${name}`);
+              await github.rest.repos.uploadReleaseAsset({
+                ...context.repo,
+                release_id: release.id,
+                name,
+                data: asset,
+                headers: {
+                  'content-type': name.endsWith('.exe') ? 'application/octet-stream' : 'text/plain',
+                  'content-length': asset.length
+                }
+              });
+            }
+            const { data: published } = await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: release.id,
+              draft: false,
+              prerelease: true,
+              make_latest: 'false'
+            });
+            core.notice(`Published ${published.html_url}`);
+            await core.summary.addHeading(`Atlas Library ${version}`).addLink('Download the Windows prerelease', published.html_url).write();
