@@ -106,8 +106,11 @@ test('Nonregular opened descriptors and final-path links are rejected before any
 });
 
 test('Replacing a manifest after open cannot substitute the replacement or return stale data',ctx=>{
-  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'original');let closes=0;
-  const io={...fs,openSync(file,flags){const fd=fs.openSync(file,flags);fs.renameSync(file,path.join(root,'original'));fs.writeFileSync(file,'replaced',{flag:'wx'});return fd;},
+  const root=fixture(ctx),manifest=path.join(root,'manifest'),replacement=path.join(root,'replacement');
+  fs.writeFileSync(manifest,'original');fs.writeFileSync(replacement,'replaced',{flag:'wx'});let closes=0;
+  // Swap two prepared files to exercise a real identity replacement without
+  // reopening the checked path for writing inside the attack simulation.
+  const io={...fs,openSync(file,flags){const fd=fs.openSync(file,flags);fs.renameSync(file,path.join(root,'original'));fs.renameSync(replacement,file);return fd;},
     readSync(){assert.fail('Identity mismatch must be detected before reading.');},closeSync(fd){closes++;return fs.closeSync(fd);}};
   assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
 });
