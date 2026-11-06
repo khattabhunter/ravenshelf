@@ -31,13 +31,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
           queries: security-and-quality
       - name: Analyze
-        uses: github/codeql-action/analyze@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}
 
@@ -58,7 +58,7 @@ jobs:
         with:
           node-version: '24'
       - name: Initialize C# analysis
-        uses: github/codeql-action/init@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: csharp
           build-mode: manual
@@ -66,6 +66,6 @@ jobs:
       - name: Compile the native updater
         run: node scripts/build-updater.cjs
       - name: Analyze updater
-        uses: github/codeql-action/analyze@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:csharp
