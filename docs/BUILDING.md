@@ -66,6 +66,8 @@ The automated suite covers catalogue parsing/refresh, link checks, network restr
 
 Version 0.4.0 adds fixture coverage for shared bandwidth, schedule boundaries, host cooldowns, archive-set checks, guarded cleanup, checksum workers, update assets and the native helper, metadata, clipboard recognition, notices and the new renderer controls. Use a separate test profile and synthetic files for deletion or checksum smoke tests. Test update replacement only with a disposable fixture executable and profile; a passing unit suite does not establish that a packaged update has been installed successfully.
 
+Version 0.4.1 extends checks for missing file sizes, bounded storage discovery, missing queue files, fractional speed limits and unsaved form edits during background updates. See the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for the maintenance review and isolated runtime coverage.
+
 Passing tests establish the exercised cases, not that every host response, Windows setup or third-party file is safe. Keep live checks separate and bounded; do not make the normal test command depend on file-host availability or personal download links.
 
 ## Project layout
@@ -108,7 +110,7 @@ Passing tests establish the exercised cases, not that every host response, Windo
 
 Alternatively, after reviewing and merging the release changes into `main`, a maintainer can select **Publish Windows prerelease** (`.github/workflows/publish-release.yml`) in the repository's **Actions** tab, then choose **Run workflow** with branch `main`. No other inputs are required. The workflow installs dependencies, runs tests and builds on Windows with Node.js 24, then publishes a prerelease tagged `v<package version>` with the executable and `SHA256SUMS.txt`. It takes release notes from `docs/RELEASE-<version>.md`; GitHub supplies source archives for the tag. An existing tag or release, including a draft, is refused. Check that the workflow, including packaged fuse verification, succeeds and inspect the release assets before sharing the download link.
 
-Published builds include a GitHub build-provenance attestation. Verify it with `gh attestation verify <executable> --repo khattabhunter/ravenshelf`. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.0 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
+Published builds include a GitHub build-provenance attestation. Verify it with `gh attestation verify <executable> --repo khattabhunter/ravenshelf`. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.1 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
 
 CodeQL also analyzes the C# helper using an explicit native-helper compilation job, alongside JavaScript and workflow analysis. Review the alert lists as well as workflow completion; a finished scan is not itself a finding-free result.
 

@@ -287,7 +287,13 @@ async function probeDirect(url, filename, host, referer,fetcher=safeFetch) {
   const headers={'Accept-Encoding':'identity',...(referer?{Referer:referer}:{})};
   let response=await fetcher(validUrl(url).href,{method:'HEAD',headers});
   await response.body?.cancel();
-  if([405,501].includes(response.status)){
+  const pageType=value=>/text\/(?:html|xml|javascript)|application\/(json|xml|xhtml|javascript)/i.test(value||'');
+  const reportedLength=value=>{const raw=value.headers.get('content-length');if(raw===null||!/^\d+$/.test(raw))return 0;const n=Number(raw);return Number.isSafeInteger(n)&&n>=0?n:0;};
+  // HEAD may legitimately omit size even when GET provides Content-Range.
+  // Do not mistake the one-byte probe's Content-Length for the whole archive,
+  // or issue a second request for a challenge/error/HTML HEAD response.
+  const missingHeadSize=response.status===200&&!reportedLength(response)&&!pageType(response.headers.get('content-type'));
+  if([405,501].includes(response.status)||missingHeadSize){
     // Availability only: ask for one byte and cancel as soon as headers arrive,
     // including when a server ignores Range and offers the full file instead.
     response=await fetcher(validUrl(url).href,{method:'GET',headers:{...headers,Range:'bytes=0-0'},timeoutMs:10000});
@@ -296,13 +302,19 @@ async function probeDirect(url, filename, host, referer,fetcher=safeFetch) {
   if(response.status===404||response.status===410) return {url,filename,size:0,host,status:'unavailable',message:'File not found or deleted.'};
   if(!response.ok) return {url,filename,size:0,host,status:'manual',message:`The host returned HTTP ${response.status}; open it in your browser.`};
   const type=response.headers.get('content-type')||'';
-  if(/text\/(?:html|xml|javascript)|application\/(json|xml|xhtml|javascript)/i.test(type)) return {url,filename,size:0,host,status:'manual',message:'This is a web page, not a verified file download.'};
+  if(pageType(type)) return {url,filename,size:0,host,status:'manual',message:'This is a web page, not a verified file download.'};
   if(![200,206].includes(response.status))return {url,filename,size:0,host,status:'manual',message:'The host did not return a verified file response.'};
-  let size=Number(response.headers.get('content-length'))||0;
+  if(response.headers.get('content-encoding')&&!/^identity$/i.test(response.headers.get('content-encoding')))return {url,filename,size:0,host,status:'manual',message:'Host ignored the uncompressed transfer request. Use another mirror to preserve reliable byte ranges.'};
+  const lengthHeader=response.headers.get('content-length');
+  if(lengthHeader!==null&&(!/^\d+$/.test(lengthHeader)||!Number.isSafeInteger(Number(lengthHeader))))return {url,filename,size:0,host,status:'manual',message:'Host returned an invalid file length.'};
+  if(lengthHeader!==null&&Number(lengthHeader)===0)return {url,filename,size:0,host,status:'manual',message:'The host returned an empty file.'};
+  let size=reportedLength(response);
   if(response.status===206){
-    const range=/^bytes 0-(\d+)\/(\d+)$/.exec(response.headers.get('content-range')||'');
-    const end=range?Number(range[1]):-1,total=range?Number(range[2]):0;
-    if(!Number.isSafeInteger(total)||total<1||!Number.isSafeInteger(end)||end<0||end>=total||![0,total-1].includes(end))return {url,filename,size:0,host,status:'manual',message:'The host returned invalid file range information.'};
+    const range=/^bytes 0-(\d+)\/(\d+|\*)$/.exec(response.headers.get('content-range')||'');
+    const end=range?Number(range[1]):-1,unknown=range?.[2]==='*',total=unknown?0:range?Number(range[2]):0;
+    if(!Number.isSafeInteger(end)||end<0||(unknown?end!==0:!Number.isSafeInteger(total)||total<1||end>=total||![0,total-1].includes(end)))return {url,filename,size:0,host,status:'manual',message:'The host returned invalid file range information.'};
+    const fastFullEndQuirk=Boolean(fastRoot(referer||url))&&!unknown&&end===total-1&&Number(lengthHeader)===1;
+    if(lengthHeader!==null&&Number(lengthHeader)!==end+1&&!fastFullEndQuirk)return {url,filename,size:0,host,status:'manual',message:'Host returned inconsistent range and file lengths.'};
     // A few hosts report the full end offset for this bounded probe. The
     // download engine separately validates every range before writing bytes.
     size=total;
@@ -310,7 +322,7 @@ async function probeDirect(url, filename, host, referer,fetcher=safeFetch) {
   if(!Number.isSafeInteger(size)||size<0)size=0;
   const direct=response.url||url,actualFilename=filenameFromHeaders(response,filename);
   if(fastRoot(referer||url))assertFastFile(referer||url,direct,actualFilename);
-  return {url:direct,filename:actualFilename,size,host,status:'ready',message:size?'File link responds; contents have not been scanned.':'File link responds; size is not reported.',referer};
+  return {url:direct,filename:actualFilename,size,host,status:'ready',message:size?'File link responds; contents have not been scanned.':'Link responds, but this host does not report its size. The download can start; total size may remain unknown.',referer};
 }
 function manual(url,message,host=hostName(url)) { return {url,filename:readableName(url),size:0,host,status:'manual',message}; }
 function parseFastLink(html,url) {

@@ -73,6 +73,8 @@ internal static class RavenshelfUpdater
         if (LockedDirectories.Contains(directory)) return;
         string parent = Path.GetDirectoryName(directory);
         if (!String.IsNullOrEmpty(parent)) LockDirectory(parent);
+        // Ownership transfers to DirectoryLocks until Main's final cleanup. A
+        // local using would release the ancestor lock before replacement ends.
         SafeFileHandle handle = CreateFile(directory, 0x80, ShareRead | ShareWrite, IntPtr.Zero, Existing, OpenReparsePoint | BackupSemantics, IntPtr.Zero);
         if (handle.IsInvalid) { handle.Dispose(); throw Invalid(); }
         bool retained = false;
@@ -104,6 +106,8 @@ internal static class RavenshelfUpdater
         bool retained = false;
         try
         {
+            // FileStream owns this SafeFileHandle; the successful caller owns
+            // the returned stream. Failure cleanup below closes exactly one owner.
             stream = new FileStream(handle, create ? FileAccess.ReadWrite : FileAccess.Read, 65536, false);
             Information(stream); retained = true; return stream;
         }

@@ -67,27 +67,27 @@ async function saveProfileBackup(profileDir,directory){
 }
 class AppUpdater{
   constructor({currentVersion,profileDir,executable,fetcher=safeFetch,bandwidthLimiter=null,onChange=()=>{},onReady=()=>{},supported=true,now=Date.now}={}){
-    Object.assign(this,{currentVersion,profileDir,executable,fetcher,bandwidthLimiter,onChange,onReady,supported,now});this.state={phase:supported?'idle':'unavailable',currentVersion,availableVersion:null,progress:0,message:supported?'Updates are checked automatically.':'Automatic updates are available in the Windows portable release.'};this.task=null;this.ready=null;this.prepared=null;this.timers=[];this.controller=null;
+    Object.assign(this,{currentVersion,profileDir,executable,fetcher,bandwidthLimiter,onChange,onReady,supported,now});this.state={phase:supported?'idle':'unavailable',currentVersion,availableVersion:null,progress:0,message:supported?'Updates are checked automatically.':'Automatic updates are available in the Windows portable release.'};this.task=null;this.ready=null;this.prepared=null;this.preparing=null;this.timers=[];this.controller=null;this.disposed=false;
   }
   snapshot(){return {...this.state};}
   set(patch){Object.assign(this.state,patch);this.onChange(this.snapshot());}
-  configure(enabled){for(const timer of this.timers){clearTimeout(timer);clearInterval(timer);}this.timers=[];if(!enabled||!this.supported)return;const first=setTimeout(()=>this.check().catch(()=>{}),15000),repeat=setInterval(()=>this.check().catch(()=>{}),6*60*60*1000);first.unref?.();repeat.unref?.();this.timers=[first,repeat];}
+  configure(enabled){for(const timer of this.timers){clearTimeout(timer);clearInterval(timer);}this.timers=[];if(!enabled||!this.supported||this.disposed)return;const first=setTimeout(()=>this.check().catch(()=>{}),15000),repeat=setInterval(()=>this.check().catch(()=>{}),6*60*60*1000);first.unref?.();repeat.unref?.();this.timers=[first,repeat];}
   async check(){
-    if(!this.supported)return this.snapshot();if(this.task)return this.task;if(this.ready)return this.snapshot();
+    if(this.task)return this.task;if(!this.supported||this.disposed||this.ready)return this.snapshot();
     this.task=this.performCheck().catch(()=>{this.set({phase:'error',message:'The update could not be verified or downloaded. Your current app and downloads are unchanged.'});return this.snapshot();}).finally(()=>{this.task=null;});return this.task;
   }
   async performCheck(){
     this.controller=new AbortController();const signal=this.controller.signal;
     this.set({phase:'checking',progress:0,message:'Checking GitHub for updates.'});
-    const releases=JSON.parse(await boundedText(await trustedFetch(RELEASES,{fetcher:this.fetcher,signal}),1024*1024));
+    const releases=JSON.parse(await boundedText(await trustedFetch(RELEASES,{fetcher:this.fetcher,signal}),1024*1024));signal.throwIfAborted();
     const release=selectRelease(releases,this.currentVersion);
     if(!release){this.set({phase:'current',lastCheckedAt:new Date(this.now()).toISOString(),message:'Ravenshelf is up to date.'});return this.snapshot();}
     this.set({phase:'available',availableVersion:release.version,releaseUrl:release.releaseUrl,message:'A newer release is available.'});
-    parseChecksum(await boundedText(await trustedFetch(release.checksumUrl,{fetcher:this.fetcher,signal}),16384),release);
+    parseChecksum(await boundedText(await trustedFetch(release.checksumUrl,{fetcher:this.fetcher,signal}),16384),release);signal.throwIfAborted();
     const directory=path.join(this.profileDir,'updates','pending',crypto.randomUUID());await fs.promises.mkdir(directory,{recursive:true});
     const staged=path.join(directory,'update.exe');let opened,reader,watchdog,lastActivity=this.now(),waitingForBudget=false;
     try{
-      opened=await openDownloadFile(staged,{create:true});
+      signal.throwIfAborted();opened=await openDownloadFile(staged,{create:true});signal.throwIfAborted();
       watchdog=setInterval(()=>{if(!waitingForBudget&&this.now()-lastActivity>30000)this.controller.abort();},1000);watchdog.unref?.();
       const response=await trustedFetch(release.url,{fetcher:this.fetcher,signal,timeoutMs:0});lastActivity=this.now();
       if(response.status!==200||!response.body){await response.body?.cancel();throw new Error('Update download unavailable.');}
@@ -112,7 +112,10 @@ class AppUpdater{
     return this.snapshot();
   }
   async prepareInstall({restart=false,pid=process.pid}={}){
-    if(!this.supported||!this.ready)return null;if(this.prepared)return this.prepared;
+    if(!this.supported||!this.ready)return null;if(this.prepared)return this.prepared;if(this.preparing)return this.preparing;
+    this.preparing=this.performPrepareInstall({restart,pid}).finally(()=>{this.preparing=null;});return this.preparing;
+  }
+  async performPrepareInstall({restart,pid}){
     if(!path.isAbsolute(this.executable||'')||!/^Ravenshelf[-\w. ()]*\.exe$/i.test(path.basename(this.executable)))throw new Error('Unsupported application location.');
     const current=await hashOpen(this.executable),candidate=await hashOpen(this.ready.staged);
     if(candidate.sha256!==this.ready.release.sha256||candidate.size!==this.ready.release.size)throw new Error('Staged update changed.');
@@ -121,11 +124,21 @@ class AppUpdater{
     const helperBytes=await fs.promises.readFile(path.join(__dirname,'ravenshelf-updater.exe'));
     const helperBuild=JSON.parse(await fs.promises.readFile(path.join(__dirname,'updater-build.json'),'utf8'));
     if(helperBuild.output?.name!=='ravenshelf-updater.exe'||helperBuild.output.size!==helperBytes.length||helperBuild.output.sha256!==crypto.createHash('sha256').update(helperBytes).digest('hex'))throw new Error('The bundled updater helper changed.');
-    await fs.promises.writeFile(helper,helperBytes,{flag:'wx',mode:0o600});
     const data={target:path.resolve(this.executable),staged:this.ready.staged,sha256:candidate.sha256,size:candidate.size,previousSha256:current.sha256,pid,restart:restart===true,nonce:crypto.randomUUID(),result:path.join(this.ready.directory,'result.json')};
-    await fs.promises.writeFile(job,JSON.stringify(data),{flag:'wx',mode:0o600});
+    const owned=[];
+    try{
+      for(const [file,bytes] of [[helper,helperBytes],[job,Buffer.from(JSON.stringify(data))]]){
+        const opened=await openDownloadFile(file,{create:true});owned.push({file,opened});
+        await opened.handle.writeFile(bytes);await opened.handle.sync();await opened.verify(bytes.length);
+      }
+    }catch(error){
+      // A partial preparation can be retried. Never remove a preexisting file or
+      // an entry whose identity/ancestry no longer matches our retained handle.
+      for(const {file,opened} of owned.reverse())try{await opened.verify();await fs.promises.unlink(file);}catch{}
+      throw error;
+    }finally{await Promise.allSettled(owned.map(({opened})=>opened.handle.close()));}
     this.prepared={helper,job};return this.prepared;
   }
-  dispose(){for(const timer of this.timers){clearTimeout(timer);clearInterval(timer);}this.timers=[];this.controller?.abort();}
+  dispose(){this.disposed=true;for(const timer of this.timers){clearTimeout(timer);clearInterval(timer);}this.timers=[];this.controller?.abort();return this.task||Promise.resolve(this.snapshot());}
 }
 module.exports={AppUpdater,selectRelease,newer,version,trustedFetch,parseChecksum,saveProfileBackup,hashOpen,RELEASES};

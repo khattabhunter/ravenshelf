@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1 — Download checks, storage and update reliability
+
+- Recover file sizes with one bounded probe when successful HEAD responses omit them; preserve ad, filename, response-type and redirect checks.
+- Recover a fully received partial after interrupted EOF with a single validated last-byte request instead of repeatedly requesting beyond the file's end. A 416 response alone never marks a file complete.
+- Explain missing queue files and show separately counted archives outside the queue. Storage checks are bounded and coalesced; untracked files remain read-only.
+- Preserve valid storage totals when checkpoint entries are unsafe and recheck cleanup ownership after filesystem waits.
+- Keep unsaved settings across state refreshes, restore failed toggles, accept fractional speed limits and guard delayed dialog close events.
+- Await partial update cleanup at exit and safely retry/coalesce update preparation. Keep native updater safety checks after reviewing all 12 informational CodeQL notes.
+
+See [the release notes](docs/RELEASE-0.4.1.md) and [bug review](docs/BUG-REVIEW-0.4.1.md).
+
 ## 0.4.0 — Library and download controls prerelease
 
 - Added portable Windows app updates from this repository's published GitHub versions, including prereleases. Candidate size and SHA-256 must agree with both release-asset metadata and `SHA256SUMS.txt`; critical profile files are backed up before replacement. A native C# helper applies a ready update on normal close or an explicit idle restart without changing Windows security settings. The executable remains unsigned.

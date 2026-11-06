@@ -67,3 +67,36 @@ test('A changed queue path or restarted job invalidates its cleanup preview',asy
   const {folder}=fixture(t),download=job(folder);fs.writeFileSync(path.join(folder,download.name),'keep');const cleanup=createDownloadCleanup({getDownloads:()=>[download]});
   const preview=await cleanup.preview(['one']);download.status='downloading';const result=await cleanup.deletePreview({ids:['one'],token:preview.token});assert.equal(result.failed.length,1);assert.ok(fs.existsSync(path.join(folder,download.name)));
 });
+test('Missing completed queue files and untracked archives have separate honest storage totals',async t=>{
+  const {folder}=fixture(t),downloads=[job(folder,{status:'completed'}),job(folder,{id:'two',name:'missing.zip',status:'completed'})];
+  fs.writeFileSync(path.join(folder,'untracked.rar'),'12345');fs.writeFileSync(path.join(folder,'untracked.zip'),'123');
+  const cleanup=createDownloadCleanup({getDownloads:()=>downloads,getDownloadDir:()=>folder}),summary=await cleanup.summary();
+  assert.equal(summary.totalBytes,0);assert.equal(summary.trackedBytes,0);assert.equal(summary.untrackedBytes,8);assert.equal(summary.libraryBytes,8);assert.equal(summary.missingItems.length,2);assert.equal(summary.scan.status,'complete');
+  assert.ok(summary.items.every(item=>item.missing&&item.completedFileMissing));assert.ok(summary.untrackedItems.every(item=>item.deletable===false&&!item.id));
+  const preview=await cleanup.preview(downloads.map(item=>item.id));assert.equal(preview.totalBytes,0);
+  const removed=await cleanup.deletePreview({ids:downloads.map(item=>item.id),token:preview.token});assert.equal(removed.bytesFreed,0);assert.equal(fs.readFileSync(path.join(folder,'untracked.rar'),'utf8'),'12345');
+});
+test('Summary preserves valid archive bytes when unrelated checkpoint contents make cleanup unsafe',async t=>{
+  const {folder}=fixture(t),download=job(folder),file=path.join(folder,download.name),workspace=workspaceFor(file+'.atlas-part',download.id);
+  fs.writeFileSync(file,'12345');fs.mkdirSync(workspace);fs.writeFileSync(path.join(workspace,'unknown.txt'),'unrelated');fs.writeFileSync(path.join(workspace,'data.part'),'123');
+  const cleanup=createDownloadCleanup({getDownloads:()=>[download],getDownloadDir:()=>folder}),summary=await cleanup.summary();
+  assert.equal(summary.completedBytes,5);assert.equal(summary.partialBytes,3);assert.equal(summary.untrackedBytes,0);assert.equal(summary.libraryBytes,8);assert.equal(summary.items[0].unavailable,true);assert.ok(summary.warnings.length);
+  const preview=await cleanup.preview(['one']);assert.equal(preview.items.length,0);assert.ok(fs.existsSync(file));
+});
+test('Managed archives, partials, and their hardlink aliases are not counted again as untracked',async t=>{
+  const {folder}=fixture(t),download=job(folder),file=path.join(folder,download.name);fs.writeFileSync(file,'12345');fs.writeFileSync(file+'.atlas-part','123');fs.linkSync(file,path.join(folder,'alias.rar'));fs.writeFileSync(path.join(folder,'untracked.7z'),'12');
+  const cleanup=createDownloadCleanup({getDownloads:()=>[download],getDownloadDir:()=>folder}),summary=await cleanup.summary();
+  assert.equal(summary.totalBytes,8);assert.equal(summary.untrackedBytes,2);assert.equal(summary.libraryBytes,10);assert.deepEqual(summary.untrackedItems.map(item=>item.name),['untracked.7z']);
+});
+test('A removed download folder is reported missing instead of an unexplained zero or a security error',async t=>{
+  const {folder}=fixture(t),download=job(folder,{status:'completed'});fs.rmdirSync(folder);
+  const summary=await createDownloadCleanup({getDownloads:()=>[download],getDownloadDir:()=>folder}).summary();
+  assert.equal(summary.items[0].missing,true);assert.equal(summary.items[0].unavailable,false);assert.equal(summary.missingItems.length,1);assert.equal(summary.scan.status,'unavailable');assert.equal(summary.libraryBytes,0);
+});
+test('A job restarted while cleanup opens its file is rechecked before any deletion',async t=>{
+  const {folder}=fixture(t),download=job(folder),file=path.join(folder,download.name);fs.writeFileSync(file,'keep');
+  const cleanup=createDownloadCleanup({getDownloads:()=>[download]}),preview=await cleanup.preview(['one']);
+  const original=fs.promises.open;t.after(()=>{fs.promises.open=original;});
+  fs.promises.open=async function(...args){const handle=await original.apply(this,args);if(args[0]===file)download.status='downloading';return handle;};
+  const result=await cleanup.deletePreview({ids:['one'],token:preview.token});assert.equal(result.bytesFreed,0);assert.equal(result.failed.length,1);assert.equal(fs.readFileSync(file,'utf8'),'keep');
+});

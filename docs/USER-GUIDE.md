@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.4.0 for Windows, a feature prerelease.
+This guide describes Ravenshelf 0.4.1 for Windows, a maintenance prerelease. See the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for the fixes, validation and known limits.
 
 ## Start and update Ravenshelf
 
-Download the portable executable from the repository's [Releases](https://github.com/khattabhunter/ravenshelf/releases) page. Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.4.1-Windows.exe` from the [v0.4.1 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.1). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, close its window before opening the new executable. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
@@ -61,6 +61,8 @@ Game details show system requirements when the source provides them. Where a ver
 
 Check the source notes for required parts, optional languages, updates and separate replacement archives. Before extracting a multipart archive, make sure all required parts are present. Ravenshelf does not automatically extract files, test archive contents or run installers.
 
+**Ready, but size unknown** is possible. If the host's first response omits its size, Ravenshelf makes a small range request and checks for a reliable full-file total. It cancels the response as soon as the information needed for the check arrives. Some hosts omit that total too, so the file can still be ready to download while its size remains unknown. The size of the small response is never presented as the whole archive's size.
+
 ### Import, export and JDownloader
 
 **Import links** accepts a supported game page, encrypted FitGirl paste or several direct HTTPS links. When a page offers multiple mirrors, choose one host first. **Check links again** retries the original sources.
@@ -98,11 +100,13 @@ From 0.3.2, progress counters refresh together about twice per second, updating 
 
 ### Shared speed limit and download hours
 
-**Settings → Shared download speed** sets one combined limit across active file transfers, their connections and app-update executable downloads. Choose MB/s or KB/s, then **Save limit**; `0` means unlimited. This controls download payloads, not every catalogue, browser or update-metadata request, and short bursts or protocol overhead can differ from the displayed limit.
+**Settings → Shared download speed** sets one combined limit across active file transfers, their connections and app-update executable downloads. Choose MB/s or KB/s, enter a value such as `2.25` MB/s, then **Save limit**; `0` means unlimited. This controls download payloads, not every catalogue, browser or update-metadata request, and short bursts or protocol overhead can differ from the displayed limit.
 
 Under **Download hours**, enable a schedule, choose the laptop's local start/end time and weekdays, then save. An overnight window belongs to its starting day: Friday 22:00–06:00 continues into Saturday morning. Matching start/end times allow the whole selected day. Ravenshelf pauses work when the window closes and resumes work paused by the schedule when it opens again. A download you paused manually remains paused. The app must remain open and the laptop awake; scheduling does not wake or launch it.
 
 The schedule controls the game download queue. Automatic app-update checks and preparation can still run outside that window; disable automatic updates separately if desired.
+
+Speed-limit and schedule edits stay in the form when background progress or settings updates arrive, even after you move focus away. Use each form's save button to apply its changes; editing a value alone does not change the active setting.
 
 Host limiting responses can put that host into a cooldown. Respecting the delay reduces repeated rejected requests; it does not bypass the host's limits or promise higher speed.
 
@@ -121,7 +125,17 @@ Use a card's remove button, select several files, or choose **Clean up completed
 
 Opening the preview pauses selected active downloads. Cancelling leaves them paused; resume them explicitly in Downloads. Changed, linked, shared or inaccessible files can be refused. If only some files can be removed, the dialog reports the failures and requires another preview before retrying.
 
-The storage bar and **Estimated space to recover** use logical file sizes. Windows sparse/compressed storage and filesystem behavior can make actual recovered disk space different. Unchecked or inaccessible files are reported rather than counted as known sizes. Removing an entry from the list also removes it from this managed-storage view.
+### Check download storage
+
+Under **Downloads → Download storage**, choose **Check space**. The button shows **Checking…** while it works, then the result includes the time of the check. The summary separates:
+
+- **Managed by your queue:** completed files and remaining partial data belonging to queue entries. Cleanup applies only to reviewed queue-managed files.
+- **Other archives:** recognized archives found in your configured download folder that are not in the queue. Expand their list to see names and sizes. This list is read-only; those files cannot be selected or deleted through queue cleanup.
+- **Missing files:** queue entries whose expected files are no longer at the saved location. The entries remain in the queue, and missing bytes are not counted. Any remaining partial data may still be included.
+
+The check is limited to queue-owned files and recognized archives in the configured download folder, including up to three levels of subfolders. Folder discovery stops after 5,000 entries or about three seconds, lists at most 200 other archives, and does not follow symbolic links or folder junctions. Broad personal/system folders, such as the whole Downloads folder or a drive root, are not scanned for other archives; choose a dedicated game-download folder. Incomplete checks show a warning and partial totals. This is not a whole-drive space analyzer.
+
+The storage bar and **Estimated space to recover** use logical file sizes. Windows sparse/compressed storage and filesystem behavior can make actual recovered disk space different. Unchecked or inaccessible files are reported rather than counted as known sizes. Removing an entry from the list keeps its files; after another check, recognized archives still in the configured folder may appear under **Other archives**. That total is stored data, not a promise of space available to delete.
 
 ## Manually verify downloaded files
 
@@ -187,9 +201,11 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | A link needs verification | Use its protected host button, then check the links again. |
 | A link is not found | Check the source page for replacements or choose another complete mirror. |
 | A host returns a webpage instead of a file | Complete the browser step or choose another mirror; do not treat the page as an archive. |
+| A ready link still has no size | The host did not provide a reliable total, even after the small follow-up check. Downloading can start, but the total may remain unknown. |
 | Download is slow or unstable | Try fewer simultaneous files, then compare 1 and 4 connections. Host limits may still apply. |
 | Downloads are waiting at certain times | Check Download hours, the laptop's clock and the schedule status in Downloads. |
 | Cleanup was cancelled but a transfer is paused | Resume it in Downloads; the preview pauses active files for review. |
+| Check space shows less than expected | Expand missing files and other archives, and read any partial-check warning. Check the configured download folder; broad folders and unsupported files are not included in archive discovery. |
 | A checksum check finished with mismatches | Verify that the manifest and chosen folder belong together; review missing/error rows and reacquire damaged files from your intended source. |
 | App update is unavailable | Use the packaged Windows portable release, or update manually from Releases. |
 | A partial download cannot resume | Read the per-file error. The remote file or direct URL may have changed. |

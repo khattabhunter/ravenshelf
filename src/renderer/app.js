@@ -36,10 +36,11 @@ const icons = {
 
 const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.4.0' };
 const selectedDownloads = new Set();
-let removalPreview = null, removalRequest = 0, removalBusy = false, storageRequest = 0;
+let removalPreview = null, removalRequest = 0, removalBusy = false, storageRequest = 0, storageTask = null;
 let lightboxItems = [], lightboxIndex = 0, lightboxOpener = null;
 let clipboardInbox = {items:[],enabled:false}, verificationState = {phase:'idle'};
 let featureSettingsBusy = 0;
+const featureFormEdits={speed:0,schedule:0},featureFormSaved={speed:0,schedule:0};
 const downloadsById = new Map(), activeDownloads = new Map(), downloadCards = new Map();
 let hasDownloadSnapshot = false, lastUpdateSequence = -1;
 const catalog = { page: 1, search: '', section: 'newest', games: [], hasMore: false, loading: false, request: 0 };
@@ -897,7 +898,7 @@ function enlargedImage(value){
 }
 function moveLightbox(step){if(lightboxItems.length){lightboxIndex=(lightboxIndex+step+lightboxItems.length)%lightboxItems.length;renderLightbox();}}
 function lightboxKey(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();moveLightbox(event.key==='ArrowLeft'?-1:1);}else if(event.key==='Escape'){event.preventDefault();$('#image-dialog').close();}}
-function restoreLightboxFocus(){const target=lightboxOpener;lightboxOpener=null;lightboxItems=[];$('#lightbox-image').removeAttribute('src');if(target?.isConnected!==false&&typeof target?.focus==='function')target.focus({preventScroll:true});else $('#catalog-heading')?.focus();}
+function restoreLightboxFocus(){if($('#image-dialog').open)return;const target=lightboxOpener;lightboxOpener=null;lightboxItems=[];$('#lightbox-image').removeAttribute('src');if(target?.isConnected!==false&&typeof target?.focus==='function')target.focus({preventScroll:true});else $('#catalog-heading')?.focus();}
 function luminance(rgb){return rgb.map(value=>{const c=value/255;return c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4;}).reduce((sum,value,index)=>sum+value*[0.2126,0.7152,0.0722][index],0);}
 function readableAccent(rgb){
   const background=luminance([48,40,64]);let color=rgb.map(value=>Math.max(0,Math.min(255,Math.round(value))));
@@ -959,12 +960,29 @@ function renderDownloadSelection(){
   const select=$('#select-visible-downloads');select.checked=visible.length>0&&selectedVisible===visible.length;select.indeterminate=selectedVisible>0&&selectedVisible<visible.length;select.disabled=!visible.length;
   $('#cleanup-completed').disabled=!state.downloads.some(item=>item.status==='completed')||typeof api?.previewDownloadRemoval!=='function';
 }
-async function refreshStorage(){
-  if(typeof api?.getStorageSummary!=='function')return;const request=++storageRequest;$('#storage-summary').textContent='Checking managed download files…';
-  try{const data=await api.getStorageSummary();if(request!==storageRequest)return;const completed=Math.max(0,Number(data.completedBytes)||0),partial=Math.max(0,Number(data.partialBytes)||0),total=Math.max(completed+partial,Number(data.totalBytes)||0);
-    $('#storage-summary').textContent=`${formatBytes(total,'0 B')} download file size · ${formatBytes(completed,'0 B')} completed · ${formatBytes(partial,'0 B')} partial. Actual disk space can differ.${data.warnings?.length||data.items?.some(item=>item.unavailable)?' Some files could not be checked.':''}`;
-    $('#storage-completed-fill').style.width=`${total?completed/total*100:0}%`;$('#storage-partial-fill').style.width=`${total?partial/total*100:0}%`;
-  }catch{$('#storage-summary').textContent='Storage could not be checked. Try again.';}
+function renderStorageSummary(data){
+  const bytes=value=>Number.isSafeInteger(value)&&value>=0?value:0,completed=bytes(data.completedBytes),partial=bytes(data.partialBytes),tracked=Math.max(completed+partial,bytes(data.trackedBytes??data.totalBytes)),untracked=bytes(data.untrackedBytes),total=Math.max(tracked+untracked,bytes(data.libraryBytes)),scan=data.scan||{};
+  const incomplete=scan.status&&scan.status!=='complete',missing=Array.isArray(data.missingItems)?data.missingItems:[],other=Array.isArray(data.untrackedItems)?data.untrackedItems:[],warnings=Array.isArray(data.warnings)?data.warnings.filter(value=>typeof value==='string'):[];
+  $('#storage-summary').textContent=`${incomplete?'At least ':''}${formatBytes(total,'0 B')} found · ${formatBytes(tracked,'0 B')} managed by your queue (${formatBytes(completed,'0 B')} completed, ${formatBytes(partial,'0 B')} partial) · ${formatBytes(untracked,'0 B')} other archives. File sizes are estimates of disk use.`;
+  $('#storage-completed-fill').style.width=`${total?completed/total*100:0}%`;$('#storage-partial-fill').style.width=`${total?partial/total*100:0}%`;$('#storage-other-fill').style.width=`${total?untracked/total*100:0}%`;
+  const details=$('#storage-details');details.replaceChildren();
+  if(incomplete)details.append(el('p','warning-note',scan.status==='partial'?'The folder check is incomplete. These are only the files found so far.':'Other files in the configured download folder could not be fully checked. Queue-managed sizes are shown where available.'));
+  for(const warning of warnings.slice(0,8))details.append(el('p','small-text',warning));
+  if(missing.length){const section=el('details','storage-file-list');section.append(el('summary','',`${missing.length} queue ${missing.length===1?'entry has':'entries have'} missing files`));section.append(el('p','small-text','Expected files were not found at the saved location. Missing bytes are not included; remaining partial files may still be counted. The entries remain in your queue.'));for(const item of missing.slice(0,200))section.append(el('p','storage-file-row',`${item.name||'Download'}${item.message?' — '+item.message:''}`));details.append(section);}
+  if(other.length){const section=el('details','storage-file-list');section.append(el('summary','',`${other.length} other ${other.length===1?'archive':'archives'} in your download folder`));section.append(el('p','small-text','These files are not in your queue. They are shown for reference and cannot be deleted through queue cleanup.'));for(const item of other.slice(0,200)){const row=el('p','storage-file-row');row.append(el('span','',item.relativePath||item.name||'Archive'),el('span','',formatBytes(bytes(item.bytes),'0 B')));section.append(row);}details.append(section);}
+  if(!warnings.length&&data.items?.some(item=>item.unavailable))details.append(el('p','warning-note','Some queue files could not be checked safely and are not included in the total.'));
+  $('#storage-checked-at').textContent=`Checked ${new Date().toLocaleTimeString()}`;
+}
+function refreshStorage(){
+  if(storageTask)return storageTask;
+  const button=$('#refresh-storage');if(typeof api?.getStorageSummary!=='function'){$('#storage-summary').textContent='Storage checking is unavailable in this app connection.';button.disabled=true;return Promise.resolve();}
+  const request=++storageRequest;button.disabled=true;button.textContent='Checking…';button.setAttribute('aria-busy','true');$('#storage-summary').textContent='Checking your queue and download folder…';$('#storage-checked-at').textContent='';
+  storageTask=(async()=>{
+    await Promise.resolve();
+    try{const data=await api.getStorageSummary();if(request!==storageRequest)return;if(!data||typeof data!=='object')throw new Error('Invalid storage result.');renderStorageSummary(data);}
+    catch{if(request===storageRequest){$('#storage-summary').textContent='Storage could not be checked. Choose Check space to try again.';$('#storage-details').replaceChildren();for(const selector of ['#storage-completed-fill','#storage-partial-fill','#storage-other-fill'])$(selector).style.width='0%';}}
+    finally{if(request===storageRequest){button.disabled=false;button.textContent='Check space';button.removeAttribute('aria-busy');}storageTask=null;}
+  })();return storageTask;
 }
 async function openDownloadRemoval(ids,cleanup=false){
   if(removalBusy||typeof api?.previewDownloadRemoval!=='function')return;
@@ -999,23 +1017,24 @@ function renderUpdater(){
   $('#update-status').textContent=update.message||messages[phase]||'Update status unavailable.';
   if(update.availableVersion)$('#update-status').textContent+=` Version ${update.availableVersion}.`;
   const progress=$('#update-progress');progress.hidden=phase!=='downloading';const percent=Number(update.progress?.percent??Number(update.progress)*100);if(Number.isFinite(percent))progress.value=Math.max(0,Math.min(100,percent));else progress.removeAttribute('value');
-  $('#check-app-updates').disabled=typeof api?.checkForUpdates!=='function'||['checking','downloading'].includes(phase);
+  $('#check-app-updates').disabled=typeof api?.checkForUpdates!=='function'||['checking','downloading','unavailable'].includes(phase);
   const install=$('#install-app-update');install.hidden=phase!=='ready';install.disabled=typeof api?.installUpdate!=='function'||state.downloads.some(item=>['downloading','queued'].includes(item.status)||['queued','scanning'].includes(item.scan?.status))||['running','verifying','starting','checking'].includes(verificationState.phase)||state.completionAction?.mode!=='none';
 }
 function renderScheduleStatus(){const schedule=state.downloadSchedule,enabled=state.settings.downloadSchedule?.enabled;const node=$('#download-schedule-status');if(!enabled){node.textContent='';return;}let text=schedule?.active?'Download schedule: allowed now.':'Download schedule: waiting for the next allowed period.';if(schedule?.nextChangeAt){const date=new Date(schedule.nextChangeAt);if(Number.isFinite(date.getTime()))text+=` Next change: ${date.toLocaleString()}.`;}node.textContent=text;}
 function renderFeatureSettings(){
   if(!featureSettingsBusy){
-    const focus=document.activeElement;const speed=$('#speed-limit'),unit=$('#speed-unit');if(focus!==speed&&focus!==unit){const bytes=Number(state.settings.maxDownloadBytesPerSecond)||0;unit.value=bytes&&bytes<1048576?'1024':'1048576';speed.value=String(bytes/Number(unit.value));}
+    const focus=document.activeElement;const speed=$('#speed-limit'),unit=$('#speed-unit');if(featureFormEdits.speed===featureFormSaved.speed&&!$('#speed-limit-form').contains(focus)){const bytes=Number(state.settings.maxDownloadBytesPerSecond)||0;unit.value=bytes&&bytes<1048576?'1024':'1048576';speed.value=String(bytes/Number(unit.value));}
     const schedule=state.settings.downloadSchedule||{enabled:false,start:'00:00',end:'00:00',days:[0,1,2,3,4,5,6]};
-    if(!$('#schedule-form').contains(focus)){ $('#schedule-enabled').checked=Boolean(schedule.enabled);$('#schedule-start').value=schedule.start||'00:00';$('#schedule-end').value=schedule.end||'00:00';$$('#schedule-form .schedule-days input').forEach(input=>{input.checked=(schedule.days||[]).includes(Number(input.value));});}
+    if(featureFormEdits.schedule===featureFormSaved.schedule&&!$('#schedule-form').contains(focus)){ $('#schedule-enabled').checked=Boolean(schedule.enabled);$('#schedule-start').value=schedule.start||'00:00';$('#schedule-end').value=schedule.end||'00:00';$$('#schedule-form .schedule-days input').forEach(input=>{input.checked=(schedule.days||[]).includes(Number(input.value));});}
     for(const [id,key,defaultValue]of [['notifications-enabled','notificationsEnabled',true],['clipboard-watch-enabled','clipboardWatchEnabled',false],['adaptive-theme-enabled','adaptiveThemeEnabled',true],['auto-update-enabled','autoUpdateEnabled',true]]){const node=$('#'+id);if(focus!==node)node.checked=typeof state.settings[key]==='boolean'?state.settings[key]:defaultValue;}
   }
   renderUpdater();renderScheduleStatus();renderClipboardCount();
 }
 async function saveFeatureSetting(patch,control){
+  const form='maxDownloadBytesPerSecond'in patch?'speed':'downloadSchedule'in patch?'schedule':null,revision=form?featureFormEdits[form]:0;
   featureSettingsBusy++;if(control)control.disabled=true;
-  try{applyState(await api.saveSettings(patch));if('adaptiveThemeEnabled'in patch){if(!patch.adaptiveThemeEnabled)setAccent();else{const image=$('.detail-cover');if(image?.complete)applyCoverAccent(image);}}toast('Preference saved.');}
-  catch(error){toast(errorText(error),true);}finally{featureSettingsBusy--;if(control)control.disabled=false;renderFeatureSettings();}
+  try{applyState(await api.saveSettings(patch));if(form)featureFormSaved[form]=revision;if('adaptiveThemeEnabled'in patch){if(!patch.adaptiveThemeEnabled)setAccent();else{const image=$('.detail-cover');if(image?.complete)applyCoverAccent(image);}}toast('Preference saved.');}
+  catch(error){toast(errorText(error),true);}finally{featureSettingsBusy--;if(control){control.disabled=false;const key=Object.keys(patch)[0];if(typeof patch[key]==='boolean')control.checked=typeof state.settings[key]==='boolean'?state.settings[key]:key!=='clipboardWatchEnabled';}renderFeatureSettings();}
 }
 function scheduleFromForm(){
   const start=$('#schedule-start').value,end=$('#schedule-end').value,days=$$('#schedule-form .schedule-days input').filter(input=>input.checked).map(input=>Number(input.value)),enabled=$('#schedule-enabled').checked;
@@ -1042,11 +1061,12 @@ function renderVerification(){
 function wireFeatureEvents(){
   $('#download-list').before($('.download-tools'));
   $('#previous-image').addEventListener('click',()=>moveLightbox(-1));$('#next-image').addEventListener('click',()=>moveLightbox(1));$('#image-dialog').addEventListener('keydown',lightboxKey);$('#image-dialog').addEventListener('close',restoreLightboxFocus);
-  $('#game-dialog').addEventListener('close',()=>{if($('#image-dialog').open)$('#image-dialog').close();setAccent();});
+  $('#game-dialog').addEventListener('close',()=>{if($('#game-dialog').open)return;if($('#image-dialog').open)$('#image-dialog').close();setAccent();});
   $('#select-visible-downloads').addEventListener('change',event=>{for(const item of visibleDownloads())if(event.target.checked)selectedDownloads.add(String(item.id));else selectedDownloads.delete(String(item.id));renderDownloads();});
   $('#clear-download-selection').addEventListener('click',()=>{selectedDownloads.clear();renderDownloads();});$('#remove-selected-downloads').addEventListener('click',()=>openDownloadRemoval([...selectedDownloads]));$('#cleanup-completed').addEventListener('click',()=>openDownloadRemoval(state.downloads.filter(item=>item.status==='completed').map(item=>String(item.id)),true));
-  $$('input[name="removal-mode"]').forEach(input=>input.addEventListener('change',()=>{$('#removal-confirm-files').checked=false;syncRemovalChoice();}));$('#removal-confirm-files').addEventListener('change',syncRemovalChoice);$('#confirm-removal').addEventListener('click',confirmDownloadRemoval);$('#removal-refresh').addEventListener('click',()=>openDownloadRemoval(JSON.parse($('#removal-dialog').dataset.ids||'[]')));$('#removal-dialog').addEventListener('close',()=>{removalRequest++;if(!removalBusy)removalPreview=null;});$('#removal-dialog').addEventListener('cancel',event=>{if(removalBusy)event.preventDefault();});
+  $$('input[name="removal-mode"]').forEach(input=>input.addEventListener('change',()=>{$('#removal-confirm-files').checked=false;syncRemovalChoice();}));$('#removal-confirm-files').addEventListener('change',syncRemovalChoice);$('#confirm-removal').addEventListener('click',confirmDownloadRemoval);$('#removal-refresh').addEventListener('click',()=>openDownloadRemoval(JSON.parse($('#removal-dialog').dataset.ids||'[]')));$('#removal-dialog').addEventListener('close',()=>{if($('#removal-dialog').open)return;removalRequest++;if(!removalBusy)removalPreview=null;});$('#removal-dialog').addEventListener('cancel',event=>{if(removalBusy)event.preventDefault();});
   $('#refresh-storage').addEventListener('click',refreshStorage);
+  for(const [id,key]of [['speed-limit-form','speed'],['schedule-form','schedule']]){const markEdited=()=>{featureFormEdits[key]++;};$('#'+id).addEventListener('input',markEdited);$('#'+id).addEventListener('change',markEdited);}
   $('#speed-limit-form').addEventListener('submit',event=>{event.preventDefault();const value=Number($('#speed-limit').value),unit=Number($('#speed-unit').value),bytes=Math.round(value*unit);if(!Number.isFinite(value)||value<0||![1024,1048576].includes(unit)||bytes>1073741824){toast('Enter a speed from 0 to 1024 MB/s.',true);return;}saveFeatureSetting({maxDownloadBytesPerSecond:bytes},$('button[type="submit"]',$('#speed-limit-form')));});
   $('#schedule-form').addEventListener('submit',event=>{event.preventDefault();try{saveFeatureSetting({downloadSchedule:scheduleFromForm()},$('button[type="submit"]',$('#schedule-form')));}catch(error){toast(errorText(error),true);}});
   for(const [id,key]of [['notifications-enabled','notificationsEnabled'],['clipboard-watch-enabled','clipboardWatchEnabled'],['adaptive-theme-enabled','adaptiveThemeEnabled'],['auto-update-enabled','autoUpdateEnabled']])$('#'+id).addEventListener('change',event=>saveFeatureSetting({[key]:event.target.checked},event.target));
@@ -1073,7 +1093,7 @@ function wireEvents() {
   $('#next-page').addEventListener('click', () => { if (!catalog.loading && catalog.hasMore) { loadCatalog({ page: catalog.page + 1 }); window.scrollTo(0, 250); } });
   $$('[data-close]').forEach(node => node.addEventListener('click', () => {if(node.dataset.close==='removal-dialog'&&removalBusy)return;$(`#${node.dataset.close}`).close();}));
   $$('dialog').filter(dialog=>dialog.id!=='completion-dialog').forEach(dialog => dialog.addEventListener('click', event => { if(dialog.id==='removal-dialog'&&removalBusy)return;const rect = dialog.getBoundingClientRect(); if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close(); }));
-  $('#game-dialog').addEventListener('close', () => { detailRequest++; currentDetail = null; });
+  $('#game-dialog').addEventListener('close', () => { if($('#game-dialog').open)return;detailRequest++; currentDetail = null; });
   $$('dialog').forEach(dialog => dialog.addEventListener('close', () => setTimeout(flushCatalogCheck, 0)));
   $('#check-import').addEventListener('click', async () => {
     if (importBusy) return;

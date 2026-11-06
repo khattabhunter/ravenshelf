@@ -303,6 +303,19 @@ class DownloadManager extends EventEmitter {
         headers=offset?{Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified}:{};
         d.activeConnections=1;res=await request(headers);responseBody=res.body;
       }
+      if(offset&&res.status===416){
+        const unsatisfied=/^bytes \*\/(\d+)$/.exec(res.headers.get('content-range')||'');
+        const size=unsatisfied?Number(unsatisfied[1]):NaN;
+        if(Number.isSafeInteger(size)&&size===offset){
+          // All advertised bytes may have arrived before a broken stream or
+          // pause prevented clean EOF. A 416 alone never proves completion:
+          // re-request the last byte with If-Range, then validate the ordinary
+          // response, unchanged prefix, exact length and clean EOF below.
+          await res.body?.cancel();offset--;d.received=offset;rateMeter.reset(offset);
+          headers={Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified};
+          res=await request(headers);responseBody=res.body;
+        }
+      }
       d.connectionMode='single';if(!d.connectionNote)d.connectionNote=connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
       if(!res.ok){await res.body?.cancel();throw new Error(`Host returned HTTP ${res.status}. Check the source link or retry.`);}
       const encoding=res.headers.get('content-encoding');

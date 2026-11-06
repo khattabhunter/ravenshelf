@@ -16,7 +16,7 @@ function load(file,replacements={},extra=''){
   const module={exports:{}},native=createRequire(file),requireFn=name=>Object.prototype.hasOwnProperty.call(replacements,name)?replacements[name]:native(name);
   vm.compileFunction(fs.readFileSync(file,'utf8')+extra,['require','module','exports','__filename','__dirname'],{filename:file})(requireFn,module,module.exports,file,path.dirname(file));return module.exports;
 }
-function fixture(t,{settings={},cleanupGate=null,register=null}={}){
+function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null}={}){
   const root=fs.mkdtempSync(path.join(base,'case-')),profile=path.join(root,'profile'),folder=path.join(root,'Game');fs.mkdirSync(profile);fs.mkdirSync(folder);
   const manager=new DownloadManager({stateFile:path.join(profile,'library.json'),downloadDir:root,fetcher:async()=>{throw new Error('Network access is not part of feature tests.');}});
   manager.settings={...manager.settings,autoUpdateEnabled:false,clipboardWatchEnabled:false,notificationsEnabled:false,...settings};
@@ -39,13 +39,13 @@ function fixture(t,{settings={},cleanupGate=null,register=null}={}){
     './clipboard-inbox.cjs':{ClipboardInbox:ObservedInbox},
     './game-metadata.cjs':{createGameMetadata:()=>async game=>{calls.metadata.push(game);return {source:'Steam',requirements:{minimum:'',recommended:''},reviews:null,genres:[]};}},
     './integrity-verifier.cjs':{createIntegrityVerifier:()=>verifier},
-    './download-cleanup.cjs':{createDownloadCleanup:options=>{const cleanup=createDownloadCleanup(options);return {...cleanup,async deletePreview(value){if(cleanupGate){calls.events.push('cleanup:pending');await cleanupGate.promise;}return cleanup.deletePreview(value);}};}},
+    './download-cleanup.cjs':{createDownloadCleanup:options=>{const cleanup=createDownloadCleanup(options);return {...cleanup,async summary(value){instances.storageSignal=value?.signal;calls.events.push('storage:pending');if(storageGate)await storageGate.promise;return cleanup.summary(value);},async deletePreview(value){if(cleanupGate){calls.events.push('cleanup:pending');await cleanupGate.promise;}return cleanup.deletePreview(value);}};}},
     'node:child_process':{spawn(helper,args,options){calls.spawn.push({helper,args,options});const child=new EventEmitter();child.unref=()=>{};queueMicrotask(()=>child.emit('spawn'));return child;}}
   });
   const services=module.createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification:undefined,register:(name,handler)=>{handlers.set(name,handler);register?.(name,handler);},publish:()=>calls.publish++,providers,checked,isTest:false});
   const add=(id='one',name='archive.rar',content='fixture archive')=>{const download={id,name,folder,status:'paused',received:content.length,total:content.length,url:'https://example.invalid/'+name,sourceUrl:'https://example.invalid/'+name,headers:{}};manager.downloads.push(download);fs.writeFileSync(path.join(folder,name),content,{flag:'wx'});return download;};
   t.after(async()=>{
-    cleanupGate?.resolve();instances.updater.state.phase='idle';await manager.stop();await services.beforeQuit();
+    cleanupGate?.resolve();storageGate?.resolve();instances.updater.state.phase='idle';await manager.stop();await services.beforeQuit();
     const relative=path.relative(base,root);assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));assert.equal(fs.realpathSync(root),root);fs.rmSync(root,{recursive:true,force:true});
   });
   return {root,profile,folder,manager,calls,handlers,completion,app,appEvents,win,instances,services,verifier,chooser,clipboard,checked,add,featureSettings:module.featureSettings};
@@ -102,6 +102,33 @@ test('Update preparation is deferred to exit and launches only the supplied help
   const f=fixture(t);f.instances.updater.state.phase='ready';f.handlers.get('installUpdate')();assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);
   await f.services.beforeQuit();assert.deepEqual(f.calls.prepare,[{restart:true}]);assert.equal(f.calls.spawn.length,1);
   const spawned=f.calls.spawn[0];assert.equal(spawned.helper,path.join(f.root,'fixture-helper.exe'));assert.deepEqual(spawned.args,[path.join(f.root,'fixture-job.json')]);assert.equal(spawned.options.windowsHide,true);assert.equal(spawned.options.detached,true);assert.notEqual(spawned.options.shell,true);
+});
+
+test('Exit waits for interrupted updater cleanup before preparing a verified update',async t=>{
+  const f=fixture(t),gate=deferred();f.instances.updater.state.phase='ready';
+  f.instances.updater.dispose=()=>gate.promise;
+  let finished=false;const quitting=f.services.beforeQuit().then(()=>{finished=true;});
+  try{await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);}
+  finally{gate.resolve();await quitting;}
+  assert.equal(f.calls.prepare.length,1);assert.equal(f.calls.spawn.length,1);
+});
+
+test('Storage IPC coalesces repeated checks and refuses scans after shutdown',async t=>{
+  const f=fixture(t);f.add();fs.writeFileSync(path.join(f.root,'outside-queue.rar'),'separate archive');
+  const first=f.handlers.get('getStorageSummary')(),second=f.handlers.get('getStorageSummary')();
+  assert.equal(first,second);const result=await first;
+  assert.equal(result.untrackedBytes,Buffer.byteLength('separate archive'));assert.equal(result.untrackedItems[0].deletable,false);
+  await f.services.beforeQuit();assert.throws(()=>f.handlers.get('getStorageSummary')(),/closing/);
+});
+
+test('Shutdown aborts an in-progress storage scan and awaits its pending filesystem work',async t=>{
+  const gate=deferred(),f=fixture(t,{storageGate:gate});
+  const storage=f.handlers.get('getStorageSummary')(),rejection=assert.rejects(storage,{name:'AbortError'});
+  await until(()=>f.calls.events.includes('storage:pending'));
+  let finished=false;const quitting=f.services.beforeQuit().then(()=>{finished=true;});
+  try{assert.equal(f.instances.storageSignal.aborted,true);await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);}
+  finally{gate.resolve();await rejection;await quitting;}
+  assert.equal(finished,true);assert.equal(f.calls.prepare.length,0);
 });
 test('Verification IPC uses native dialog choices, never supplied renderer paths',async t=>{
   const f=fixture(t);f.chooser.push({canceled:false,filePaths:[path.join(f.root,'chosen.sfv')]},{canceled:false,filePaths:[f.folder]});

@@ -3,6 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const {workspaceFor}=require('./parallel-download.cjs');
+const {scanConfiguredArchives}=require('./download-storage.cjs');
 const TTL_MS=5*60*1000;
 const MAX_SELECTION=500;
 const ARCHIVE=/\.(?:rar|bin|zip|7z|iso|\d{3})$/i;
@@ -50,15 +51,27 @@ function isStopped(download){return !['queued','downloading'].includes(download.
 async function capture(download,{summary=false}={}){
   const item=selection(download);
   if(!summary&&!isStopped(download))bad();
-  item.files=[await captureFile(item.final,'completed',summary),await captureFile(item.partial,'partial',summary)];
+  item.issues=false;item.files=[];
+  // A missing parent is useful information for storage checks. Never relax
+  // cleanup's stricter requirement that its original parents still exist.
+  if(summary&&!await maybeStat(item.folder)){item.missing=true;return item;}
+  for(const [file,kind]of [[item.final,'completed'],[item.partial,'partial']]){
+    try{item.files.push(await captureFile(file,kind,summary));}catch(error){if(!summary)throw error;item.issues=true;}
+  }
+  try{
   item.parents=await ancestors(item.workspace);item.directory=await maybeStat(item.workspace);item.entries=[];
   if(item.directory){
     if(!item.directory.isDirectory()||item.directory.isSymbolicLink()||item.directory.ino===0n)bad();
-    item.entries=(await fs.promises.readdir(item.workspace)).sort();
-    if(item.entries.length>128||item.entries.some(name=>!WORKSPACE_FILE.test(name)))bad();
-    for(const name of item.entries)item.files.push(await captureFile(path.join(item.workspace,name),'partial',summary));
+    const directory=await fs.promises.opendir(item.workspace);
+    try{while(item.entries.length<=128){const entry=await directory.read();if(!entry)break;item.entries.push(entry.name);}}finally{await directory.close();}
+    item.entries.sort();
+    if(item.entries.length>128||item.entries.some(name=>!WORKSPACE_FILE.test(name))){if(!summary)bad();item.issues=true;}
+    for(const name of item.entries.slice(0,128).filter(name=>WORKSPACE_FILE.test(name))){
+      try{item.files.push(await captureFile(path.join(item.workspace,name),'partial',summary));}catch(error){if(!summary)throw error;item.issues=true;}
+    }
   }
   await checkAncestors(item.parents);
+  }catch(error){if(!summary)throw error;item.issues=true;}
   return item;
 }
 async function verifyItem(item){
@@ -79,7 +92,7 @@ function totals(files,seenPaths=new Set(),seenFiles=new Set()){
   return {completedBytes,partialBytes,totalBytes:completedBytes+partialBytes};
 }
 
-function createDownloadCleanup({getDownloads,now=Date.now}={}){
+function createDownloadCleanup({getDownloads,getDownloadDir,now=Date.now,scanLimits}={}){
   if(typeof getDownloads!=='function')throw new Error('Cleanup needs a download inventory.');
   const pending=new Map();
   const downloads=()=>{const list=getDownloads();if(!Array.isArray(list)||list.length>10000)throw new Error('The download inventory could not be checked.');return list;};
@@ -110,7 +123,8 @@ function createDownloadCleanup({getDownloads,now=Date.now}={}){
     for(const id of chosen){
       const item=plan.records.get(id),handles=[];
       try{
-        const list=downloads();if(!item||!sameSelection(item,list.find(download=>download.id===id))||otherOwner(list,chosen,item))bad();
+        const assertOwnership=()=>{const list=downloads();if(!item||!sameSelection(item,list.find(download=>download.id===id))||otherOwner(list,chosen,item))bad();};
+        assertOwnership();
         // Already-removed paths can be shared by selected duplicate rows.
         const remaining=item.files.filter(file=>!seenPaths.has(pathKey(file.path)));
         if(remaining.length===item.files.length)await verifyItem(item);
@@ -121,8 +135,10 @@ function createDownloadCleanup({getDownloads,now=Date.now}={}){
           handles.push(handle);const stat=await handle.stat({bigint:true});
           if(!regular(stat,false)||!same(file.stat,stat)||stat.size!==file.stat.size||stat.mtimeNs!==file.stat.mtimeNs||stat.ctimeNs!==file.stat.ctimeNs)bad();
         }
+        assertOwnership();
         for(const file of remaining){
           await verifyFile(file);
+          assertOwnership();
           if(file.stat){await fs.promises.unlink(file.path);bytesFreed+=file.bytes;}
           seenPaths.add(pathKey(file.path));
         }
@@ -137,13 +153,29 @@ function createDownloadCleanup({getDownloads,now=Date.now}={}){
     }
     return {removedIds,failed,bytesFreed};
   }
-  async function summary(){
-    const seenPaths=new Set(),seenFiles=new Set(),items=[];let completedBytes=0,partialBytes=0;
+  async function summary({signal}={}){
+    const seenPaths=new Set(),seenFiles=new Set(),knownPaths=new Set(),items=[],missingItems=[],warnings=[];let completedBytes=0,partialBytes=0;
     for(const download of downloads()){
-      try{const record=await capture(download,{summary:true}),size=totals(record.files,seenPaths,seenFiles);completedBytes+=size.completedBytes;partialBytes+=size.partialBytes;items.push({id:record.id,name:record.name,bytes:size.totalBytes,...size});}
+      if(signal?.aborted){const error=new Error('The storage check was cancelled.');error.name='AbortError';throw error;}
+      try{
+        const selected=selection(download);knownPaths.add(pathKey(selected.final));knownPaths.add(pathKey(selected.partial));
+        const record=await capture(download,{summary:true}),size=totals(record.files,seenPaths,seenFiles);
+        if(!Number.isSafeInteger(completedBytes+partialBytes+size.totalBytes))bad();
+        completedBytes+=size.completedBytes;partialBytes+=size.partialBytes;
+        const final=record.files.find(file=>file.kind==='completed'),missing=record.missing||(!record.issues&&!record.files.some(file=>file.stat));
+        const completedFileMissing=download.status==='completed'&&(record.missing||Boolean(final&&!final.stat));
+        items.push({id:record.id,name:record.name,bytes:size.totalBytes,...size,missing:Boolean(missing),completedFileMissing,unavailable:record.issues});
+        if(missing||completedFileMissing)missingItems.push({id:record.id,name:record.name,message:completedFileMissing?'The completed archive is no longer at its saved location.':'No tracked download files were found at the saved location.'});
+      }
       catch{items.push({id:typeof download?.id==='string'?download.id:'',name:filename(download?.name)?download.name:'Download',bytes:0,completedBytes:0,partialBytes:0,totalBytes:0,unavailable:true});}
     }
-    return {completedBytes,partialBytes,totalBytes:completedBytes+partialBytes,items};
+    if(items.some(item=>item.unavailable))warnings.push('Some tracked files could not be checked safely. Their storage totals may be incomplete.');
+    for(const value of seenPaths)knownPaths.add(value);
+    let root;try{root=typeof getDownloadDir==='function'?getDownloadDir():null;}catch{root=null;warnings.push('The configured download folder could not be read.');}
+    const scan=await scanConfiguredArchives({root,knownPaths,knownFiles:seenFiles,signal,limits:scanLimits});
+    const totalBytes=completedBytes+partialBytes,libraryBytes=totalBytes+scan.untrackedBytes;
+    if(!Number.isSafeInteger(libraryBytes))throw new Error('The storage inventory is too large to report safely.');
+    return {completedBytes,partialBytes,totalBytes,trackedBytes:totalBytes,libraryBytes,items,missingItems,...scan,warnings:[...warnings,...scan.warnings]};
   }
   return {preview,deletePreview,summary};
 }

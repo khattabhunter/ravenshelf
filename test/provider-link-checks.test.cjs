@@ -216,3 +216,73 @@ test('direct FuckingFast links use the injected transport while other hosts and 
   assert.equal(f.defaultCalls[0].url,'https://files.example.org/Game.part01.rar');
   assert.equal(new URL(f.defaultCalls[1].url).hostname,'fitgirl-repacks.site');
 });
+
+test('successful HEAD without size uses one bounded GET and reports the whole archive size',async()=>{
+  for(const length of [null,'0','-1','1e3','invalid','9007199254740992']){
+    let cancelled=false;
+    const f=fixture({file:(_url,options)=>{
+      if(options.method==='HEAD'){const head=fileResponse();if(length===null)head.headers.delete('content-length');else head.headers.set('content-length',length);return head;}
+      return fileResponse({body:new ReadableStream({cancel(){cancelled=true;}}),status:206,headers:{'content-length':'1','content-range':'bytes 0-0/987654321'}});
+    }});
+    const result=await f.resolve();
+    assert.equal(result.status,'ready');assert.equal(result.size,987654321);assert.equal(cancelled,true);
+    assert.deepEqual(f.fastCalls.map(x=>x.method),['GET','HEAD','GET']);
+    assert.equal(f.fastCalls.at(-1).headers.Range,'bytes=0-0');assert.equal(f.fastCalls.at(-1).headers['Accept-Encoding'],'identity');
+  }
+});
+
+test('size fallback applies to FileKeeper servers and other explicit direct file links',async()=>{
+  for(const url of ['https://fs1.filekeeper.net:8443/files/Game.part01.rar','https://files.example.org/Game.part01.rar']){
+    let cancelled=false;
+    const f=fixture({defaultFetch:async(_url,options)=>{
+      if(options.method==='HEAD'){const head=fileResponse({url});head.headers.delete('content-length');return head;}
+      return fileResponse({url,status:206,headers:{'content-length':'1','content-range':'bytes 0-0/123456'},body:new ReadableStream({cancel(){cancelled=true;}})});
+    }});
+    const result=await f.providers.resolveLink(url);
+    assert.equal(result.status,'ready');assert.equal(result.size,123456);assert.equal(cancelled,true);
+    assert.deepEqual(f.defaultCalls.map(x=>x.method),['HEAD','GET']);assert.equal(f.fastCalls.length,0);
+  }
+});
+
+test('a successful size-less HEAD cannot hide a later error, verification page or executable bait',async()=>{
+  for(const options of [{status:403},{status:429},{status:503},{headers:{'content-type':'text/html'}},{headers:{'content-disposition':'attachment; filename="Game.part01.rar.exe"'}},{url:'https://ads.example/Game.part01.rar'},{headers:{'content-encoding':'gzip'}}]){
+    const f=fixture({file:(_url,request)=>{if(request.method==='HEAD'){const head=fileResponse();head.headers.delete('content-length');return head;}return fileResponse(options);}});
+    assert.equal((await f.resolve()).status,'manual');assert.equal(f.fastCalls.length,3);
+  }
+});
+
+test('genuinely unknown sizes remain usable and honest after exactly one cancelled probe',async()=>{
+  for(const partial of [false,true]){
+    let cancelled=false;
+    const f=fixture({file:(_url,options)=>{
+      if(options.method==='HEAD'){const head=fileResponse();head.headers.delete('content-length');return head;}
+      const get=fileResponse({status:partial?206:200,body:new ReadableStream({cancel(){cancelled=true;}}),headers:partial?{'content-length':'1','content-range':'bytes 0-0/*'}:{}});
+      if(!partial)get.headers.delete('content-length');return get;
+    }});
+    const result=await f.resolve();assert.equal(result.status,'ready');assert.equal(result.size,0);assert.match(result.message,/may remain unknown/);assert.equal(cancelled,true);assert.equal(f.fastCalls.length,3);
+  }
+});
+
+test('HTML or unsuccessful HEAD responses with no size never trigger a download probe',async()=>{
+  for(const options of [{status:403},{status:404},{status:429},{status:503},{headers:{'content-type':'text/html'}}]){
+    const f=fixture({file:()=>{const head=fileResponse(options);head.headers.delete('content-length');return head;}});
+    const result=await f.resolve();assert.notEqual(result.status,'ready');assert.deepEqual(f.fastCalls.map(x=>x.method),['GET','HEAD']);
+  }
+});
+
+test('size probes reject contradictory or malformed lengths instead of reporting a false ready result',async()=>{
+  for(const options of [
+    {status:206,headers:{'content-range':'bytes 0-0/100','content-length':'2'}},
+    {status:206,headers:{'content-range':'bytes 0-0/*','content-length':'2'}},
+    {status:206,headers:{'content-range':'bytes 0-99/100','content-length':'3'}},
+    {headers:{'content-length':'garbage'}},{headers:{'content-length':'1e3'}},{headers:{'content-length':'0'}},
+  ]){
+    const f=fixture({file:(_url,request)=>{if(request.method==='HEAD'){const head=fileResponse();head.headers.delete('content-length');return head;}return fileResponse(options);}});
+    const result=await f.resolve();assert.equal(result.status,'manual');assert.match(result.message,/length|empty/);
+  }
+});
+
+test('FuckingFast full-end workaround is not applied to unrelated file hosts',async()=>{
+  const f=fixture({defaultFetch:async(url,options)=>options.method==='HEAD'?response(null,{url,status:405}):fileResponse({url,status:206,headers:{'content-length':'1','content-range':'bytes 0-99/100'}})});
+  const result=await f.providers.resolveLink('https://files.example.org/Game.part01.rar');assert.equal(result.status,'manual');assert.match(result.message,/inconsistent/);
+});

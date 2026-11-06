@@ -180,3 +180,103 @@ test('disposing an update cancels its shared bandwidth wait without changing the
   assert.deepEqual(await fs.promises.readFile(f.executable),f.old);assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
   const pending=path.join(f.profile,'updates','pending');for(const directory of await fs.promises.readdir(pending))assert.equal(fs.existsSync(path.join(pending,directory,'update.exe')),false);
 });
+
+test('shutdown waits for staging cleanup and disposed updaters cannot start fresh work',async t=>{
+  const limiter=new BandwidthLimiter({bytesPerSecond:1});t.after(()=>limiter.stop());
+  const f=await fixture(t,{bandwidthLimiter:limiter}),checking=f.updater.check(),deadline=Date.now()+5000;
+  while(!limiter.pending){if(Date.now()>deadline)throw new Error('Update did not wait for bandwidth.');await new Promise(resolve=>setTimeout(resolve,5));}
+  const original=fs.promises.unlink;let releaseCleanup,cleanupReached=false,finished=false;
+  fs.promises.unlink=async function(file,...args){if(String(file).startsWith(f.profile)&&path.basename(String(file))==='update.exe'){cleanupReached=true;await new Promise(resolve=>{releaseCleanup=resolve;});}return original.call(this,file,...args);};
+  try{
+    const stopping=f.updater.dispose().then(()=>{finished=true;});
+    while(!cleanupReached){if(Date.now()>deadline)throw new Error('Update did not reach cleanup.');await new Promise(resolve=>setTimeout(resolve,5));}
+    assert.equal(finished,false,'shutdown remains pending until the partial file is removed');
+    releaseCleanup();await stopping;assert.equal((await checking).phase,'error');
+    const calls=f.calls;await f.updater.check();f.updater.configure(true);assert.equal(f.calls,calls);assert.equal(f.updater.timers.length,0);
+    const pending=path.join(f.profile,'updates','pending');for(const directory of await fs.promises.readdir(pending))assert.equal(fs.existsSync(path.join(pending,directory,'update.exe')),false);
+    assert.deepEqual(await fs.promises.readFile(f.executable),f.old);
+  }finally{releaseCleanup?.();fs.promises.unlink=original;}
+});
+
+test('cancellation after metadata arrives cannot create a new staging directory',async t=>{
+  const f=await fixture(t);let deliver;f.updater.fetcher=()=>new Promise(resolve=>{deliver=resolve;});
+  const checking=f.updater.check(),stopping=f.updater.dispose();deliver(Response.json([release()]));
+  assert.equal((await checking).phase,'error');await stopping;
+  assert.equal(fs.existsSync(path.join(f.profile,'updates')),false);assert.equal(f.updater.ready,null);
+  assert.deepEqual(await fs.promises.readFile(f.executable),f.old);
+});
+
+test('an interrupted payload is removed and never becomes an installable update',async t=>{
+  const f=await fixture(t);
+  f.updater.fetcher=async url=>url===RELEASES?Response.json([release()]):url.endsWith('SHA256SUMS.txt')?new Response(hash(bytes)+'  Ravenshelf-0.4.1-Windows.exe\n'):new Response(bytes.subarray(0,128),{headers:{'Content-Length':String(bytes.length)}});
+  assert.equal((await f.updater.check()).phase,'error');assert.equal(f.updater.ready,null);assert.equal(await f.updater.prepareInstall(),null);
+  const pending=path.join(f.profile,'updates','pending');for(const directory of await fs.promises.readdir(pending))assert.equal(fs.existsSync(path.join(pending,directory,'update.exe')),false);
+  assert.deepEqual(await fs.promises.readFile(f.executable),f.old);assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
+});
+
+test('a partial job write is cleaned up so verified updates can be prepared again',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t);await f.updater.check();const directory=f.updater.ready.directory,original=fs.promises.open;let injected=false;
+  fs.promises.open=async function(file,...args){const handle=await original.call(this,file,...args);if(path.basename(String(file))==='job.json'&&!injected){injected=true;handle.writeFile=async function(){await this.write(Buffer.from('{'));throw Object.assign(new Error('Fixture write failure'),{code:'EIO'});};}return handle;};
+  try{await assert.rejects(f.updater.prepareInstall({pid:2147483647}),/Fixture write failure/);}finally{fs.promises.open=original;}
+  assert.equal(injected,true);assert.equal(fs.existsSync(path.join(directory,'job.json')),false);assert.equal(fs.existsSync(path.join(directory,'ravenshelf-updater.exe')),false);
+  assert.deepEqual(await fs.promises.readFile(f.updater.ready.staged),bytes);assert.deepEqual(await fs.promises.readFile(f.executable),f.old);
+  const prepared=await f.updater.prepareInstall({pid:2147483647});await execFile(prepared.helper,[prepared.job],{windowsHide:true,timeout:15000});
+  assert.deepEqual(await fs.promises.readFile(f.executable),bytes);assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
+});
+
+test('concurrent preparation creates one job and preserves all backed-up profile data',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t),values=new Map([['library.json','fixture private settings'],['installed-games.json','fixture installed games'],['Local State','fixture encryption state'],['Preferences','fixture preferences'],['renderer-cache.json','fixture cache']]);
+  for(const [name,value]of values)await fs.promises.writeFile(path.join(f.profile,name),value);
+  await f.updater.check();const [first,second]=await Promise.all([f.updater.prepareInstall({pid:2147483647}),f.updater.prepareInstall({pid:2147483647})]);assert.deepEqual(first,second);
+  const backups=await fs.promises.readdir(path.join(f.profile,'updates','backups'));assert.equal(backups.length,1);
+  for(const [name,value]of values){assert.equal(await fs.promises.readFile(path.join(f.profile,name),'utf8'),value);assert.equal(await fs.promises.readFile(path.join(f.profile,'updates','backups',backups[0],name),'utf8'),value);}
+  assert.deepEqual(await fs.promises.readFile(f.executable),f.old);
+});
+
+test('preparation failure never removes an existing job file',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t);await f.updater.check();const job=path.join(f.updater.ready.directory,'job.json');await fs.promises.writeFile(job,'existing fixture job');
+  await assert.rejects(f.updater.prepareInstall({pid:2147483647}));
+  assert.equal(await fs.promises.readFile(job,'utf8'),'existing fixture job');assert.equal(fs.existsSync(path.join(f.updater.ready.directory,'ravenshelf-updater.exe')),false);
+  assert.deepEqual(await fs.promises.readFile(f.updater.ready.staged),bytes);assert.deepEqual(await fs.promises.readFile(f.executable),f.old);
+});
+
+test('native updater waits for the app to exit then restarts only its verified replacement',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t),compiler=path.join(process.env.SystemRoot||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
+  const updatedSource=path.join(f.root,'restart-fixture.cs'),updated=path.join(f.root,'restart-fixture.exe');
+  await fs.promises.writeFile(updatedSource,'using System.IO; class RestartFixture { static void Main(){File.WriteAllText(Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory,"restart-marker.txt"),"verified fixture restarted");} }');
+  await execFile(compiler,['/nologo','/target:winexe','/out:'+updated,updatedSource],{windowsHide:true,timeout:15000});
+  const payload=await fs.promises.readFile(updated);
+  f.updater.fetcher=async url=>url===RELEASES?Response.json([release('0.4.1',payload)]):url.endsWith('SHA256SUMS.txt')?new Response(hash(payload)+'  Ravenshelf-0.4.1-Windows.exe\n'):new Response(payload,{headers:{'Content-Length':String(payload.length)}});
+  assert.equal((await f.updater.check()).phase,'ready');
+  const waiterSource=path.join(f.root,'wait-fixture.cs'),waiter=path.join(f.root,'wait-fixture.exe'),waiting=path.join(f.root,'waiting.txt'),releaseWait=path.join(f.root,'release.txt');
+  await fs.promises.writeFile(waiterSource,'using System; using System.IO; using System.Threading; class WaitFixture { static void Main(string[] a){File.WriteAllText(a[0],"waiting"); DateTime deadline=DateTime.UtcNow.AddSeconds(10); while(!File.Exists(a[1])&&DateTime.UtcNow<deadline)Thread.Sleep(10);} }');
+  await execFile(compiler,['/nologo','/target:winexe','/out:'+waiter,waiterSource],{windowsHide:true,timeout:15000});
+  const child=spawn(waiter,[waiting,releaseWait],{windowsHide:true,stdio:'ignore'}),exited=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>resolve(code));});
+  try{
+    const deadline=Date.now()+5000;while(!fs.existsSync(waiting)){if(Date.now()>deadline)throw new Error('Fixture app did not start.');await new Promise(resolve=>setTimeout(resolve,5));}
+    const prepared=await f.updater.prepareInstall({pid:child.pid,restart:true}),running=execFile(prepared.helper,[prepared.job],{windowsHide:true,timeout:15000});
+    await new Promise(resolve=>setTimeout(resolve,100));assert.deepEqual(await fs.promises.readFile(f.executable),f.old);assert.equal(fs.existsSync(path.join(f.root,'restart-marker.txt')),false);
+    await fs.promises.writeFile(releaseWait,'finish');await running;assert.equal(await exited,0);
+    while(!fs.existsSync(path.join(f.root,'restart-marker.txt'))){if(Date.now()>deadline)throw new Error('Verified fixture did not restart.');await new Promise(resolve=>setTimeout(resolve,10));}
+    assert.equal(await fs.promises.readFile(path.join(f.root,'restart-marker.txt'),'utf8'),'verified fixture restarted');
+    assert.deepEqual(await fs.promises.readFile(f.executable),payload);assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
+  }finally{await fs.promises.writeFile(releaseWait,'finish');await exited;}
+});
+
+test('native rollback restores a verified previous app and preserves externally changed targets or backups',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t),compiler=path.join(process.env.SystemRoot||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
+  const source=path.join(f.root,'rollback-probe.cs'),probe=path.join(f.root,'rollback-probe.exe'),helper=path.resolve(__dirname,'../src/ravenshelf-updater.exe');
+  // Invoke the shipped rollback routine in a disposable process. Fake MZ data
+  // is only hashed/replaced; neither the old nor staged data is ever executed.
+  await fs.promises.writeFile(source,'using System; using System.Reflection; class RollbackProbe { static void Main(string[] a){var type=Assembly.LoadFile(a[0]).GetType("RavenshelfUpdater"); var method=type.GetMethod("Restore",BindingFlags.NonPublic|BindingFlags.Static); Console.Write((bool)method.Invoke(null,new object[]{a[1],a[2],a[3],a[4]})?"restored":"preserved");} }');
+  await execFile(compiler,['/nologo','/target:exe','/out:'+probe,source],{windowsHide:true,timeout:15000});
+  for(const mode of ['valid','changed-target','changed-backup']){
+    const backup=path.join(f.root,'rollback-'+mode+'.exe'),old=mode==='changed-backup'?Buffer.concat([Buffer.from('MZ'),Buffer.alloc(100,6)]):f.old;
+    const current=mode==='changed-target'?Buffer.concat([Buffer.from('MZ'),Buffer.alloc(100,7)]):bytes;
+    await fs.promises.writeFile(backup,old);await fs.promises.writeFile(f.executable,current);
+    const result=await execFile(probe,[helper,backup,f.executable,hash(f.old),hash(bytes)],{windowsHide:true,timeout:15000});
+    assert.equal(result.stdout,mode==='valid'?'restored':'preserved');assert.deepEqual(await fs.promises.readFile(f.executable),mode==='valid'?f.old:current);
+    if(mode==='valid')assert.equal(fs.existsSync(backup),false);else assert.deepEqual(await fs.promises.readFile(backup),old);
+  }
+  assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
+});

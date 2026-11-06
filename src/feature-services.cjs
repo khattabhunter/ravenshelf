@@ -20,14 +20,14 @@ function featureSettings(patch){
 }
 function createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register,publish,providers,checked,isTest=false}){
   manager.settings={autoUpdateEnabled:true,clipboardWatchEnabled:false,notificationsEnabled:true,adaptiveThemeEnabled:true,...manager.settings};
-  const cleanup=createDownloadCleanup({getDownloads:()=>manager.downloads});
+  const cleanup=createDownloadCleanup({getDownloads:()=>manager.downloads,getDownloadDir:()=>manager.settings.downloadDir});
   const metadata=createGameMetadata();
   const notifier=new NotificationAlerts({enabled:()=>manager.settings.notificationsEnabled!==false&&!isTest,show:options=>{if(typeof Notification==='function'&&Notification.isSupported()){const alert=new Notification(options);alert.on('click',()=>{if(!win.isDestroyed()){win.show();win.focus();}});alert.show();}}});
   notifier.observe(manager.downloads);
   const verifier=createIntegrityVerifier({onChange:()=>publish()});
   const inbox=new ClipboardInbox({readText:()=>clipboard.readText(),onChange:()=>publish()});
   const updater=new AppUpdater({currentVersion:app.getVersion(),profileDir:app.getPath('userData'),executable:process.env.PORTABLE_EXECUTABLE_FILE||'',bandwidthLimiter:manager.bandwidthLimiter,supported:Boolean(app.isPackaged&&process.platform==='win32'&&process.env.PORTABLE_EXECUTABLE_FILE&&!isTest),onChange:()=>publish(),onReady:version=>notifier.update(version)});
-  let restartOnExit=false,closing=false;
+  let restartOnExit=false,closing=false,storageTask=null,storageController=null;
   const operations=new Set();
   function track(operation){
     if(closing)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
@@ -49,7 +49,13 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
     if(!result.requirements.minimum&&!result.requirements.recommended&&game.systemRequirements)result.requirements={minimum:String(game.systemRequirements).slice(0,12000),recommended:''};
     return result;
   });
-  register('getStorageSummary',()=>cleanup.summary());
+  register('getStorageSummary',()=>{
+    if(closing)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
+    if(storageTask)return storageTask;
+    storageController=new AbortController();
+    storageTask=Promise.resolve().then(()=>cleanup.summary({signal:storageController.signal})).finally(()=>{storageTask=null;storageController=null;});
+    return storageTask;
+  });
   register('previewDownloadRemoval',({ids}={})=>track(async()=>{
     const selected=idsFrom(ids),wasActive=manager.downloads.some(d=>selected.includes(d.id)&&['queued','downloading'].includes(d.status));
     try{await manager.pauseAndWait(selected);const preview=await cleanup.preview(selected);if(wasActive)preview.warnings.unshift('Selected active downloads were paused for review. Cancelling leaves them paused.');return preview;}
@@ -96,8 +102,10 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
     validateBatch:(links,allowIncomplete)=>{const result=analyzeArchiveSet(links);if(result.errors.length&&allowIncomplete!==true)throw new Error('Archive parts are missing or inconsistent. Review the link set before downloading.');return result;},
     async beforeQuit(){
       closing=true;
-      inbox.dispose();verifier.cancel();updater.dispose();
-      await Promise.allSettled([...operations]);
+      storageController?.abort();
+      const pending=Promise.allSettled([...operations,...(storageTask?[storageTask]:[])]);
+      inbox.dispose();verifier.cancel();await updater.dispose();
+      await pending;
       if(updater.snapshot().phase!=='ready')return;
       const prepared=await updater.prepareInstall({restart:restartOnExit});if(!prepared)return;
       await new Promise((resolve,reject)=>{const child=spawn(prepared.helper,[prepared.job],{detached:true,windowsHide:true,stdio:'ignore'});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
