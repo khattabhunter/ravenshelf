@@ -31,9 +31,15 @@ const icons = {
   computer: '<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8M12 16v5M7 7h10"/>',
   video: '<rect x="3" y="5" width="18" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/>',
   book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1zm0 0v15"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 10v7M14 10v7"/>',
 };
 
-const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.3.2' };
+const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.4.0' };
+const selectedDownloads = new Set();
+let removalPreview = null, removalRequest = 0, removalBusy = false, storageRequest = 0;
+let lightboxItems = [], lightboxIndex = 0, lightboxOpener = null;
+let clipboardInbox = {items:[],enabled:false}, verificationState = {phase:'idle'};
+let featureSettingsBusy = 0;
 const downloadsById = new Map(), activeDownloads = new Map(), downloadCards = new Map();
 let hasDownloadSnapshot = false, lastUpdateSequence = -1;
 const catalog = { page: 1, search: '', section: 'newest', games: [], hasMore: false, loading: false, request: 0 };
@@ -144,6 +150,7 @@ function showView(view) {
   $('#current-view-label').textContent = { discover: 'Discover', downloads: 'Downloads', library: 'My library', installed: 'On this PC', settings: 'Settings' }[view];
   if (view === 'library') renderLibrary();
   if (view === 'downloads') renderDownloads();
+  if (view === 'downloads' && featureUIAvailable()) refreshStorage();
   if (view === 'settings') renderSettings();
   if (view === 'installed') { renderInstalled(); if (!installedLoaded) loadInstalled(); }
   window.scrollTo(0, 0);
@@ -186,6 +193,7 @@ function makeGameCard(game) {
 }
 function renderGames() {
   $('#game-grid').replaceChildren(...catalog.games.map(makeGameCard));
+  if (featureUIAvailable()) renderPersonalized();
 }
 function renderCatalogRefresh() {
   const snapshot = state.catalogRefresh;
@@ -333,7 +341,10 @@ function renderGameDetails(game) {
   const imageUrl = safeImageUrl(game.image);
   if (imageUrl) {
     const image = el('img', 'detail-cover'); image.src = imageUrl; image.alt = `${gameTitle(game)} cover`; image.referrerPolicy = 'no-referrer';
-    image.addEventListener('error', () => image.remove(), { once: true }); header.append(image);
+    const cover = button('', 'detail-cover-button', null, () => openLightbox([imageUrl,...screenshots],0,gameTitle(game),cover));
+    cover.setAttribute('aria-label', `Enlarge ${gameTitle(game)} cover`); cover.append(image);
+    image.addEventListener('load', () => { if (currentDetail?.url===game.url) applyCoverAccent(image); }, {once:true});
+    image.addEventListener('error', () => image.remove(), { once: true }); header.append(cover);
   }
   const information = el('div', 'detail-info');
   information.append(el('div', 'eyebrow small', 'FITGIRL REPACK'));
@@ -355,10 +366,11 @@ function renderGameDetails(game) {
   const screenshots = (Array.isArray(game.screenshots) ? game.screenshots : []).map(safeImageUrl).filter(Boolean).slice(0, 10);
   if (screenshots.length) {
     const strip = el('div', 'screenshot-strip'); strip.setAttribute('aria-label', 'Game screenshots');
-    screenshots.forEach((url, index) => { const image = el('img'); image.src = url; image.alt = `Game screenshot ${index + 1}`; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer'; image.addEventListener('error', () => image.remove(), { once: true }); strip.append(image); });
+    screenshots.forEach((url, index) => { const image = el('img'); image.src = url; image.alt = `Game screenshot ${index + 1}`; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer'; const enlarge=button('','screenshot-button',null,()=>openLightbox(screenshots,index,gameTitle(game),enlarge));enlarge.setAttribute('aria-label',`Enlarge screenshot ${index+1}`);image.addEventListener('error', () => enlarge.remove(), { once: true });enlarge.append(image);strip.append(enlarge); });
     body.append(strip);
   }
   const resources=el('section','game-resources'); body.append(resources); loadGameResources(game,resources);
+  const metadata=el('section','game-metadata');body.append(metadata);loadGameMetadata(game,metadata);
   const panel = el('section', 'download-panel');
   const heading = el('div', 'panel-heading'); heading.append(icon('download'), el('h3', '', 'Get the complete file set'));
   panel.append(heading, el('p', 'panel-intro', 'Choose one host. Ravenshelf expands the links, checks each part, and queues the ready files together.'));
@@ -431,10 +443,20 @@ async function inspectLinks(text, container, title = 'Imported links') {
     if (!isCurrent()) return;
     const links = Array.isArray(checked) ? checked : checked.links || [];
     if (!links.length) throw new Error('The check returned no results. Please try again.');
-    renderCheckedLinks(container, links, expanded.warnings || [], title);
+    const preflight = await checkArchiveSelection(links.filter(link => link.status === 'ready'));
+    if (!isCurrent()) return;
+    renderCheckedLinks(container, links, expanded.warnings || [], title, preflight);
   } catch (error) { if (isCurrent()) container.replaceChildren(el('div', 'inline-error', errorText(error))); }
 }
-function renderCheckedLinks(container, links, warnings, title) {
+async function checkArchiveSelection(links) {
+  if (!links.length || typeof api?.validateArchiveSet !== 'function') return null;
+  try {
+    const result = await api.validateArchiveSet({ sourceUrls: links.map(link => link.sourceUrl || link.url).filter(Boolean) });
+    if (!Array.isArray(result?.errors) || !Array.isArray(result?.warnings)) throw new Error('Invalid archive check.');
+    return { errors: result.errors.filter(value => typeof value === 'string'), warnings: result.warnings.filter(value => typeof value === 'string') };
+  } catch { return { errors: [], warnings: [], unavailable: true }; }
+}
+function renderCheckedLinks(container, links, warnings, title, preflight = null) {
   const wrapper = el('div', 'links-results');
   const ready = links.filter(link => link.status === 'ready');
   const manual = links.filter(link => link.status === 'manual');
@@ -450,6 +472,17 @@ function renderCheckedLinks(container, links, warnings, title) {
   if (knownSize) summary.append(el('span', 'small-text', `${formatBytes(knownSize)}${ready.some(link => !link.size) ? ' + unknown sizes' : ' ready to download'}`));
   wrapper.append(summary);
   for (const warning of warnings.slice(0, 5)) wrapper.append(el('p', 'warning-note', warning));
+  let archiveConfirmation = null;
+  if (preflight?.unavailable) wrapper.append(el('p', 'inline-error', 'The archive set could not be checked. Choose Check links again before queueing these files.'));
+  if (preflight?.errors?.length) {
+    const issues = el('div', 'archive-check warning-note'); issues.setAttribute('role', 'alert');
+    issues.append(el('strong', '', 'This file set needs attention before downloading.'));
+    for (const issue of preflight.errors.slice(0, 12)) issues.append(el('p', '', issue));
+    const confirmation = el('label', 'check-label'); archiveConfirmation = el('input'); archiveConfirmation.type = 'checkbox';
+    confirmation.append(archiveConfirmation, el('span', '', 'Queue these ready files anyway. I understand the set may be incomplete or inconsistent and may not extract.'));
+    issues.append(confirmation); wrapper.append(issues);
+  }
+  for (const warning of (preflight?.warnings || []).slice(0, 8)) wrapper.append(el('p', 'warning-note', warning));
   if (browserSteps.length) wrapper.append(el('p', 'warning-note', 'The host needs browser verification or another browser step for some files. Use Open protected host beside an affected file to continue. This does not mean the files were deleted.'));
   if (missing.length) wrapper.append(el('p', 'warning-note', 'The host reported some files missing or deleted. Choose another mirror or check the source page for replacement links.'));
   if (unverified.length) wrapper.append(el('p', 'warning-note', 'Some links could not be verified. Read the message beside each file, then check again or choose another mirror.'));
@@ -477,17 +510,22 @@ function renderCheckedLinks(container, links, warnings, title) {
     finally { recheck.disabled = false; }
   });
   const download = button(ready.length === links.length ? `Download all ${ready.length} ${ready.length === 1 ? 'file' : 'files'}` : `Download ${ready.length} ready ${ready.length === 1 ? 'file' : 'files'}`, 'button primary', 'download');
-  download.disabled = !ready.length;
+  const canQueue = () => ready.length > 0 && !preflight?.unavailable && (!archiveConfirmation || archiveConfirmation.checked);
+  download.disabled = !canQueue();
+  archiveConfirmation?.addEventListener('change', () => { download.disabled = !canQueue(); });
   download.addEventListener('click', async () => {
+    if (!canQueue()) return;
     download.disabled = true;
     try {
-      const result = await api.addDownloads({ links: ready, gameTitle: title });
+      const payload = { links: ready, gameTitle: title };
+      if (archiveConfirmation?.checked) payload.allowIncomplete = true;
+      const result = await api.addDownloads(payload);
       const added = typeof result?.added === 'number' ? result.added : ready.length;
       toast(added ? `${added} ${added === 1 ? 'file added' : 'files added'} to your download queue.` : 'These files are already in your queue.');
       $('#game-dialog').close(); $('#import-dialog').close();
       try { applyState(await api.getState()); } catch { /* State subscription will update the queue. */ }
       showView('downloads');
-    } catch (error) { toast(errorText(error), true); download.disabled = false; }
+    } catch (error) { toast(errorText(error), true); download.disabled = !canQueue(); }
   });
   actions.append(copy, recheck, download); wrapper.append(actions);
   const alternatives = el('div', 'result-actions');
@@ -537,6 +575,7 @@ function updateDownloadProgress(node, item) {
 }
 function updateDownloadCard(node, item) {
   node.className = `download-item ${item.status || ''}`;
+  const selection=$('.download-select',node);if(selection)selection.checked=selectedDownloads.has(String(item.id));
   $('.download-name', node).textContent = item.name || item.filename || fileName(item);
   $('.download-game', node).textContent = item.gameTitle || 'Imported download';
   $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : 'file'));
@@ -556,6 +595,7 @@ function updateDownloadCard(node, item) {
     if (item.status === 'completed') controls.append(downloadActionButton(item, 'openFolder', 'Show downloaded file', 'folder'));
     if (item.status === 'completed' && !scanBusy) controls.append(downloadActionButton(item, 'scan', item.scan ? 'Scan again with Microsoft Defender' : 'Scan with Microsoft Defender', 'shield'));
     if (['downloading', 'queued', 'paused', 'error'].includes(item.status)) controls.append(downloadActionButton(item, 'cancel', 'Cancel download', 'close'));
+    if(typeof api?.previewDownloadRemoval==='function')controls.append(iconButton('Remove download','trash',()=>openDownloadRemoval([String(item.id)])));
   }
 }
 function scanText(item) {
@@ -579,6 +619,7 @@ function downloadActionButton(item, action, label, glyph) {
 }
 function makeDownloadCard(item) {
   const card = el('article', 'download-item'); card.dataset.id = item.id;
+  if(featureUIAvailable()){const select=el('input','download-select');select.type='checkbox';select.checked=selectedDownloads.has(String(item.id));select.setAttribute('aria-label',`Select ${item.name||'download'}`);select.addEventListener('change',()=>{if(select.checked)selectedDownloads.add(String(item.id));else selectedDownloads.delete(String(item.id));renderDownloadSelection();});card.append(select);}
   const file = el('div', 'download-file-icon');
   const information = el('div', 'download-information');
   const progress = el('div', 'download-progress'); progress.setAttribute('role', 'progressbar'); progress.setAttribute('aria-valuemin', '0'); progress.setAttribute('aria-valuemax', '100'); progress.append(el('div', 'download-progress-fill'));
@@ -588,6 +629,7 @@ function makeDownloadCard(item) {
 }
 function renderDownloads() {
   const downloads = state.downloads || [];
+  if(featureUIAvailable()){const ids=new Set(downloads.map(item=>String(item.id)));for(const id of selectedDownloads)if(!ids.has(id))selectedDownloads.delete(id);renderDownloadSelection();}
   downloadCards.clear();
   $('#stat-active').textContent = downloads.filter(item => item.status === 'downloading').length;
   $('#stat-speed').textContent = `${formatBytes(downloads.reduce((sum, item) => sum + (item.status === 'downloading' ? Number(item.speed) || 0 : 0), 0), '0 B')}/s`;
@@ -615,6 +657,7 @@ function renderSettings() {
   if (document.activeElement !== $('#concurrency')) $('#concurrency').value = String(state.settings.concurrency || 2);
   if (document.activeElement !== $('#connections-per-file')) $('#connections-per-file').value = String(state.settings.connectionsPerFile || 4);
   if (document.activeElement !== $('#defender-scan')) $('#defender-scan').value = state.settings.defenderScan === false ? 'off' : 'on';
+  if(featureUIAvailable())renderFeatureSettings();
 }
 function renderCatalogSections() {
   const container=$('#catalog-sections');container.replaceChildren();
@@ -789,6 +832,10 @@ function applyState(next) {
   const credentialWarning = $('#credential-warning');
   if (credentialWarning) { credentialWarning.textContent = state.headerStorageWarning || ''; credentialWarning.hidden = !state.headerStorageWarning; }
   if(next.completionAction)state.completionAction=next.completionAction;
+  if(next.updater)state.updater=next.updater;
+  if(next.downloadSchedule)state.downloadSchedule=next.downloadSchedule;
+  if(next.clipboardInbox)clipboardInbox=next.clipboardInbox;
+  if(next.verification)verificationState=next.verification;
   if(next.catalogRefresh)receiveCatalogCheck(next.catalogRefresh);
   $('#version').textContent = `v${state.version}`;
   updateBadges();
@@ -800,6 +847,12 @@ function applyState(next) {
     if (currentView === 'library') renderLibrary();
   }
   if(JSON.stringify(state.settings.collections||[])!==previousCollections&&currentView==='library')renderLibrary();
+  if(featureUIAvailable()){
+    renderUpdater();renderScheduleStatus();renderClipboardCount();
+    if(JSON.stringify(state.settings.collections||[])!==previousCollections&&!catalog.loading)renderPersonalized();
+    if($('#clipboard-dialog').open)renderClipboard();if($('#verification-dialog').open)renderVerification();
+    if(state.settings.adaptiveThemeEnabled===false)setAccent();
+  }
 }
 function applyProgress(next) {
   // A delta cannot create a queue, revive a completed file or overwrite a newer
@@ -823,6 +876,189 @@ function applyProgress(next) {
     $('#stat-speed').textContent = `${formatBytes(speed, '0 B')}/s`;
   }
 }
+function featureUIAvailable(){return $('#feature-tools')?.dataset.feature==='0.4';}
+function trustedImage(value){
+  try{const url=new URL(value);if(url.protocol==='atlas:'&&url.host==='app'&&url.pathname==='/image'&&url.searchParams.size===1)return safeImageUrl(url.searchParams.get('url'));return safeImageUrl(value);}catch{return '';}
+}
+function openLightbox(urls,index,title,opener=document.activeElement){
+  const dialog=$('#image-dialog');if(!dialog)return;
+  lightboxItems=urls.map(trustedImage).filter(Boolean);if(!lightboxItems.length)return;
+  lightboxIndex=Math.max(0,Math.min(lightboxItems.length-1,Number(index)||0));lightboxOpener=opener;
+  dialog.dataset.title=String(title||'Game image');renderLightbox();showDialog(dialog);$('[data-close="image-dialog"]')?.focus();
+}
+function renderLightbox(){
+  const image=$('#lightbox-image'),dialog=$('#image-dialog'),original=lightboxItems[lightboxIndex],large=enlargedImage(original);image.onerror=()=>{if(image.src!==original)image.src=original;};image.src=large;image.alt=`${dialog.dataset.title} · image ${lightboxIndex+1} of ${lightboxItems.length}`;
+  $('#image-caption').textContent=image.alt;$('#previous-image').disabled=lightboxItems.length<2;$('#next-image').disabled=lightboxItems.length<2;
+}
+function enlargedImage(value){
+  const original=trustedImage(value);if(!original)return '';
+  try{const source=new URL(new URL(original).searchParams.get('url'));if(/(?:^|\.)riotpixels\.(?:net|com)$/i.test(source.hostname)){source.pathname=source.pathname.replace(/\.jpg\.240p\.jpg$/i,'.jpg');return safeImageUrl(source.href);}}catch{}
+  return original;
+}
+function moveLightbox(step){if(lightboxItems.length){lightboxIndex=(lightboxIndex+step+lightboxItems.length)%lightboxItems.length;renderLightbox();}}
+function lightboxKey(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();moveLightbox(event.key==='ArrowLeft'?-1:1);}else if(event.key==='Escape'){event.preventDefault();$('#image-dialog').close();}}
+function restoreLightboxFocus(){const target=lightboxOpener;lightboxOpener=null;lightboxItems=[];$('#lightbox-image').removeAttribute('src');if(target?.isConnected!==false&&typeof target?.focus==='function')target.focus({preventScroll:true});else $('#catalog-heading')?.focus();}
+function luminance(rgb){return rgb.map(value=>{const c=value/255;return c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4;}).reduce((sum,value,index)=>sum+value*[0.2126,0.7152,0.0722][index],0);}
+function readableAccent(rgb){
+  const background=luminance([48,40,64]);let color=rgb.map(value=>Math.max(0,Math.min(255,Math.round(value))));
+  if(color.some(value=>!Number.isFinite(value)))return [185,160,236];
+  for(let i=0;i<20&&(luminance(color)+0.05)/(background+0.05)<4.5;i++)color=color.map(value=>Math.round(value+(255-value)*0.12));
+  return color;
+}
+function setAccent(rgb=[185,160,236]){const color=readableAccent(rgb);document.documentElement?.style?.setProperty('--game-accent',`rgb(${color.join(', ')})`);}
+function applyCoverAccent(image){
+  if(state.settings.adaptiveThemeEnabled===false){setAccent();return;}
+  try{
+    const canvas=document.createElement('canvas');canvas.width=24;canvas.height=24;const context=canvas.getContext('2d',{willReadFrequently:true});if(!context)return;
+    context.drawImage(image,0,0,24,24);const pixels=context.getImageData(0,0,24,24).data;let r=0,g=0,b=0,weight=0;
+    for(let i=0;i<pixels.length;i+=4){const high=Math.max(pixels[i],pixels[i+1],pixels[i+2]),low=Math.min(pixels[i],pixels[i+1],pixels[i+2]);if(pixels[i+3]<220||high<40||high-low<18)continue;const w=(high-low)/255;r+=pixels[i]*w;g+=pixels[i+1]*w;b+=pixels[i+2]*w;weight+=w;}
+    setAccent(weight?[r/weight,g/weight,b/weight]:undefined);
+  }catch{setAccent();}
+}
+function genreTokens(value){return (Array.isArray(value)?value:String(value||'').split(/[,;/|]/)).map(genre=>String(genre).trim().toLowerCase()).filter(Boolean);}
+function personalSuggestions(games,settings,downloads){
+  const saved=[...(settings.favorites||[]),...(settings.collections||[]).flatMap(collection=>collection.games||[])],profile=new Map(),seen=new Set();
+  for(const game of saved){if(seen.has(game.url))continue;seen.add(game.url);for(const genre of genreTokens(game.genres))profile.set(genre,(profile.get(genre)||0)+1);}
+  for(const title of new Set(downloads.filter(item=>item.status==='completed').map(item=>String(item.gameTitle||'').toLowerCase()))){const known=[...saved,...games].find(game=>gameTitle(game).toLowerCase()===title);for(const genre of genreTokens(known?.genres))profile.set(genre,(profile.get(genre)||0)+1);}
+  return games.filter(game=>!seen.has(game.url)).map(game=>{const matches=genreTokens(game.genres).filter(genre=>profile.has(genre));return {game,matches,score:matches.reduce((sum,genre)=>sum+profile.get(genre),0)};}).filter(item=>item.score>0).sort((a,b)=>b.score-a.score||gameTitle(a.game).localeCompare(gameTitle(b.game))).slice(0,4);
+}
+function renderPersonalized(){
+  const suggestions=personalSuggestions(catalog.games,state.settings,state.downloads),grid=$('#personalized-games');
+  grid.replaceChildren(...suggestions.map(({game,matches})=>{const card=makeGameCard(game);card.append(el('p','suggestion-reason',`Matches ${matches.slice(0,2).join(' / ')} in your collection`));return card;}));
+  $('#personalized-reason').textContent=suggestions.length?'Based on genres in your saved and completed games. Your preferences stay on this laptop.':'No genre matches on this page yet. Save games you like, or browse another catalogue page.';
+}
+function steamReviewSummary(reviews){
+  if(!reviews||!Number.isSafeInteger(reviews.total)||reviews.total<1||!Number.isSafeInteger(reviews.positive)||reviews.positive<0||reviews.positive>reviews.total)return null;
+  const ratio=reviews.positive/reviews.total;return {percent:Math.round(ratio*100),stars:Math.round(ratio*50)/10,total:reviews.total,description:typeof reviews.description==='string'?reviews.description:''};
+}
+async function loadGameMetadata(game,container){
+  container.replaceChildren(el('h3','detail-section-title','Requirements & player reviews'));
+  if(typeof api?.getGameMetadata!=='function'){container.append(el('p','small-text','Requirements and Steam review data are not available for this game.'));return;}
+  const request=detailRequest,loading=el('p','small-text','Finding verified game details…');container.append(loading);
+  try{
+    const metadata=await api.getGameMetadata({title:gameTitle(game),steamAppId:game.steamAppId,url:game.url});
+    if(request!==detailRequest||container.isConnected===false)return;loading.remove();
+    let sourceUrl='';try{const url=new URL(metadata?.sourceUrl);if(url.protocol==='https:'&&url.hostname==='store.steampowered.com'&&/^\/app\/\d+/.test(url.pathname))sourceUrl=url.href;}catch{}
+    const rating=steamReviewSummary(metadata?.reviews);
+    if(rating&&metadata.source==='Steam'&&sourceUrl){
+      const row=el('div','review-summary'),stars=el('span','review-stars');stars.setAttribute('aria-hidden','true');stars.append(el('span','','★★★★★'));const fill=el('span','review-stars-fill','★★★★★');fill.style.width=`${rating.stars/5*100}%`;stars.append(fill);
+      row.append(stars,el('strong','',`${rating.stars.toFixed(1)} / 5`),el('span','',`Steam recommendation score · ${rating.percent}% positive · ${rating.total.toLocaleString()} reviews`));row.setAttribute('aria-label',`${rating.percent}% of ${rating.total.toLocaleString()} Steam reviews recommend this game; ${rating.stars.toFixed(1)} out of 5 when expressed as stars.`);container.append(row);
+      if(rating.description)container.append(el('p','small-text',rating.description));
+    }else container.append(el('p','small-text','Steam player reviews are unavailable for this game.'));
+    const requirements=el('div','requirements-grid');let count=0;
+    for(const [key,label]of [['minimum','Minimum'],['recommended','Recommended']]){const value=metadata?.requirements?.[key];if(typeof value==='string'&&value.trim()){const card=el('section','requirement-card');card.append(el('h4','',label),el('p','',value.slice(0,16000)));requirements.append(card);count++;}}
+    if(count)container.append(requirements);else container.append(el('p','small-text','System requirements are unavailable. Check the game’s official store page.'));
+    if(sourceUrl)container.append(button('View Steam source','text-button','external',()=>attempt(()=>api.openExternal(sourceUrl))));
+    if(metadata?.message||metadata?.error)container.append(el('p','small-text',String(metadata.message||metadata.error).slice(0,400)));
+  }catch{if(request===detailRequest){loading.textContent='Game requirements and review data could not be loaded. Try opening the game again.';}}
+}
+function visibleDownloads(){return state.downloads.filter(item=>downloadFilter==='all'||(downloadFilter==='active'&&['downloading','queued','paused'].includes(item.status))||(downloadFilter==='completed'&&item.status==='completed'));}
+function renderDownloadSelection(){
+  const visible=visibleDownloads(),count=selectedDownloads.size,selectedVisible=visible.filter(item=>selectedDownloads.has(String(item.id))).length;
+  $('#selection-count').textContent=count?`${count} selected`:'None selected';$('#remove-selected-downloads').disabled=!count||typeof api?.previewDownloadRemoval!=='function';
+  const select=$('#select-visible-downloads');select.checked=visible.length>0&&selectedVisible===visible.length;select.indeterminate=selectedVisible>0&&selectedVisible<visible.length;select.disabled=!visible.length;
+  $('#cleanup-completed').disabled=!state.downloads.some(item=>item.status==='completed')||typeof api?.previewDownloadRemoval!=='function';
+}
+async function refreshStorage(){
+  if(typeof api?.getStorageSummary!=='function')return;const request=++storageRequest;$('#storage-summary').textContent='Checking managed download files…';
+  try{const data=await api.getStorageSummary();if(request!==storageRequest)return;const completed=Math.max(0,Number(data.completedBytes)||0),partial=Math.max(0,Number(data.partialBytes)||0),total=Math.max(completed+partial,Number(data.totalBytes)||0);
+    $('#storage-summary').textContent=`${formatBytes(total,'0 B')} download file size · ${formatBytes(completed,'0 B')} completed · ${formatBytes(partial,'0 B')} partial. Actual disk space can differ.${data.warnings?.length||data.items?.some(item=>item.unavailable)?' Some files could not be checked.':''}`;
+    $('#storage-completed-fill').style.width=`${total?completed/total*100:0}%`;$('#storage-partial-fill').style.width=`${total?partial/total*100:0}%`;
+  }catch{$('#storage-summary').textContent='Storage could not be checked. Try again.';}
+}
+async function openDownloadRemoval(ids,cleanup=false){
+  if(removalBusy||typeof api?.previewDownloadRemoval!=='function')return;
+  const unique=[...new Set(ids.map(String))];if(!unique.length){toast('Select a download first.');return;}
+  const request=++removalRequest;removalPreview=null;$('#removal-title').textContent=cleanup?'Clean up completed downloads':'Remove downloads';
+  const pauseWarning=state.downloads.some(item=>unique.includes(String(item.id))&&['queued','downloading'].includes(item.status))?'Selected active downloads pause for this review. Cancelling leaves them paused; you can resume them in Downloads.':'';
+  $('#removal-summary').textContent='Checking selected files. Active downloads pause for this review.';$('#removal-items').replaceChildren();$('#removal-warnings').replaceChildren(...(pauseWarning?[el('p','',pauseWarning)]:[]));$('#removal-error').hidden=true;
+  $('input[name="removal-mode"][value="list"]').checked=true;$('input[name="removal-mode"][value="files"]').checked=false;$('#removal-confirm-files').checked=false;$('#removal-confirm-label').hidden=true;$('#confirm-removal').disabled=true;
+  $('#removal-dialog').dataset.ids=JSON.stringify(unique);showDialog($('#removal-dialog'));
+  try{const preview=await api.previewDownloadRemoval({ids:unique});if(request!==removalRequest||!$('#removal-dialog').open)return;
+    if(!preview?.token||!Array.isArray(preview.items))throw new Error('The removal preview could not be read.');removalPreview={...preview,ids:unique};
+    $('#removal-summary').textContent=`${preview.items.length} ${preview.items.length===1?'entry':'entries'} · Estimated space to recover if you delete files: ${formatBytes(preview.totalBytes,'0 B')}. Actual disk space can differ.`;
+    $('#removal-items').replaceChildren(...preview.items.map(item=>{const row=el('div','removal-item');row.append(el('span','',item.name||'Download'),el('span','small-text',formatBytes(item.bytes,'0 B')));return row;}));
+    const warningMessages=(preview.warnings||[]).map(String);if(pauseWarning&&!warningMessages.some(warning=>/paus/i.test(warning)))warningMessages.unshift(pauseWarning);
+    $('#removal-warnings').replaceChildren(...warningMessages.map(warning=>el('p','',warning)));syncRemovalChoice();
+  }catch(error){if(request===removalRequest){$('#removal-error').textContent=errorText(error);$('#removal-error').hidden=false;$('#removal-summary').textContent='Nothing has been removed.';}}
+}
+function syncRemovalChoice(){const destructive=$('input[name="removal-mode"][value="files"]').checked;$('#removal-confirm-label').hidden=!destructive;const button=$('#confirm-removal');button.textContent=destructive?'Delete files permanently':'Remove from list';button.className=`button ${destructive?'danger':'primary'}`;button.disabled=removalBusy||!removalPreview||(destructive&&!$('#removal-confirm-files').checked);}
+async function confirmDownloadRemoval(){
+  const mode=$('input[name="removal-mode"][value="files"]').checked?'files':'list';if(removalBusy||!removalPreview||(mode==='files'&&!$('#removal-confirm-files').checked))return;
+  removalBusy=true;syncRemovalChoice();$('#removal-options').disabled=true;$('#removal-confirm-files').disabled=true;$('#removal-refresh').disabled=true;$$('[data-close="removal-dialog"]').forEach(node=>{node.disabled=true;});$('#removal-error').hidden=true;$('#removal-summary').textContent=mode==='files'?'Deleting the confirmed download files…':'Removing the confirmed entries…';
+  try{const ids=removalPreview.ids,result=await api.removeDownloads({ids,mode,token:removalPreview.token});if(!Array.isArray(result?.removedIds))throw new Error('The removal result could not be confirmed. Review your download list before retrying.');for(const id of result.removedIds)selectedDownloads.delete(String(id));removalPreview=null;applyState(await api.getState());refreshStorage();
+    if(result.errors?.length){const removed=new Set(result.removedIds.map(String));$('#removal-dialog').dataset.ids=JSON.stringify(ids.filter(id=>!removed.has(id)));$('#removal-summary').textContent=`${result.removedIds.length} removed. ${result.errors.length} could not be removed.`;$('#removal-error').textContent=result.errors.map(error=>String(error.message||'A file could not be removed.')).join('\n')+' Check the remaining files before retrying.';$('#removal-error').hidden=false;}
+    else{$('#removal-dialog').close();toast(mode==='files'?'Selected download files deleted.':'Entries removed. Your files were kept.');}
+  }
+  catch(error){removalPreview=null;$('#removal-error').textContent=errorText(error)+' Check the files again before retrying.';$('#removal-error').hidden=false;}
+  finally{removalBusy=false;$('#removal-options').disabled=false;$('#removal-confirm-files').disabled=false;$('#removal-refresh').disabled=false;$$('[data-close="removal-dialog"]').forEach(node=>{node.disabled=false;});syncRemovalChoice();renderDownloadSelection();}
+}
+function renderUpdater(){
+  const update=state.updater||{},phase=update.phase||'idle';$('#update-version').textContent=`v${update.currentVersion||state.version}`;
+  const messages={idle:'Check for a new Ravenshelf release.',checking:'Checking for updates…',current:'You have the latest checked version.',available:'A new version is available. Preparing the download…',downloading:'Downloading and verifying the update…',ready:'Ready — installs when you close Ravenshelf.',error:'The update could not be prepared. You can check again.',unavailable:'Automatic updates are not available in this build.'};
+  $('#update-status').textContent=update.message||messages[phase]||'Update status unavailable.';
+  if(update.availableVersion)$('#update-status').textContent+=` Version ${update.availableVersion}.`;
+  const progress=$('#update-progress');progress.hidden=phase!=='downloading';const percent=Number(update.progress?.percent??Number(update.progress)*100);if(Number.isFinite(percent))progress.value=Math.max(0,Math.min(100,percent));else progress.removeAttribute('value');
+  $('#check-app-updates').disabled=typeof api?.checkForUpdates!=='function'||['checking','downloading'].includes(phase);
+  const install=$('#install-app-update');install.hidden=phase!=='ready';install.disabled=typeof api?.installUpdate!=='function'||state.downloads.some(item=>['downloading','queued'].includes(item.status)||['queued','scanning'].includes(item.scan?.status))||['running','verifying','starting','checking'].includes(verificationState.phase)||state.completionAction?.mode!=='none';
+}
+function renderScheduleStatus(){const schedule=state.downloadSchedule,enabled=state.settings.downloadSchedule?.enabled;const node=$('#download-schedule-status');if(!enabled){node.textContent='';return;}let text=schedule?.active?'Download schedule: allowed now.':'Download schedule: waiting for the next allowed period.';if(schedule?.nextChangeAt){const date=new Date(schedule.nextChangeAt);if(Number.isFinite(date.getTime()))text+=` Next change: ${date.toLocaleString()}.`;}node.textContent=text;}
+function renderFeatureSettings(){
+  if(!featureSettingsBusy){
+    const focus=document.activeElement;const speed=$('#speed-limit'),unit=$('#speed-unit');if(focus!==speed&&focus!==unit){const bytes=Number(state.settings.maxDownloadBytesPerSecond)||0;unit.value=bytes&&bytes<1048576?'1024':'1048576';speed.value=String(bytes/Number(unit.value));}
+    const schedule=state.settings.downloadSchedule||{enabled:false,start:'00:00',end:'00:00',days:[0,1,2,3,4,5,6]};
+    if(!$('#schedule-form').contains(focus)){ $('#schedule-enabled').checked=Boolean(schedule.enabled);$('#schedule-start').value=schedule.start||'00:00';$('#schedule-end').value=schedule.end||'00:00';$$('#schedule-form .schedule-days input').forEach(input=>{input.checked=(schedule.days||[]).includes(Number(input.value));});}
+    for(const [id,key,defaultValue]of [['notifications-enabled','notificationsEnabled',true],['clipboard-watch-enabled','clipboardWatchEnabled',false],['adaptive-theme-enabled','adaptiveThemeEnabled',true],['auto-update-enabled','autoUpdateEnabled',true]]){const node=$('#'+id);if(focus!==node)node.checked=typeof state.settings[key]==='boolean'?state.settings[key]:defaultValue;}
+  }
+  renderUpdater();renderScheduleStatus();renderClipboardCount();
+}
+async function saveFeatureSetting(patch,control){
+  featureSettingsBusy++;if(control)control.disabled=true;
+  try{applyState(await api.saveSettings(patch));if('adaptiveThemeEnabled'in patch){if(!patch.adaptiveThemeEnabled)setAccent();else{const image=$('.detail-cover');if(image?.complete)applyCoverAccent(image);}}toast('Preference saved.');}
+  catch(error){toast(errorText(error),true);}finally{featureSettingsBusy--;if(control)control.disabled=false;renderFeatureSettings();}
+}
+function scheduleFromForm(){
+  const start=$('#schedule-start').value,end=$('#schedule-end').value,days=$$('#schedule-form .schedule-days input').filter(input=>input.checked).map(input=>Number(input.value)),enabled=$('#schedule-enabled').checked;
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(end))throw new Error('Choose a valid start and end time.');
+  if(enabled&&!days.length)throw new Error('Select at least one day.');return {enabled,start,end,days};
+}
+async function refreshClipboard(){if(typeof api?.getClipboardInbox!=='function')return;try{clipboardInbox=await api.getClipboardInbox();renderClipboard();}catch{$('#clipboard-items').replaceChildren(el('p','inline-error','Copied links could not be loaded.'));}}
+function renderClipboardCount(){const count=Array.isArray(clipboardInbox.items)?clipboardInbox.items.length:0;$('#clipboard-count').textContent=count?`(${count})`:'';const button=$('#clipboard-tray-button');if(button){button.hidden=!state.settings.clipboardWatchEnabled&&!count;button.textContent=count?`Copied links (${count})`:'Copied links';}}
+function renderClipboard(){
+  renderClipboardCount();const items=Array.isArray(clipboardInbox.items)?clipboardInbox.items:[],container=$('#clipboard-items');container.replaceChildren();
+  if(!items.length){container.append(el('p','small-text',state.settings.clipboardWatchEnabled?'No recognized links copied yet.':'Clipboard recognition is off. You can turn it on in Settings.'));return;}
+  for(const item of items){const row=el('div','clipboard-item');row.append(el('p','',item.url));const actions=el('div','inline-fields');actions.append(button('Inspect link','button secondary compact','link',()=>attempt(async()=>{const result=await api.importClipboardLinks({ids:[item.id]});if(typeof result?.text!=='string'||!result.text.trim())throw new Error('This copied link is no longer available.');$('#clipboard-dialog').close();openImport();$('#import-links').value=result.text;$('#import-results').replaceChildren();toast('Link added to the import form. Choose Check links to continue.');await refreshClipboard();})),button('Dismiss','text-button','close',()=>attempt(async()=>{await api.dismissClipboardLinks({ids:[item.id]});await refreshClipboard();})));row.append(actions);container.append(row);}
+}
+function renderVerification(){
+  const state=verificationState||{},busy=['running','verifying','starting','checking'].includes(state.phase),done=Number(state.completed)||0,total=Number(state.total)||0;
+  const results=Array.isArray(state.results)?state.results:[],counts={match:0,mismatch:0,missing:0,error:0};for(const item of results)if(Object.hasOwn(counts,item.status))counts[item.status]++;
+  const issues=counts.mismatch+counts.missing+counts.error,finished=['complete','completed'].includes(state.phase),status=$('#verification-status');status.className=issues||state.error?'verification-warning':'';
+  status.textContent=state.error||(finished?`${issues?'Some files need attention. ':''}${counts.match} matched · ${counts.mismatch} mismatched · ${counts.missing} missing · ${counts.error} could not be checked.`:state.message||(busy?`Checking files · ${done} of ${total||'…'}`:state.phase==='cancelled'?'Verification cancelled.':'Choose a manifest and its file folder to begin.'));
+  const progress=$('#verification-progress');if(total){progress.value=Math.min(100,done/total*100);}else if(busy)progress.removeAttribute('value');else progress.value=0;
+  $('#start-verification').disabled=busy||typeof api?.verifyFiles!=='function';
+  $('#cancel-verification').hidden=!busy||typeof api?.cancelVerification!=='function';
+  $('#verification-results').replaceChildren(...results.map(item=>{const row=el('div','verification-item');row.append(el('span','',item.name||item.path||'File'),el('strong',item.status==='match'?'verification-match':'',item.status||'Unknown'),el('span','small-text',item.message||''));return row;}));
+}
+function wireFeatureEvents(){
+  $('#download-list').before($('.download-tools'));
+  $('#previous-image').addEventListener('click',()=>moveLightbox(-1));$('#next-image').addEventListener('click',()=>moveLightbox(1));$('#image-dialog').addEventListener('keydown',lightboxKey);$('#image-dialog').addEventListener('close',restoreLightboxFocus);
+  $('#game-dialog').addEventListener('close',()=>{if($('#image-dialog').open)$('#image-dialog').close();setAccent();});
+  $('#select-visible-downloads').addEventListener('change',event=>{for(const item of visibleDownloads())if(event.target.checked)selectedDownloads.add(String(item.id));else selectedDownloads.delete(String(item.id));renderDownloads();});
+  $('#clear-download-selection').addEventListener('click',()=>{selectedDownloads.clear();renderDownloads();});$('#remove-selected-downloads').addEventListener('click',()=>openDownloadRemoval([...selectedDownloads]));$('#cleanup-completed').addEventListener('click',()=>openDownloadRemoval(state.downloads.filter(item=>item.status==='completed').map(item=>String(item.id)),true));
+  $$('input[name="removal-mode"]').forEach(input=>input.addEventListener('change',()=>{$('#removal-confirm-files').checked=false;syncRemovalChoice();}));$('#removal-confirm-files').addEventListener('change',syncRemovalChoice);$('#confirm-removal').addEventListener('click',confirmDownloadRemoval);$('#removal-refresh').addEventListener('click',()=>openDownloadRemoval(JSON.parse($('#removal-dialog').dataset.ids||'[]')));$('#removal-dialog').addEventListener('close',()=>{removalRequest++;if(!removalBusy)removalPreview=null;});$('#removal-dialog').addEventListener('cancel',event=>{if(removalBusy)event.preventDefault();});
+  $('#refresh-storage').addEventListener('click',refreshStorage);
+  $('#speed-limit-form').addEventListener('submit',event=>{event.preventDefault();const value=Number($('#speed-limit').value),unit=Number($('#speed-unit').value),bytes=Math.round(value*unit);if(!Number.isFinite(value)||value<0||![1024,1048576].includes(unit)||bytes>1073741824){toast('Enter a speed from 0 to 1024 MB/s.',true);return;}saveFeatureSetting({maxDownloadBytesPerSecond:bytes},$('button[type="submit"]',$('#speed-limit-form')));});
+  $('#schedule-form').addEventListener('submit',event=>{event.preventDefault();try{saveFeatureSetting({downloadSchedule:scheduleFromForm()},$('button[type="submit"]',$('#schedule-form')));}catch(error){toast(errorText(error),true);}});
+  for(const [id,key]of [['notifications-enabled','notificationsEnabled'],['clipboard-watch-enabled','clipboardWatchEnabled'],['adaptive-theme-enabled','adaptiveThemeEnabled'],['auto-update-enabled','autoUpdateEnabled']])$('#'+id).addEventListener('change',event=>saveFeatureSetting({[key]:event.target.checked},event.target));
+  $('#check-app-updates').addEventListener('click',async()=>{const button=$('#check-app-updates');button.disabled=true;try{const update=await api.checkForUpdates();if(update?.phase)state.updater=update;else if(update?.updater)state.updater=update.updater;}catch(error){state.updater={...state.updater,phase:'error',message:errorText(error)};}finally{renderUpdater();}});
+  $('#install-app-update').addEventListener('click',async()=>{const button=$('#install-app-update');button.disabled=true;try{await api.installUpdate();}catch(error){toast(errorText(error),true);renderUpdater();}});
+  const openClipboard=()=>{showDialog($('#clipboard-dialog'));refreshClipboard();};$('#open-clipboard').addEventListener('click',openClipboard);$('#refresh-clipboard').addEventListener('click',refreshClipboard);
+  const tray=button('Copied links','text-button',null,openClipboard);tray.id='clipboard-tray-button';tray.hidden=true;$('.top-actions').prepend(tray);
+  $('#open-verification').addEventListener('click',async()=>{showDialog($('#verification-dialog'));if(typeof api?.getVerificationState==='function'){try{verificationState=await api.getVerificationState();}catch{}}renderVerification();});
+  $('#start-verification').addEventListener('click',async()=>{if(typeof api?.verifyFiles!=='function')return;$('#start-verification').disabled=true;try{verificationState=await api.verifyFiles()||{phase:'idle'};}catch(error){verificationState={phase:'error',error:errorText(error)};}renderVerification();});
+  $('#cancel-verification').addEventListener('click',async()=>{if(typeof api?.cancelVerification!=='function')return;const control=$('#cancel-verification');control.disabled=true;try{verificationState=await api.cancelVerification();}catch(error){toast(errorText(error),true);}finally{control.disabled=false;renderVerification();}});
+  renderFeatureSettings();renderDownloadSelection();
+}
 function wireEvents() {
   $$('[data-view]').forEach(node => node.addEventListener('click', () => showView(node.dataset.view)));
   $('.brand').addEventListener('click', event => { event.preventDefault(); showView('discover'); });
@@ -835,8 +1071,8 @@ function wireEvents() {
   $('#refresh-catalog').addEventListener('click', () => loadCatalog({forceRefresh:true}));
   $('#previous-page').addEventListener('click', () => { if (!catalog.loading && catalog.page > 1) { loadCatalog({ page: catalog.page - 1 }); window.scrollTo(0, 250); } });
   $('#next-page').addEventListener('click', () => { if (!catalog.loading && catalog.hasMore) { loadCatalog({ page: catalog.page + 1 }); window.scrollTo(0, 250); } });
-  $$('[data-close]').forEach(node => node.addEventListener('click', () => $(`#${node.dataset.close}`).close()));
-  $$('dialog').filter(dialog=>dialog.id!=='completion-dialog').forEach(dialog => dialog.addEventListener('click', event => { const rect = dialog.getBoundingClientRect(); if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close(); }));
+  $$('[data-close]').forEach(node => node.addEventListener('click', () => {if(node.dataset.close==='removal-dialog'&&removalBusy)return;$(`#${node.dataset.close}`).close();}));
+  $$('dialog').filter(dialog=>dialog.id!=='completion-dialog').forEach(dialog => dialog.addEventListener('click', event => { if(dialog.id==='removal-dialog'&&removalBusy)return;const rect = dialog.getBoundingClientRect(); if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close(); }));
   $('#game-dialog').addEventListener('close', () => { detailRequest++; currentDetail = null; });
   $$('dialog').forEach(dialog => dialog.addEventListener('close', () => setTimeout(flushCatalogCheck, 0)));
   $('#check-import').addEventListener('click', async () => {
@@ -896,6 +1132,7 @@ function wireEvents() {
       event.preventDefault(); if ($('dialog[open]')) return; showView('discover'); $('#search-input').focus(); $('#search-input').select();
     }
   });
+  if(featureUIAvailable())wireFeatureEvents();
 }
 async function start() {
   hydrateIcons(); wireEvents();
@@ -908,6 +1145,11 @@ async function start() {
   if (typeof api.onProgress === 'function') api.onProgress(applyProgress);
   try { applyState(await api.getState()); }
   catch (error) { toast(`Couldn’t load your saved preferences: ${errorText(error)}`, true); }
+  if(featureUIAvailable()){
+    if(typeof api.getUpdateState==='function')api.getUpdateState().then(update=>{state.updater=update;renderUpdater();}).catch(()=>{});
+    if(typeof api.getClipboardInbox==='function')refreshClipboard();
+    if(typeof api.getVerificationState==='function')api.getVerificationState().then(value=>{verificationState=value;renderVerification();}).catch(()=>{});
+  }
   try{const sections=await api.getCatalogSections();if(Array.isArray(sections)&&sections.length)catalogSections=sections;}
   catch(error){toast(`Some catalogue sections are unavailable: ${errorText(error)}`,true);}
   renderCatalogSections();

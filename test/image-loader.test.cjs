@@ -141,7 +141,7 @@ test('main protocol routes images through the loader and keeps application resou
   class Manager{constructor(){this.settings={};this.downloads=[];}on(){}state(){return {};}}
   class Completion{snapshot(){return {};}}
   class Refresher{start(){}snapshot(){return {};}}
-  class Window{constructor(){this.webContents={setWindowOpenHandler(){},on(){},send(){}};}on(){}once(){}loadURL(){return Promise.resolve();}}
+  class Window{constructor(){this.webContents={setWindowOpenHandler(){},on(){},send(){}};}isDestroyed(){return false;}on(){}once(){}loadURL(){return Promise.resolve();}}
   const electron={
     app:{setPath(){},getPath:()=>'/fixture',getVersion:()=>'test',requestSingleInstanceLock:()=>true,on(){},setName(){},whenReady:()=>Promise.resolve(),quit(){}},
     BrowserWindow:Window,ipcMain:{handle(){}},protocol:{registerSchemesAsPrivileged(){},handle:(scheme,handler)=>protocols.set(scheme,handler)},powerMonitor:{on(){}},

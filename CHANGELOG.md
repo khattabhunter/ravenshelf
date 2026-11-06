@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 — Library and download controls prerelease
+
+- Added portable Windows app updates from this repository's published GitHub versions, including prereleases. Candidate size and SHA-256 must agree with both release-asset metadata and `SHA256SUMS.txt`; critical profile files are backed up before replacement. A native C# helper applies a ready update on normal close or an explicit idle restart without changing Windows security settings. The executable remains unsigned.
+- Added shared transfer-speed limits, local-time weekday/overnight download schedules and host cooldowns after limiting responses. Manual pauses remain separate from schedule pauses.
+- Added download multi-select, completed-download cleanup, logical storage-size estimates and a reviewed choice between keeping files or explicitly deleting managed files. Partial failures remain visible and destructive choices are never remembered.
+- Added multipart filename/size preflight with explicit override for known gaps or inconsistencies. Unknown final parts remain warnings, not claims of completeness.
+- Added cancellable manual SFV/MD5/SHA-256 verification in a bounded worker. Results distinguish matches, mismatches, missing files and errors; checksum agreement does not certify authenticity or safety.
+- Added clickable image viewing with keyboard navigation/focus restoration, system requirements, real Steam recommendation counts expressed on a five-star scale, local genre suggestions and optional artwork-derived accents.
+- Added optional desktop notices and an opt-in in-memory copied-link tray. Recognized links require review and checking before any download; clipboard recognition itself makes no network requests.
+- Kept the 16 MiB parallel threshold, 500 ms progress batches, checked host/image transport, encrypted saved headers and conservative Defender/finish-action behavior. Proxy/VPN kill-switch enforcement, Brave Search API integration, a wholesale worker rewrite and naive inline game-file hashing remain deferred.
+
+See [the release notes](docs/RELEASE-0.4.0.md) and [user guide](docs/USER-GUIDE.md) for controls, update behavior and limits.
+
 ## 0.3.3 — Security maintenance prerelease
 
 - Replaced internal protocol, startup and unexpected operation errors with safe messages that do not expose raw paths, signed URLs or exception stacks.

@@ -26,9 +26,10 @@ async function verifyDirectories(before){
 // Exclusive creation never overwrites an unexpected file. Descriptor identity,
 // hard-link and ancestor checks cover ordinary replacements and junctions;
 // this is not isolation from malware already running as the same OS user.
-async function openDownloadFile(file,{create=false,allowMissing=false}={}){
+async function openDownloadFile(file,{create=false,allowMissing=false,readOnly=false}={}){
+  if(readOnly&&create)throw new Error('A read-only file cannot be created.');
   const parents=await directories(file);
-  const flags=fs.constants.O_RDWR|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0)|
+  const flags=(readOnly?fs.constants.O_RDONLY:fs.constants.O_RDWR)|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0)|
     (create?fs.constants.O_CREAT|fs.constants.O_EXCL:0);
   let handle;
   try{handle=await fs.promises.open(file,flags,0o600);}catch(error){

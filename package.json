@@ -1,6 +1,6 @@
 {
   "name": "atlas-repack-library",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": true,
   "description": "Ravenshelf: a privacy-hardened game catalogue and batch download manager for Windows",
   "author": "Ravenshelf contributors",
@@ -19,9 +19,11 @@
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
+    "pretest": "node scripts/build-updater.cjs",
     "test": "node --test test/*.test.cjs",
+    "predist": "node scripts/build-updater.cjs",
     "dist": "electron-builder --win portable --x64",
-    "verify:build": "node scripts/verify-fuses.cjs"
+    "verify:build": "node scripts/verify-package.cjs"
   },
   "dependencies": {
     "cheerio": "1.2.0",

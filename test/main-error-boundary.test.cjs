@@ -16,7 +16,7 @@ function containsNoPrivateData(value){
   for(const privateValue of [PRIVATE_PATH,PRIVATE_URL,PRIVATE_TOKEN,'fixture-secret-token','privateInternalFunction'])assert.equal(text.includes(privateValue),false,`must not expose ${privateValue}`);
 }
 
-async function fixture({resourceError,startupError,loadError,imageError,queueError,providerError,catalogueError}={}){
+async function fixture({resourceError,startupError,loadError,imageError,queueError,providerError,catalogueError,resolveLink}={}){
   const handlers=new Map(),protocols=new Map(),windows=[],dialogs=[],logs=[],events=new Map(),powerEvents=new Map(),sessions=new Map(),stored=new Map();let quit=false;
   const newSession=()=>({listeners:new Map(),webRequest:{onBeforeRequest(){}},cookies:{get:async()=>[]},setPermissionRequestHandler(){},setPermissionCheckHandler(){},clearCache:async()=>{if(startupError)throw startupError;},on(name,fn){this.listeners.set(name,fn);},removeListener(name){this.listeners.delete(name);}});
   class Manager {
@@ -48,7 +48,7 @@ async function fixture({resourceError,startupError,loadError,imageError,queueErr
       if(name==='./completion-action.cjs')return {CompletionAction:Completion};
       if(name==='./catalog-refresh.cjs')return {CatalogRefresh:Refresher};
       if(name==='./image-loader.cjs')return {imageResponse:async()=>{if(imageError)throw imageError;return new Response('image fixture',{headers:{'content-type':'image/png'}});}};
-      if(name==='./providers.cjs')return {getGame:async()=>{if(providerError)throw providerError;return {};},resolveLink:async()=>{if(providerError)throw providerError;return {status:'manual',message:'Fixture'};}};
+      if(name==='./providers.cjs')return {getGame:async()=>{if(providerError)throw providerError;return {};},resolveLink:resolveLink||async function(){if(providerError)throw providerError;return {status:'manual',message:'Fixture'};}};
       if(name==='./catalog.cjs'||name==='./installed-games.cjs')return {};
       return name.startsWith('./')?require(path.join(__dirname,'../src',name)):require(name);
     }
@@ -134,4 +134,14 @@ test('public error mapping preserves known actionable messages and rejects appen
   for(const error of [sensitiveError(),new Error('Only public HTTPS web addresses are supported. '+PRIVATE_TOKEN),{get message(){throw sensitiveError();}},PRIVATE_URL,null]){
     containsNoPrivateData(publicErrorMessage(error));containsNoPrivateData(publicError(error).stack);
   }
+});
+
+test('failed rechecks invalidate a previously ready link and unknown batch entries are never silently dropped',async()=>{
+  let ready=true;
+  const url='https://files.example/game.rar';
+  const f=await fixture({resolveLink:async()=>{if(!ready)throw new Error('Temporary host error');return {url,filename:'game.rar',status:'ready',size:1024};}});
+  await f.invoke('checkLinks',[url]);
+  await assert.rejects(f.invoke('addDownloads',{links:[{sourceUrl:url},{sourceUrl:'https://files.example/unchecked.rar'}]}),/Check these links/);
+  ready=false;assert.equal((await f.invoke('checkLinks',[url]))[0].status,'unavailable');
+  await assert.rejects(f.invoke('addDownloads',{links:[{sourceUrl:url}]}),/Check these links/);
 });

@@ -107,7 +107,7 @@ async function savePrefix(source,state,partialPath,onActivity){
 
 // A sparse data file is never exposed as the legacy .atlas-part. Only bytes
 // recorded after fsync in the manifest count as received after a restart.
-async function downloadRanges({workspace,partialPath,sourceId,request,signal,connections=4,onProgress=()=>{},onConnections=()=>{},onMode=()=>{},onActivity=()=>{}}){
+async function downloadRanges({workspace,partialPath,sourceId,request,signal,connections=4,throttle=async()=>{},onProgress=()=>{},onConnections=()=>{},onMode=()=>{},onActivity=()=>{}}){
   const dataPath=path.join(workspace,'data.part');
   let state=readState(workspace);
   if(state?.disabled)return {fallback:true,note:state.note||'Using one connection for this file.'};
@@ -141,11 +141,12 @@ async function downloadRanges({workspace,partialPath,sourceId,request,signal,con
     total=Number(probe.headers.get('content-range').split('/')[1]);validator=validatorFor(probe.headers);
     if(total>MAX_PARALLEL_SIZE)return await fallback('This file is too large for split downloads. Using one connection.',false);
     if(!validator||total<MIN_PARALLEL_SIZE)return await fallback(validator?'This file is small enough for one connection.':'The host cannot verify split downloads safely. Using one connection.');
-    let length=0;for await(const chunk of probe.body){length+=chunk.length;if(openEnded&&length>=1)break;if(length>1)throw new Error('Invalid range probe.');}
+    let length=0;for await(const chunk of probe.body){length+=chunk.length;if(!openEnded&&length>1)throw new Error('Invalid range probe.');await throttle(chunk.length,signal);signal.throwIfAborted();if(openEnded&&length>=1)break;}
     if((openEnded&&length<1)||(!openEnded&&length!==1))throw new Error('Incomplete range probe.');
     if(state&&(state.total!==total||state.validator.kind!==validator.kind||state.validator.value!==validator.value))return await fallback('The file changed on the host. Restarting with one connection.',false);
   }catch(error){
     if(signal.aborted)throw signal.reason||error;
+    if(error?.code==='HOST_BACKOFF')throw error;
     return await fallback('The host could not open split connections. Using one connection.');
   }finally{await cancelBody(probe);onConnections(0);}
 
@@ -182,9 +183,9 @@ async function downloadRanges({workspace,partialPath,sourceId,request,signal,con
       // reached its advertised length before its connection failed.
       if(segment.bytes===segmentLength(state,index))segment.bytes--;
       const start=index*CHUNK_SIZE+segment.bytes;
-      let response,lastRead=Date.now();
+      let response,lastRead=Date.now(),throttled=false;
       // Fall back before the manager's 60-second whole-download watchdog fires.
-      const watchdog=setInterval(()=>{if(Date.now()-lastRead>30000){const error=new Error('A split connection stopped responding.');if(!firstError)firstError=error;group.abort(error);}},5000);watchdog.unref();
+      const watchdog=setInterval(()=>{if(!throttled&&Date.now()-lastRead>30000){const error=new Error('A split connection stopped responding.');if(!firstError)firstError=error;group.abort(error);}},5000);watchdog.unref();
       try{
         active++;onConnections(active);
         response=await request({Range:openEnded?`bytes=${start}-`:`bytes=${start}-${end}`,'If-Range':validator.value},group.signal);
@@ -195,6 +196,9 @@ async function downloadRanges({workspace,partialPath,sourceId,request,signal,con
           group.signal.throwIfAborted();
           const chunk=openEnded?value.subarray(0,end-start+1-received):value;
           if(received+chunk.length>end-start+1)throw new Error('The host returned an oversized file section.');
+          throttled=true;
+          try{await throttle(value.length,group.signal);}finally{throttled=false;lastRead=Date.now();}
+          group.signal.throwIfAborted();
           let written=0;
           while(written<chunk.length){const result=await handle.write(chunk,written,chunk.length-written,start+received+written);if(!result.bytesWritten)throw new Error('Could not save a file section.');written+=result.bytesWritten;}
           received+=chunk.length;segment.bytes+=chunk.length;lastRead=Date.now();report();
@@ -215,6 +219,7 @@ async function downloadRanges({workspace,partialPath,sourceId,request,signal,con
   }
   if(signal.aborted)throw signal.reason||new Error('Download paused.');
   if(checkpointFailure)throw checkpointFailure;
+  if(firstError?.code==='HOST_BACKOFF')throw firstError;
   if(firstError)return await fallback('The host limited or interrupted split connections. Continuing with one connection.');
   if(!state.segments.every(s=>s.complete))throw new Error('Some file sections are incomplete. Retry to resume.');
   await dataFile.verify(total);

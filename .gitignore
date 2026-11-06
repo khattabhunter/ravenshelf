@@ -9,6 +9,8 @@ node_modules/
 *.7z
 *.rar
 *.iso
+/src/updater-build.json
+/src/.updater-build-*/
 
 # Personal configuration, credentials and local application state
 .env

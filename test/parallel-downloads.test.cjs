@@ -222,7 +222,9 @@ test('truncated parallel response falls back without publishing a short file', a
   assert.equal(host.active, 0);
 });
 
-test('rate-limited range workers stop before the single-connection fallback starts', async t => {
+test('rate-limited range workers stop and respect host cooldown before single-connection retry', async t => {
+  let clock=0;
+  class ClockManager extends DownloadManager{constructor(options){super({...options,now:()=>clock});}}
   let injected = false, fallbackWhileActive = false;
   const host = rangeHost((req, server) => {
     if (injected && !req.bounded && server.active) fallbackWhileActive = true;
@@ -231,8 +233,13 @@ test('rate-limited range workers stop before the single-connection fallback star
       return { status: 429, start: 0, end: -1, headers: { 'retry-after': '1' } };
     }
   });
-  const f = fixture(t, host);
+  const f = fixture(t, host, {}, ClockManager);
   const d = f.add();
+  await until(()=>injected&&d.status==='queued'&&!f.manager.running.size,'host cooldown');
+  const requestsBeforeRetry=host.requests.length;
+  clock=59999;f.manager.pump();
+  assert.equal(host.requests.length,requestsBeforeRetry,'no immediate retry during the sixty-second cooldown');
+  clock=60000;f.manager.pump();
   await finished(f.manager);
   assert.ok(injected);
   assertComplete(d);

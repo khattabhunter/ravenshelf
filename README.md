@@ -4,13 +4,13 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.3)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.3.3 security maintenance prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.3) and download `Ravenshelf-0.3.3-Windows.exe` from **Assets**.
+1. Open the [v0.4.0 feature prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.0) and download `Ravenshelf-0.4.0-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -42,13 +42,13 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.3.3-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.4.0-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.3.3-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.4.0-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
 A matching checksum detects a mismatch with the published file; provenance records its build origin. Neither certifies that software is malware-free, and the executable remains unsigned.
@@ -60,17 +60,24 @@ A matching checksum detects a mismatch with the published file; provenance recor
 | Discover | Images, descriptions, listed sizes, newest repacks, monthly popular games and genre sections including Action RPG, RPG and real-time strategy. |
 | Background catalogue refresh | Checks at startup and every five minutes while Ravenshelf is open, including when minimized. |
 | Personal library | Favorites and named collections. |
+| Game details | Click-to-enlarge covers/screenshots, system requirements and real Steam recommendation counts when available. Stars express the positive-review ratio on a five-star scale. |
+| Personal touches | Local genre suggestions from saved/completed games and optional artwork-colored accents with a readable fallback. |
 | Downloads | Batch queues, lightweight progress updates, pause/resume, retry, persistent partial downloads and duplicate-file protection. |
 | Multiple connections | Up to four connections per large file, with validated ranges and automatic fallback to one. |
+| Network controls | A shared speed limit, local-time download hours and host cooldowns after limiting responses. |
+| Queue cleanup | Select several entries or review completed downloads; keep files when removing entries, or explicitly confirm permanent file deletion. Storage figures are estimates. |
+| Archive and checksum checks | Warn about recognizable missing/duplicate parts and inconsistent sizes; manually verify local SFV, MD5 or SHA-256 manifests. These checks do not certify file safety. |
 | Defender scans | Automatic Microsoft Defender scan of each finished file, with the result on its card and a **Scan again** button. |
 | Link handling | Supported host adapters, encrypted paste expansion, protected host windows, link export and JDownloader handoff. |
 | On this PC | Reads supported launcher records and local file metadata to show installed games and reported versions. |
 | Gameplay and guides | YouTube gameplay search in a separate viewer, plus clearly labeled guide searches. |
 | Finish actions | Optional app close or laptop shutdown after transfers and requested scans finish successfully, with a cancellable countdown and a final safety check. Unclear or adverse scan results block the action. |
+| Convenience | Optional desktop notices and an opt-in copied-link tray. Copied links require review and checking before downloading. |
+| App updates | The Windows portable release can prepare a verified GitHub release in the background and apply it on normal close, with an optional idle restart. |
 
 ## Host support
 
-| Source | Status in 0.3.3 |
+| Source | Status in 0.4.0 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
@@ -79,15 +86,21 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Updating
 
-Close the older window (Ravenshelf or Atlas Library), download the new executable from [Releases](https://github.com/khattabhunter/ravenshelf/releases), then open it. Your library and queue are stored separately in your Windows profile and are kept. Keep partial files and their accompanying `.atlas-segments-*` folders in place so unfinished downloads can resume.
+From 0.4.0, **Settings → Ravenshelf updates** can check and prepare newer published versions, including prereleases, from this repository. Automatic checks are on by default while the packaged Windows portable app is open. A prepared update installs when you close Ravenshelf normally; **Restart now** is available when work is idle. You can turn automatic checks off and still check manually.
+
+The updater checks the repository, release tag, expected asset name/size and SHA-256 against both GitHub's asset digest and the release checksum file. It backs up critical profile files before replacing the portable executable. These checks do not provide Windows publisher signing or prove the code is harmless. See [the update guide](docs/USER-GUIDE.md#start-and-update-ravenshelf).
+
+For an older Atlas/Ravenshelf version or a manual update, close the older window, download the new executable from [Releases](https://github.com/khattabhunter/ravenshelf/releases), then open it. Your library and queue are stored separately and are kept. Keep partial files and their accompanying `.atlas-segments-*` folders in place so unfinished downloads can resume.
 
 ## Important limits
 
 - Catalogue refresh updates listings. It does not install games or apply game patches.
 - Ravenshelf handles direct HTTPS downloads; it does not include a torrent client.
 - A ready link means the host returned a file response. It is not proof that a multipart set is complete.
+- Checksum matches show agreement with the manifest you chose; they do not establish its publisher or detect every malicious file.
 - Host changes, CAPTCHA checks, expired links and network conditions can affect availability and speed. Multiple connections do not guarantee a speed increase.
 - Ravenshelf does not automatically extract archives or run downloaded installers. The installed-game scan does not launch the games it finds.
+- There is no built-in proxy/VPN kill switch or Brave Search API integration. Normal site requests still expose the connection IP; network-interface binding alone would not guarantee leak prevention.
 
 See the [user guide](docs/USER-GUIDE.md) for downloading, resume behavior, Defender scans, installed versions, troubleshooting and local data storage.
 
@@ -108,7 +121,7 @@ npm run dist
 npm run verify:build
 ```
 
-The output appears in `dist/`. The verification command inspects the packaged executable's actual Electron fuse settings. See [BUILDING.md](docs/BUILDING.md) for requirements, validation and packaging details, and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
+The output appears in `dist/`. The verification command inspects the packaged executable's Electron fuse settings and the native updater's source/build-record/output hashes. Building the helper requires the system .NET Framework C# compiler. See [BUILDING.md](docs/BUILDING.md) for requirements, validation and packaging details, and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## License and independence
 

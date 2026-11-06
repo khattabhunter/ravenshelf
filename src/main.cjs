@@ -1,5 +1,5 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage}=require('electron');
+const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification}=require('electron');
 const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
@@ -16,8 +16,9 @@ const {scanInstalledGames}=require('./installed-games.cjs');
 const {CompletionAction}=require('./completion-action.cjs');
 const {CatalogRefresh}=require('./catalog-refresh.cjs');
 const {publicErrorMessage,publicError,ERROR_RESPONSE_HEADERS}=require('./public-errors.cjs');
+const {createFeatureServices,featureSettings}=require('./feature-services.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
-let win,manager,completion,catalogRefresh,installedCache,scanPromise;
+let win,manager,completion,catalogRefresh,installedCache,scanPromise,features;
 const checked=new Map(),hostWindows=new Set(),mediaWindows=new Set();
 // Resolve only when a link is checked, after Electron and the profile are ready.
 const fastFetch=createFastSessionFetch({getSession:root=>session.fromPartition('persist:atlas-host-'+root)});
@@ -51,7 +52,7 @@ function handle(name,fn){ipcMain.handle('atlas:'+name,async(event,value)=>{
   try{return await fn(value);}catch(error){throw publicError(error,name);}
 });}
 let updateSequence=0;
-function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,updateSequence:++updateSequence};}
+function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,...features?.snapshot(),updateSequence:++updateSequence};}
 function publishState(){if(win&&!win.isDestroyed())win.webContents.send('atlas:state',appState());}
 function publishProgress(downloads){if(win&&!win.isDestroyed())win.webContents.send('atlas:progress',{updateSequence:++updateSequence,downloads});}
 function compactGame(value){
@@ -165,9 +166,11 @@ app.whenReady().then(async()=>{
     const shutdown=path.join(process.env.SystemRoot||'C:\\Windows','System32','shutdown.exe');
     await new Promise((resolve,reject)=>execFile(shutdown,['/s','/t','0'],{windowsHide:true,timeout:15000},error=>error?reject(new Error('Windows could not perform the shutdown request.')):resolve()));
   }});
-  manager.on('state',()=>{completion.refresh();publishState();});
+  manager.on('state',()=>{completion.refresh();features?.observe();publishState();});
   manager.on('progress',publishProgress);
   win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Ravenshelf',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  app.setAppUserModelId?.('local.atlas.repacklibrary');
+  features=createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register:handle,publish:publishState,providers,checked,isTest:Boolean(isTest)});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
@@ -209,17 +212,19 @@ app.whenReady().then(async()=>{
   handle('checkLinks',async urls=>{
     const unique=validateLinks(urls),results=new Array(unique.length);let next=0;
     await Promise.all(Array.from({length:Math.min(4,unique.length)},async()=>{while(next<unique.length){const i=next++;try{
+      checked.delete(unique[i]);
       const result={...await resolveAppLink(unique[i]),sourceUrl:unique[i]};
       const {headers,...publicResult}=result;results[i]=publicResult;
       if(result.status==='ready')checked.set(unique[i],result);
     }catch(error){results[i]={sourceUrl:unique[i],url:unique[i],host:new URL(unique[i]).hostname,status:'unavailable',message:publicErrorMessage(error,'checkLinks')};}}}));
     return results;
   });
-  handle('addDownloads',({links,gameTitle})=>{
+  handle('addDownloads',({links,gameTitle,allowIncomplete})=>{
     assertQueueAvailable();
     if(!Array.isArray(links)||links.length>500)throw new Error('Invalid download batch.');
     const trusted=links.map(link=>checked.get(link.sourceUrl||link.url)).filter(Boolean);
-    if(!trusted.length)throw new Error('Check these links before queuing them.');
+    if(!trusted.length||trusted.length!==links.length)throw new Error('Check these links before queuing them.');
+    features.validateBatch(trusted,allowIncomplete);
     return manager.add({links:trusted,gameTitle:String(gameTitle||'Imported files').slice(0,200)});
   });
   handle('downloadAction',({id,action})=>{
@@ -231,7 +236,7 @@ app.whenReady().then(async()=>{
   });
   handle('chooseFolder',async()=>{const r=await dialog.showOpenDialog(win,{title:'Choose download folder',defaultPath:manager.settings.downloadDir,properties:['openDirectory','createDirectory']});if(r.canceled)return null;manager.updateSettings({downloadDir:r.filePaths[0]});return r.filePaths[0];});
   handle('saveSettings',patch=>{
-    const changes={};
+    const changes=featureSettings(patch);
     if(patch?.defenderScan!==undefined){if(typeof patch.defenderScan!=='boolean')throw new Error('Choose whether to scan finished downloads.');changes.defenderScan=patch.defenderScan;}
     if(patch?.concurrency!==undefined)changes.concurrency=Math.max(1,Math.min(4,Number(patch.concurrency)||2));
     if(patch?.connectionsPerFile!==undefined){
@@ -242,7 +247,7 @@ app.whenReady().then(async()=>{
     if(Array.isArray(patch?.collections)){
       const seen=new Set();changes.collections=patch.collections.slice(0,100).filter(c=>c&&typeof c.id==='string'&&/^[\w-]{1,100}$/.test(c.id)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,name:String(c.name||'My collection').trim().slice(0,80)||'My collection',games:compactGames(c.games,500)}));
     }
-    manager.updateSettings(changes);return appState();
+    manager.updateSettings(changes);features.configure(changes);return appState();
   });
   handle('openExternal',url=>shell.openExternal(safeURL(url).href));
   handle('openDownloadsFolder',()=>{fs.mkdirSync(manager.settings.downloadDir,{recursive:true});return shell.openPath(manager.settings.downloadDir);});
@@ -271,5 +276,5 @@ app.on('before-quit',event=>{
   catalogRefresh?.stop();
   for(const browser of hostWindows)browser.destroy();
   for(const browser of mediaWindows)browser.destroy();
-  manager.stop().finally(()=>app.quit());
+  manager.stop().then(()=>features?.beforeQuit()).catch(()=>console.error('Ravenshelf could not finish the pending update. The current app was kept.')).finally(()=>app.quit());
 });

@@ -1,6 +1,6 @@
 # Architecture
 
-Ravenshelf 0.3.2 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Ravenshelf account service or hosted backend.
+Ravenshelf 0.4.0 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Ravenshelf account service or hosted backend.
 
 ## Main components
 
@@ -24,6 +24,13 @@ Ravenshelf 0.3.2 is a Windows Electron application. The interface uses HTML, CSS
 | `src/installed-games.cjs`, `src/installed-scan.ps1` | Bounded, read-only inventory of installed-game records, manifests and executable version metadata. |
 | `src/completion-action.cjs` | Session-only completion rules and cancellable countdown; OS execution is supplied by the main process. |
 | `src/completion-policy.cjs` | Shared transfer/scan readiness checks used before the completion countdown and again at the final action boundary. |
+| `src/feature-services.cjs` | Main-process integration and validated operations for the 0.4.0 features. |
+| `src/bandwidth-limiter.cjs`, `src/download-schedule.cjs`, `src/host-backoff.cjs` | One transfer budget across streams, local-time schedule boundaries and per-host cooldowns. |
+| `src/download-cleanup.cjs` | Expiring cleanup previews, managed-file identity validation and partial-failure reporting. |
+| `src/archive-set-validation.cjs` | Recognized archive numbering, duplicates and known-size consistency checks. |
+| `src/integrity-verifier.cjs`, `src/integrity-worker.cjs` | Bounded SFV/MD5/SHA-256 parsing and cancellable file hashing in a worker. |
+| `src/app-updater.cjs`, `src/updater-helper.cs` | Restricted GitHub release selection, hash-checked staging, profile backups and native portable replacement. |
+| `src/game-metadata.cjs`, `src/clipboard-inbox.cjs`, `src/notifications.cjs` | Public Steam details, opt-in local copied-link recognition and local desktop notices. |
 
 ```mermaid
 flowchart LR
@@ -61,7 +68,39 @@ The packaged executable switches off Electron's `RunAsNode`, `NODE_OPTIONS`, `--
 
 Some servers mishandle bounded range headers but support valid open-ended ranges. Ravenshelf independently checks that alternate response format and intentionally stops each section at its assigned boundary. It does not treat inconsistent bounded headers as valid.
 
-Transfer checks validate the representation and expected byte counts. Optional Defender scans are a separate check, not a guarantee about archive contents. Ravenshelf does not automatically extract archives, run installers or verify publisher hashes.
+Transfer checks validate the representation and expected byte counts. Optional Defender scans are a separate check, not a guarantee about archive contents. Ravenshelf does not automatically extract archives or run installers. Its separate manual checksum verifier compares files to a user-selected manifest; it does not establish that the manifest belongs to the publisher.
+
+## Download controls, cleanup and verification
+
+The bandwidth limiter is shared by single streams, parallel section requests and app-update executable downloads. It controls payload bytes, not all Chromium, catalogue, update-metadata or protocol traffic. Schedule evaluation uses local wall time and applies to the game queue, not app updates. Overnight windows belong to the starting weekday; equal start/end times mean the whole selected day. The manager records schedule pauses separately from manual pauses so an allowed window does not silently resume manually paused files. Host cooldowns coordinate requests after limiting responses instead of multiplying retries across sections.
+
+Archive preflight analyzes the checked files that would enter the queue. Filename patterns reveal missing earlier/internal volumes and duplicate numbers; known sizes can reveal inconsistent nonfinal volumes. The final volume count remains unknown unless supplied by external evidence, so the result never declares a set complete. The renderer shows issues before queueing, and the main process rejects errorful sets unless the user explicitly confirms `allowIncomplete` for that selection.
+
+Removal previews pause and settle selected work before inspecting managed files, then leave it paused for review. File deletion requires a short-lived preview token and fresh identity checks. Remove-from-list stops selected work and leaves files. Deletion can partially succeed and returns per-entry failures; it is not a recursive download-folder cleaner. Storage and recovered-byte figures use logical sizes. Both preview and result handling are separate from uninstalling games.
+
+Manual checksum work runs in a Node worker with bounded manifest size, entries, memory and result batches. It rejects unsafe relative paths, links and changing files and distinguishes mismatches, missing files and read errors. Normal file transfers retain their existing asynchronous I/O path. The worker does not extract or execute the checked content.
+
+## Portable app updates
+
+The packaged Windows portable app checks this repository's public GitHub releases shortly after launch and every six hours when enabled. It can select newer published prereleases as well as releases. Development/unpacked and isolated test builds do not self-replace. The updater validates the repository/tag/asset URL, expected asset name and size, requires GitHub's SHA-256 asset digest to match `SHA256SUMS.txt`, and computes the downloaded executable's hash before declaring it ready. HTTPS redirects are restricted to the expected GitHub endpoints and approved release-asset hosts.
+
+A ready update waits for normal app close; an explicit restart also requires idle work. Before application, the candidate is hashed again and critical profile files are copied to a private local backup directory. A C# helper, compiled from this repository with the system .NET Framework compiler, waits for the app to exit and applies the verified portable replacement with recovery checks. It uses no PowerShell policy changes, elevation or downloaded helper code. See [BUILDING.md](BUILDING.md) for build hooks.
+
+These checks trust the published GitHub release metadata and do not replace executable signing or independently establish code safety. GitHub provenance attestations remain a separate user-verifiable build record; the automatic updater does not verify them. A critical-profile backup is not a complete browser-profile or game-file backup.
+
+## Metadata and local preferences
+
+Game metadata uses the linked Steam app ID obtained by the main process, not a renderer-selected arbitrary metadata endpoint. Requirements are converted to plain text. Review counts come from [Steam's public review service](https://partner.steamgames.com/doc/webapi/IUserReviewsService#GetAppReviews); the UI labels its five-star expression of the positive-review ratio and shows the source count. Missing metadata produces an unavailable state, not guessed values.
+
+Personalization matches genres within locally available catalogue data against saved/completed games; there is no uploaded preference profile. Cover-color sampling happens locally on checked raster images. The opt-in clipboard inbox recognizes supported HTTPS links in memory, expires them and requires user review before network checking. Notifications use Windows desktop notices rather than a remote messaging service.
+
+## Deliberately deferred changes
+
+- Proxy/VPN enforcement and a kill switch need coordinated DNS, IPv4/IPv6, redirect and Chromium/Node handling. Binding to an interface alone is not a leakproof design, so 0.4.0 does not claim one.
+- Brave Search API integration is not included. An external API would not guarantee anonymity, zero cost or permanent availability.
+- Downloading and all parsing were not moved wholesale into workers. The bounded manual checksum operation has a worker because it performs sustained local hashing.
+- A naive hash updated in network-chunk arrival order would not verify a resumed, retried or out-of-order parallel file. Game transfers therefore do not advertise an inline integrity hash; manual verification reads the saved files in order against a chosen manifest. Update downloads are sequential and separately hash-checked.
+- The parallel eligibility threshold remains **16 MiB**, not 100 MB. Regular progress remains a compact batch every **500 ms**; more frequent IPC is not assumed to improve host throughput. Changes to these values require evidence and regression checks.
 
 ## Progress delivery
 
@@ -83,7 +122,7 @@ Queue completion actions are not persisted as an armed preference. Both close an
 
 ## Tests and builds
 
-`npm test` uses Node's test runner with local fixtures, injected transports and simulated clocks. Coverage includes queue/file integrity, range fallback, provider parsing, host policies, installed metadata, IPC behavior, renderer refresh/results, scan-result interpretation, completion/scan ordering and header-encryption failures. Progress regressions cover stale/full-message ordering, permitted fields, subscription cleanup, hidden views and preserving historical cards and security state. `npm run verify:build` separately checks the packaged fuse settings after a build. These checks do not establish current availability or speed of external hosts.
+`npm test` uses Node's test runner with local fixtures, injected transports and simulated clocks. Coverage includes queue/file integrity, range fallback, provider parsing, host policies, installed metadata, IPC behavior, renderer refresh/results, scan-result interpretation, completion/scan ordering and header-encryption failures. Progress regressions cover stale/full-message ordering, permitted fields, subscription cleanup, hidden views and preserving historical cards and security state. Version 0.4.0 adds update/helper, schedule, bandwidth, cleanup, checksum, metadata and convenience-control regressions. `npm run verify:build` checks the packaged fuses and native-helper source/build-record/output hashes after a build. These checks do not establish current availability or speed of external hosts.
 
 The **Test** workflow runs the offline suite on Windows with Node 24. The manually dispatched **Build Windows preview** workflow installs locked dependencies, runs tests, builds the portable executable and uploads it with a SHA-256 checksum as a temporary workflow artifact. It does not publish a GitHub release. Actions are pinned to reviewed release commit IDs.
 

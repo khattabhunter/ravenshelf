@@ -7,6 +7,9 @@ const {safeFetch,safeURL}=require('./net.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
 const {openDownloadFile}=require('./download-file.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
+const {BandwidthLimiter,normalizeBandwidthLimit}=require('./bandwidth-limiter.cjs');
+const {HostBackoff,hostKey}=require('./host-backoff.cjs');
+const {DEFAULT_SCHEDULE,normalizeSchedule,scheduleSnapshot}=require('./download-schedule.cjs');
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
 const APP_VERSION=require('../package.json').version;
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
@@ -27,18 +30,23 @@ function atomicJSON(file,data) {
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null}) {
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null}) {
     super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile;
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
+    this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
     const stored=loadJSON(stateFile,{});
     this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],defenderScan:true,...stored.settings};
     this.settings.defenderScan=this.settings.defenderScan!==false;
     this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);
     this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));
+    try{this.settings.maxDownloadBytesPerSecond=normalizeBandwidthLimit(this.settings.maxDownloadBytesPerSecond??0);}catch{this.settings.maxDownloadBytesPerSecond=0;}
+    try{this.settings.downloadSchedule=normalizeSchedule(this.settings.downloadSchedule||DEFAULT_SCHEDULE);}catch{this.settings.downloadSchedule=normalizeSchedule();}
+    this.bandwidthLimiter=bandwidthLimiter||new BandwidthLimiter({bytesPerSecond:this.settings.maxDownloadBytesPerSecond});
     this.downloads=Array.isArray(stored.downloads)?stored.downloads:[];
     let plainHeaders=false;
     for(const d of this.downloads){
       if(['queued','downloading'].includes(d.status))d.status='paused';d.speed=0;d.activeConnections=0;
+      this.hostBackoff.restore(d.url,{retryAt:d.retryAt,status:d.retryStatus,failures:d.retryCount});
       if('sealedHeaders' in d){
         // Headers that cannot be opened (another Windows account or PC) are dropped;
         // the job then refreshes its link from the source page when it resumes.
@@ -63,8 +71,10 @@ class DownloadManager extends EventEmitter {
     // One cadence for the whole queue. File I/O and durable checkpoints do not
     // depend on renderer notifications, and important state changes stay immediate.
     this.progressTimer=setInterval(()=>this.publishProgress(),500);this.progressTimer.unref();
+    this.scheduleTimer=setInterval(()=>{this.checkSchedule();this.pump();},1000);this.scheduleTimer.unref();
+    Promise.resolve().then(()=>{if(!this.stopping){this.checkSchedule();this.pump();}});
   }
-  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning}; }
+  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
   persisted(d){
     const {headers,sealedHeaders,headersNeedRefresh,...rest}=d;
     if(!headers||!Object.keys(headers).length)return {...rest,headers:{},...(headersNeedRefresh?{headersNeedRefresh:true}:{})};
@@ -88,7 +98,60 @@ class DownloadManager extends EventEmitter {
     }
     if(downloads.length)this.emit('progress',downloads);
   }
-  updateSettings(patch){this.settings={...this.settings,...patch};this.settings.defenderScan=this.settings.defenderScan!==false;this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
+  updateSettings(patch){
+    const next={...this.settings,...patch};
+    next.maxDownloadBytesPerSecond=normalizeBandwidthLimit(next.maxDownloadBytesPerSecond);
+    next.downloadSchedule=normalizeSchedule(next.downloadSchedule);
+    this.settings=next;this.settings.defenderScan=this.settings.defenderScan!==false;this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));
+    this.bandwidthLimiter.setRate(next.maxDownloadBytesPerSecond);this.checkSchedule();this.save();this.changed();this.pump();return this.state();
+  }
+  checkSchedule(date=new Date(this.now())){
+    const snapshot=scheduleSnapshot(this.settings.downloadSchedule,date);let changed=false;
+    for(const d of this.downloads){
+      if(this.quiescing.has(d.id))continue;
+      if(!snapshot.active&&['queued','downloading'].includes(d.status)){
+        d.status='paused';d.pauseReason='schedule';d.scheduleRequested=true;d.speed=0;d.activeConnections=0;this.running.get(d.id)?.abort();changed=true;
+      }else if(snapshot.active&&d.status==='paused'&&d.pauseReason==='schedule'&&d.scheduleRequested===true){
+        d.status='queued';delete d.pauseReason;delete d.scheduleRequested;changed=true;
+      }
+    }
+    if(changed){this.save();this.changed();}
+    return snapshot;
+  }
+  selectedIds(ids){
+    if(!Array.isArray(ids)||!ids.length||ids.length>500||ids.some(id=>typeof id!=='string'))throw new Error('Choose between 1 and 500 downloads.');
+    const selected=[...new Set(ids)];
+    if(selected.some(id=>!this.downloads.some(d=>d.id===id)))throw new Error('Download not found.');
+    return selected;
+  }
+  async pauseAndWait(ids){
+    const selected=this.selectedIds(ids),set=new Set(selected);
+    if(selected.some(id=>this.quiescing.has(id)))throw new Error('This download is being removed. Wait for the operation to finish.');
+    for(const id of selected)this.quiescing.add(id);
+    this.scanQueue=this.scanQueue.filter(id=>!set.has(id));
+    for(const d of this.downloads)if(set.has(d.id)){
+      delete d.pauseReason;delete d.scheduleRequested;
+      if(!['completed','cancelled'].includes(d.status))d.status='paused';
+      d.speed=0;d.activeConnections=0;this.running.get(d.id)?.abort();
+    }
+    this.save();this.changed();
+    await Promise.allSettled(selected.flatMap(id=>[this.taskById.get(id),this.scanTasks.get(id)].filter(Boolean)));
+    return selected;
+  }
+  releaseQuiescence(ids){
+    if(!Array.isArray(ids)||ids.some(id=>typeof id!=='string'))throw new Error('Choose between 1 and 500 downloads.');
+    for(const id of ids){
+      this.quiescing.delete(id);const d=this.downloads.find(item=>item.id===id);
+      if(d?.status==='completed'&&d.scan?.status==='queued'&&!this.scanQueue.includes(id))this.scanQueue.push(id);
+    }
+    setImmediate(()=>this.pumpScans());
+  }
+  removeFromList(ids){
+    const selected=this.selectedIds(ids),set=new Set(selected);
+    if(selected.some(id=>!this.quiescing.has(id)||this.running.has(id)||this.scanTasks.has(id)||this.scanQueue.includes(id)))throw new Error('Wait for these downloads and scans to stop before removing them.');
+    this.downloads=this.downloads.filter(d=>!set.has(d.id));for(const id of selected)this.quiescing.delete(id);
+    this.save();this.changed();return {removed:selected.length,ids:selected};
+  }
   add({links,gameTitle}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
     const folderName=safeName(gameTitle,'Imported files').slice(0,100);
@@ -111,35 +174,47 @@ class DownloadManager extends EventEmitter {
   }
   action(id,action){
     const d=this.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
+    if(this.quiescing.has(id))throw new Error('This download is being removed. Wait for the operation to finish.');
     if(action==='scan'){
       if(d.status!=='completed')throw new Error('Only finished downloads can be scanned.');
       if(!this.scanFile)throw new Error('Microsoft Defender scanning is not available.');
       this.queueScan(d);return this.state();
     }
+    if(['pause','cancel','resume','retry'].includes(action)){delete d.pauseReason;delete d.scheduleRequested;}
     if(action==='pause'&&['queued','downloading'].includes(d.status)){d.status='paused';this.running.get(id)?.abort();}
     else if(action==='cancel'&&!['completed','cancelled'].includes(d.status)){d.status='cancelled';this.running.get(id)?.abort();}
-    else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';}
+    else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';d.retryCount=0;}
     d.speed=0;if(d.status!=='downloading')d.activeConnections=0;this.save();this.changed();this.pump();return this.state();
   }
   pump(){
-    if(this.stopping)return;
+    if(this.stopping||!this.checkSchedule().active)return;
     while(this.running.size<this.settings.concurrency){
-      const d=this.downloads.find(x=>x.status==='queued'&&!this.running.has(x.id));if(!d)break;
+      const d=this.downloads.find(x=>{
+        if(x.status!=='queued'||this.running.has(x.id)||this.quiescing.has(x.id)||(x.retryAt||0)>this.now())return false;
+        const policy=this.hostBackoff.policy(x.url);
+        if(policy.retryAt>this.now())return false;
+        return !policy.limited||![...this.running.keys()].some(id=>hostKey(this.downloads.find(item=>item.id===id).url)===policy.key);
+      });if(!d)break;
       const controller=new AbortController();this.running.set(d.id,controller);
       const task=this.run(d,controller).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'download');}}).finally(()=>{
-        this.running.delete(d.id);d.speed=0;d.activeConnections=0;this.save();this.changed();this.pump();
+        this.running.delete(d.id);this.taskById.delete(d.id);d.speed=0;d.activeConnections=0;this.save();this.changed();this.pump();
       });
-      this.tasks.add(task);task.finally(()=>this.tasks.delete(task));
+      this.tasks.add(task);this.taskById.set(d.id,task);task.finally(()=>this.tasks.delete(task));
     }
   }
   async run(d,controller){
     d.status='downloading';d.error='';d.speed=0;d.connectionMode='checking';d.connectionNote='';d.activeConnections=0;this.changed();
     const partial=path.join(d.folder,d.name+'.atlas-part'), final=path.join(d.folder,d.name);
-    const workspace=workspaceFor(partial,d.id),connections=normalizeConnections(this.settings.connectionsPerFile);
+    const workspace=workspaceFor(partial,d.id),connections=Math.min(normalizeConnections(this.settings.connectionsPerFile),this.hostBackoff.policy(d.url).connectionLimit);
     fs.mkdirSync(d.folder,{recursive:true});
     let offset=0;
-    let lastActivity=Date.now();
-    const watchdog=setInterval(()=>{if(Date.now()-lastActivity>60000)controller.abort(new Error('The host stopped responding. Retry to resume.'));},5000);
+    let lastActivity=Date.now(),intentionalWaits=0;
+    const throttle=async(bytes,signal=controller.signal)=>{
+      intentionalWaits++;
+      try{await this.bandwidthLimiter.consume(bytes,{signal});}
+      finally{intentionalWaits--;lastActivity=Date.now();}
+    };
+    const watchdog=setInterval(()=>{if(!intentionalWaits&&Date.now()-lastActivity>60000)controller.abort(new Error('The host stopped responding. Retry to resume.'));},5000);
     let handle,partialFile,responseBody,refreshPromise;
     const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
     this.progressMeters.set(d.id,{download:d,rateMeter});
@@ -157,6 +232,7 @@ class DownloadManager extends EventEmitter {
       signal.throwIfAborted();
       if(d.headersNeedRefresh){await refreshHeaders();signal.throwIfAborted();}
       const originalUrl=d.url;
+      this.hostBackoff.assertAvailable(originalUrl);
       let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
       lastActivity=Date.now();
       if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url){
@@ -165,8 +241,16 @@ class DownloadManager extends EventEmitter {
           await refreshHeaders();
         }
         signal.throwIfAborted();
+        this.hostBackoff.assertAvailable(d.url);
         res=await this.fetcher(d.url,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
       }
+      if([429,503].includes(res.status)){
+        const failure=this.hostBackoff.failure(d.url,res);try{await res.body?.cancel();}catch{}
+        const host=hostKey(d.url);
+        for(const [id,running]of this.running){const other=this.downloads.find(item=>item.id===id);if(other&&hostKey(other.url)===host)running.abort(failure);}
+        throw failure;
+      }
+      if([200,206].includes(res.status))this.hostBackoff.success(d.url);
       return res;
     };
     const publish=async(file)=>{
@@ -185,7 +269,7 @@ class DownloadManager extends EventEmitter {
     const parallel=async()=>{
       if(partialFile){await partialFile.handle.close();partialFile=null;handle=null;}
       d.connectionMode='checking';d.activeConnections=0;this.changed();
-      const result=await downloadRanges({workspace,partialPath:partial,sourceId:d.id,request,signal:controller.signal,connections,
+      const result=await downloadRanges({workspace,partialPath:partial,sourceId:d.id,request,signal:controller.signal,connections,throttle,
         onProgress:(received,total)=>{d.received=received;d.total=total;},
         onActivity:()=>{lastActivity=Date.now();},
         onConnections:count=>{d.activeConnections=d.status==='downloading'?count:0;},
@@ -254,6 +338,7 @@ class DownloadManager extends EventEmitter {
       for await (const chunk of res.body){
         if(controller.signal.aborted)throw controller.signal.reason||new Error('Paused');
         if(d.total&&d.received+chunk.length>d.total)throw new Error('Host sent more bytes than expected.');
+        await throttle(chunk.length);controller.signal.throwIfAborted();
         let pos=0;while(pos<chunk.length){const result=await handle.write(chunk,pos,chunk.length-pos,d.received+pos);if(!result.bytesWritten)throw new Error('Could not save download bytes.');pos+=result.bytesWritten;}
         d.received+=chunk.length;lastActivity=Date.now();
         if(d.total&&d.received>d.total)throw new Error('Host sent more bytes than expected.');
@@ -265,10 +350,21 @@ class DownloadManager extends EventEmitter {
       await handle.sync();await partialFile.verify(d.received);await handle.close();handle=null;partialFile=null;
       await publish(partial);
     }catch(err){
-      if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'download');}
+      const failure=controller.signal.reason?.code==='HOST_BACKOFF'?controller.signal.reason:err;
+      if(d.status==='downloading'){
+        if(failure?.code==='HOST_BACKOFF'){
+          d.retryAt=Math.max(failure.retryAt||0,this.hostBackoff.policy(d.url).retryAt);d.retryCount=Math.max(0,Math.min(2,Number(d.retryCount)||0))+1;d.retryStatus=failure.status;
+          d.connectionNote='The host is busy. Waiting before retrying with fewer connections.';
+          if(failure.automatic!==false&&d.retryCount<=2){d.status='queued';d.error='';}
+          else{d.status='error';d.error=publicErrorMessage(failure,'download');}
+        }else{d.status='error';d.error=publicErrorMessage(err,'download');}
+      }
     }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);try{await responseBody?.cancel();}catch{}if(handle)await handle.close();d.activeConnections=0;}
   }
   queueScan(d){
+    // A transfer can finish publishing while a removal request is stopping it.
+    // Keep scan evidence pending until removal succeeds or the lock is released.
+    if(this.quiescing.has(d.id)){d.scan={status:'queued'};this.save();this.changed();return;}
     if(['queued','scanning'].includes(d.scan?.status)&&(this.scanning===d.id||this.scanQueue.includes(d.id)))return;
     d.scan={status:'queued'};this.scanQueue.push(d.id);this.save();this.changed();
     setImmediate(()=>this.pumpScans());
@@ -278,18 +374,21 @@ class DownloadManager extends EventEmitter {
     if(this.scanning||this.stopping||!this.scanFile)return;
     const id=this.scanQueue.shift();if(!id)return;
     const d=this.downloads.find(x=>x.id===id);
-    if(!d||d.status!=='completed'){if(d)delete d.scan;return this.pumpScans();}
-    this.scanning=id;d.scan={status:'scanning',startedAt:new Date().toISOString()};this.changed();
+    if(!d||d.status!=='completed'||this.quiescing.has(id)){if(d)delete d.scan;return this.pumpScans();}
+    this.scanning=id;d.scan={status:'scanning',startedAt:new Date().toISOString()};
+    let scanFinished;
+    const scanTask=new Promise(resolve=>{scanFinished=resolve;});this.scanTasks.set(id,scanTask);
+    this.changed();
     try{
       const result=await this.scanFile(path.join(d.folder,d.name));
       const status=['clean','threat','missing','unavailable','error','review'].includes(result?.status)?result.status:'error';
       d.scan={status,message:String(result?.message||'').slice(0,300),scannedAt:result?.scannedAt||new Date().toISOString()};
     }catch{d.scan={status:'error',message:'Microsoft Defender could not finish this scan.',scannedAt:new Date().toISOString()};}
-    finally{this.scanning=null;this.save();this.changed();}
+    finally{this.scanning=null;this.scanTasks.delete(id);try{this.save();this.changed();}finally{scanFinished();}}
     return this.pumpScans();
   }
   // Manual closing stays responsive. Queued/running scan states are persisted
   // and resumed on next launch; automatic completion waits for scans beforehand.
-  async stop(){this.stopping=true;clearInterval(this.timer);clearInterval(this.progressTimer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}await Promise.allSettled([...this.tasks]);this.progressMeters.clear();this.save();}
+  async stop(){this.stopping=true;clearInterval(this.timer);clearInterval(this.progressTimer);clearInterval(this.scheduleTimer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}this.bandwidthLimiter.stop();await Promise.allSettled([...this.tasks]);this.progressMeters.clear();this.save();}
 }
 module.exports={DownloadManager,safeName,atomicJSON,loadJSON};

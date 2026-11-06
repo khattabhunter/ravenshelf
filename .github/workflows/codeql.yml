@@ -40,3 +40,32 @@ jobs:
         uses: github/codeql-action/analyze@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
         with:
           category: /language:${{ matrix.language }}
+
+  analyze-updater:
+    name: Analyze native updater (C#)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Initialize C# analysis
+        uses: github/codeql-action/init@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
+        with:
+          languages: csharp
+          build-mode: manual
+          queries: security-and-quality
+      - name: Compile the native updater
+        run: node scripts/build-updater.cjs
+      - name: Analyze updater
+        uses: github/codeql-action/analyze@f3bbb05694c2f74569081c28664c0866d64dec21 # v4.39.3
+        with:
+          category: /language:csharp
