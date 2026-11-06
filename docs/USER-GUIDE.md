@@ -1,6 +1,6 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.2.5 for Windows.
+This guide describes Ravenshelf 0.3.1 for Windows, a maintenance prerelease.
 
 ## Start and update Ravenshelf
 
@@ -85,8 +85,9 @@ Keep `.atlas-part` files and `.atlas-segments-*` support folders alongside their
 
 When a file finishes, Ravenshelf asks Microsoft Defender to scan it and shows the result on the download card:
 
-- **Microsoft Defender found no threats** — Defender checked the file and reported nothing.
+- **Microsoft Defender found no threats** — Ravenshelf recognized an explicit clean result from Defender. A successful exit code alone is not enough.
 - **Microsoft Defender found a threat** — do not open the file. Defender may already have quarantined or removed it. Open **Windows Security → Virus & threat protection → Protection history** for details.
+- **Result needs review** — Defender finished, but Ravenshelf could not confidently interpret a clean result. Check **Windows Security → Virus & threat protection → Protection history**. Unrecognized language or output formats can produce this status.
 - **Not scanned** — Defender is unavailable (for example, another antivirus replaced it), the file was missing, or the scan could not finish. Scan the file with your antivirus before opening it.
 
 Scans run one at a time so the PC stays responsive; large archives can take a few minutes. Use the shield button on a finished download to scan it again. Turn automatic scans on or off in **Settings → Scan finished downloads**. Ravenshelf never changes Defender settings and never adds exclusions. A clean result lowers risk but cannot prove a file is safe.
@@ -109,7 +110,9 @@ Guide buttons open labeled PCGamingWiki, YouTube walkthrough or Steam community 
 
 Under **Downloads → When this queue finishes**, choose **Keep Ravenshelf open**, **Close Ravenshelf** or **Turn off laptop**.
 
-The default is **Keep Ravenshelf open** each time the app launches. Shutdown requires confirmation. Both close and shutdown wait for successful completion, then show a 60-second countdown with **Cancel — keep working**. Save work in other apps before permitting shutdown.
+The default is **Keep Ravenshelf open** each time the app launches. Shutdown requires confirmation. Both close and shutdown wait for successful transfers and any requested Defender scans, then show a 60-second countdown with **Cancel — keep working**. Queued or running scans keep the action waiting. A threat, uncertain result, failed scan, missing file or unavailable scanner blocks the action. Review the result and scan again after resolving it, or choose **Keep Ravenshelf open**. Turning off future automatic scans does not bypass a scan already recorded for a file. Files for which no scan was requested do not acquire a new scan just because a finish action is selected.
+
+Readiness is checked again before the final action, including scans started during the countdown. Save work in other apps before permitting shutdown.
 
 Paused or failed files keep the action waiting. New files join an armed queue; adding work during the countdown returns it to waiting. Cancelling a targeted file cancels the finish action. Restarting Ravenshelf resets the choice. These actions concern downloads, not extraction or installation. Windows may delay shutdown if other apps need attention.
 
@@ -118,6 +121,8 @@ Paused or failed files keep the action waiting. New files join an armed queue; a
 The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. Download files use the folder selected in **Settings**.
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
+
+If Windows cannot encrypt saved download headers, Ravenshelf displays a warning and keeps those headers in memory only. The queue and partial files remain saved. After restart, affected downloads refresh their source links before resuming and may need another protected-browser step. Version 0.3.1 removes plaintext headers from the current older queue file; it does not rewrite previous backups.
 
 Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue, image and download services still see the IP used to connect; Ravenshelf's ad protections do not make those requests anonymous.
 
@@ -128,6 +133,8 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | A host returns a webpage instead of a file | Complete the browser step or choose another mirror; do not treat the page as an archive. |
 | Download is slow or unstable | Try fewer simultaneous files, then compare 1 and 4 connections. Host limits may still apply. |
 | A partial download cannot resume | Read the per-file error. The remote file or direct URL may have changed. |
+| A header-storage warning appears | Headers were not saved in plaintext. Keep the current session open if needed; after restart, resume or recheck the source link and complete any requested browser verification. |
+| Automatic close or shutdown is waiting | Check download cards for queued/running scans or results needing review. Resolve the result and scan again, or choose **Keep Ravenshelf open**. |
 | Catalogue update fails | Keep the current results and retry Refresh later. Source changes can require an app update. |
 | The app still shows old behavior after updating | Close all older Ravenshelf windows, then open the new release executable. |
 

@@ -93,6 +93,15 @@ const pausedJob = (downloadDir, extra) => ({
   url: 'https://files.example.com/job', sourceUrl: 'https://host.example.com/job', received: 0, total: 3,
   etag: null, lastModified: null, speed: 0, error: '', ...extra,
 });
+function saveJobs(w, jobs) {
+  fs.writeFileSync(w.stateFile, JSON.stringify({ settings: { downloadDir: w.downloadDir, connectionsPerFile: 1 }, downloads: jobs }));
+}
+const fileResponse = () => new Response('abc', { headers: { 'content-type': 'application/octet-stream', 'content-length': '3', etag: '"one"' } });
+function assertNoSecrets(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  assert.equal(text.includes(SECRET), false);
+  assert.equal(text.includes(PREFIX), false);
+}
 
 test('library.json stores sealed headers and a fresh session sends the original cookie', async t => {
   const storage = fakeStorage(), w = workspace(t), sent = [];
@@ -101,20 +110,24 @@ test('library.json stores sealed headers and a fresh session sends the original 
     return new Response('abc', { headers: { 'content-type': 'application/octet-stream', 'content-length': '3', etag: '"one"' } });
   };
   const first = w.open({ fetcher, vault: createHeaderVault(storage) });
+  first.stopping = true; // Persist the queued job without starting a file request.
   first.add({ gameTitle: 'Game', links: [{ status: 'ready', url: 'https://files.example.com/one', sourceUrl: 'https://host.example.com/one', filename: 'part01.rar', headers: HEADERS }] });
-  await until(() => first.downloads[0].status === 'completed', 'first download');
   await first.stop();
   const text = fs.readFileSync(w.stateFile, 'utf8'), saved = JSON.parse(text);
   assert.equal(text.includes('not-a-real-secret'), false);
   assert.equal(saved.downloads[0].headers, undefined);
   assert.ok(saved.downloads[0].sealedHeaders.startsWith(PREFIX));
-  assert.equal(sent[0], SECRET);
+  assert.deepEqual(sent, []);
 
   const second = w.open({ fetcher, vault: createHeaderVault(storage) });
   assert.deepEqual(second.downloads[0].headers, HEADERS);
   assert.equal('sealedHeaders' in second.downloads[0], false);
   assert.equal(JSON.stringify(second.state()).includes('not-a-real-secret'), false);
   assert.equal(JSON.stringify(second.state()).includes(PREFIX), false);
+  assert.equal(second.state().headerStorageWarning, '');
+  second.action(second.downloads[0].id, 'resume');
+  await until(() => second.downloads[0].status === 'completed', 'resumed encrypted download');
+  assert.deepEqual(sent, [SECRET]);
 });
 
 test('plain-text cookies from older versions are sealed when Atlas opens', t => {
@@ -128,15 +141,111 @@ test('plain-text cookies from older versions are sealed when Atlas opens', t => 
   assert.ok(JSON.parse(text).downloads[0].sealedHeaders.startsWith(PREFIX));
 });
 
-test('without working encryption the previous plain-text format is kept', t => {
-  const w = workspace(t);
-  fs.mkdirSync(path.dirname(w.stateFile), { recursive: true });
-  fs.writeFileSync(w.stateFile, JSON.stringify({ settings: { downloadDir: w.downloadDir }, downloads: [pausedJob(w.downloadDir, { headers: HEADERS })] }));
-  const manager = w.open({ vault: createHeaderVault(fakeStorage({ available: false })) });
-  manager.save();
-  const saved = JSON.parse(fs.readFileSync(w.stateFile, 'utf8')).downloads[0];
-  assert.deepEqual(saved.headers, HEADERS);
-  assert.equal('sealedHeaders' in saved, false);
+for (const [label, makeVault] of [
+  ['unavailable encryption', () => createHeaderVault(fakeStorage({ available: false }))],
+  ['no vault', () => null],
+  ['missing seal method', () => ({})],
+  ['throwing seal method', () => ({ seal() { throw new Error('Encryption failed'); } })],
+  ['throwing encryption service', () => createHeaderVault({ ...fakeStorage(), encryptString() { throw new Error('Key unavailable'); } })],
+]) {
+  test(`legacy plaintext is scrubbed on startup with ${label}, while the session keeps its headers`, async t => {
+    const w = workspace(t), sent = [];
+    saveJobs(w, [pausedJob(w.downloadDir, { headers: HEADERS })]);
+    const manager = w.open({
+      vault: makeVault(),
+      fetcher: async (_url, options) => { sent.push(new Headers(options.headers).get('cookie')); return fileResponse(); },
+      resolveLink: async () => { throw new Error('The live session should not need to resolve the link again'); },
+    });
+    // Constructor migration must scrub immediately, before an explicit save.
+    const text = fs.readFileSync(w.stateFile, 'utf8'), saved = JSON.parse(text).downloads[0];
+    assertNoSecrets(text);
+    assert.deepEqual(saved.headers, {});
+    assert.equal(saved.headersNeedRefresh, true);
+    assert.equal('sealedHeaders' in saved, false);
+    assert.deepEqual(manager.downloads[0].headers, HEADERS);
+    assert.notEqual(manager.downloads[0].headersNeedRefresh, true);
+    assert.match(manager.state().headerStorageWarning, /could not be saved securely/i);
+    assertNoSecrets(manager.state());
+    manager.action('job', 'resume');
+    await until(() => manager.downloads[0].status === 'completed', 'in-memory authenticated download');
+    assert.deepEqual(sent, [SECRET]);
+    await manager.stop();
+    assertNoSecrets(fs.readFileSync(w.stateFile, 'utf8'));
+  });
+}
+
+test('new credentials never reach disk if sealing throws', t => {
+  const w = workspace(t), manager = w.open({ vault: { seal() { throw new Error('No key'); } } });
+  manager.stopping = true;
+  manager.add({ gameTitle: 'Game', links: [{ status: 'ready', url: 'https://files.example.com/one', sourceUrl: 'https://host.example.com/one', filename: 'part01.rar', headers: HEADERS }] });
+  const text = fs.readFileSync(w.stateFile, 'utf8'), saved = JSON.parse(text).downloads[0];
+  assertNoSecrets(text);
+  assert.deepEqual(saved.headers, {});
+  assert.equal(saved.headersNeedRefresh, true);
+  assert.deepEqual(manager.downloads[0].headers, HEADERS);
+  assert.match(manager.state().headerStorageWarning, /could not be saved securely/i);
+  assertNoSecrets(manager.state());
+});
+
+for (const [label, resolveLink] of [
+  ['no resolver', undefined],
+  ['resolver throws', async () => { throw new Error('Source page unavailable'); }],
+  ['resolver requires a browser check', async () => ({ status: 'browser', message: 'Browser check required' })],
+]) {
+  test(`a restarted job with lost credentials makes no file request when ${label}`, async t => {
+    const w = workspace(t), sent = [];
+    saveJobs(w, [pausedJob(w.downloadDir, { headers: HEADERS })]);
+    const first = w.open({ vault: createHeaderVault(fakeStorage({ available: false })) });
+    await first.stop();
+    const second = w.open({
+      resolveLink,
+      fetcher: async url => { sent.push(url); return fileResponse(); },
+    });
+    assert.equal(second.downloads[0].headersNeedRefresh, true);
+    second.action('job', 'resume');
+    await until(() => second.downloads[0].status === 'error', 'blocked stale authenticated download');
+    assert.deepEqual(sent, []);
+    assert.equal(second.downloads[0].headersNeedRefresh, true);
+    assert.ok(second.downloads[0].error);
+    assert.equal(fs.existsSync(path.join(second.downloads[0].folder, second.downloads[0].name)), false);
+    assertNoSecrets(second.state());
+  });
+}
+
+test('a restarted job resolves before any GET and uses fresh cookies, then clears the refresh flag', async t => {
+  const w = workspace(t), events = [], freshCookie = 'host_session=fresh-synthetic-cookie';
+  saveJobs(w, [pausedJob(w.downloadDir, { headers: HEADERS })]);
+  const first = w.open({ vault: null });
+  await first.stop();
+  const second = w.open({
+    vault: createHeaderVault(fakeStorage()),
+    resolveLink: async source => {
+      events.push(['resolve', source]);
+      return { status: 'ready', url: 'https://files.example.com/refreshed', headers: { Cookie: freshCookie }, referer: 'https://host.example.com/fresh' };
+    },
+    fetcher: async (url, options) => {
+      const headers = new Headers(options.headers);
+      events.push(['GET', url, headers.get('cookie'), headers.get('referer')]);
+      assert.equal(second.downloads[0].headersNeedRefresh, undefined, 'refresh completes before the GET');
+      return fileResponse();
+    },
+  });
+  second.action('job', 'resume');
+  await until(() => second.downloads[0].status === 'completed', 'refreshed download');
+  await second.stop();
+  assert.deepEqual(events, [
+    ['resolve', 'https://host.example.com/job'],
+    ['GET', 'https://files.example.com/refreshed', freshCookie, 'https://host.example.com/fresh'],
+  ]);
+  assert.equal(second.downloads[0].headersNeedRefresh, undefined);
+  const text = fs.readFileSync(w.stateFile, 'utf8'), saved = JSON.parse(text).downloads[0];
+  assert.equal(saved.headersNeedRefresh, undefined);
+  assert.equal(saved.headers, undefined);
+  assert.ok(saved.sealedHeaders.startsWith(PREFIX));
+  assert.equal(text.includes(freshCookie), false);
+  assert.equal(second.state().headerStorageWarning, '');
+  assertNoSecrets(second.state());
+  assert.equal(JSON.stringify(second.state()).includes(freshCookie), false);
 });
 
 test('headers sealed on another account are dropped without losing the job', t => {
@@ -146,7 +255,9 @@ test('headers sealed on another account are dropped without losing the job', t =
   fs.writeFileSync(w.stateFile, JSON.stringify({ settings: { downloadDir: w.downloadDir }, downloads: [pausedJob(w.downloadDir, { sealedHeaders: sealed }), pausedJob(w.downloadDir, { id: 'second', sealedHeaders: 'garbage' })] }));
   const manager = w.open({ vault: createHeaderVault(fakeStorage()) });
   assert.equal(manager.downloads.length, 2);
-  for (const d of manager.downloads) { assert.deepEqual(d.headers, {}); assert.equal('sealedHeaders' in d, false); }
+  for (const d of manager.downloads) { assert.deepEqual(d.headers, {}); assert.equal('sealedHeaders' in d, false); assert.equal(d.headersNeedRefresh, true); }
+  assert.match(manager.state().headerStorageWarning, /could not be saved securely/i);
+  assertNoSecrets(manager.state());
   // A build without a vault also opens the profile instead of failing.
   const noVault = w.open({});
   assert.deepEqual(noVault.downloads.map(d => d.headers), [{}, {}]);

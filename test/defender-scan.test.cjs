@@ -29,8 +29,8 @@ test('the newest Defender platform build is preferred, with Program Files as fal
 });
 
 test('scan output is interpreted without trusting the exit code alone', () => {
-  assert.equal(interpretScan({ code: 0, stdout: 'Scan starting...\nScan finished.\nScanning C:\\x.rar found no threats.', fileExists: true }).status, 'clean');
-  assert.equal(interpretScan({ code: 0, stdout: '', fileExists: true }).status, 'clean');
+  assert.equal(interpretScan({ code: 0, stdout: 'Scan starting...\nScan finished.\nScanning C:\\x.rar found no threats.', file: 'C:\\x.rar', fileExists: true }).status, 'clean');
+  assert.equal(interpretScan({ code: 0, stdout: '', fileExists: true }).status, 'review');
   const remediated = interpretScan({ code: 0, stdout: 'Scanning C:\\x.rar found 1 threats.', fileExists: false });
   assert.equal(remediated.status, 'threat'); assert.match(remediated.message, /removed or quarantined/);
   assert.equal(interpretScan({ code: 0, stdout: 'Scan finished.', fileExists: false }).status, 'threat');
@@ -39,6 +39,51 @@ test('scan output is interpreted without trusting the exit code alone', () => {
   assert.equal(interpretScan({ code: 2, stdout: 'CmdTool: Failed with hr = 0x800106BA', fileExists: true }).status, 'error');
   assert.equal(interpretScan({ code: null, stdout: '', fileExists: true }).status, 'error');
   assert.equal(interpretScan({ code: null, timedOut: true, fileExists: true }).status, 'error');
+});
+
+test('detected threats take precedence over exit zero, clean summaries and timeouts', () => {
+  for (const stdout of [
+    'LIST OF DETECTED THREATS\nThreat : Trojan:Win32/Fixture\nAction : Clean',
+    'Threat : Trojan:Win32/Fixture',
+    'Found 0 threats.\nFound 1 threat.',
+    'Found no threats.\nFound 2 threats.',
+  ]) {
+    for (const code of [0, 2, null]) {
+      assert.equal(interpretScan({ code, stdout, fileExists: true }).status, 'threat');
+      assert.equal(interpretScan({ code, stdout, timedOut: true, fileExists: true }).status, 'threat');
+    }
+  }
+  assert.equal(interpretScan({ code: 0, stdout: 'Found no threats.', stderr: 'Threat : Trojan:Win32/Fixture', fileExists: true }).status, 'threat');
+});
+
+test('empty, localized, incomplete and conflicting successful output requires review', () => {
+  for (const stdout of [
+    '', 'Scan finished.', 'Command completed successfully.',
+    'Analyse terminée. Aucune menace détectée.',
+    'تم الانتهاء من الفحص.',
+    'Found no threats.\nWarning: one file was excluded.',
+    'Found no threats.\nAction : Clean',
+    'Found no threats.\nAn unknown diagnostic line.',
+    'The phrase "found no threats" is not a result.',
+    'Scanning C:\\another-file.rar found no threats.',
+  ]) {
+    const result = interpretScan({ code: 0, stdout, file: FILE, fileExists: true });
+    assert.equal(result.status, 'review', stdout);
+    assert.match(result.message, /Protection history/);
+    assert.doesNotMatch(result.message, /found no threats/i);
+  }
+  assert.equal(interpretScan({ code: 0, stdout: 'Found no threats.', stderr: 'scan warning', fileExists: true }).status, 'review');
+  assert.equal(interpretScan({ code: 2, stdout: 'Found no threats.', fileExists: true }).status, 'error');
+});
+
+test('only recognized no-threat output for the scanned file can produce a clean result', () => {
+  for (const stdout of ['Found no threats.', `Scan starting...\nScan finished.\nScanning ${FILE} found no threats.`, `Scanning "${FILE}" found no threats.`]) {
+    assert.equal(interpretScan({ code: 0, stdout, file: FILE, fileExists: true }).status, 'clean');
+  }
+  const tricky = 'C:\\Games\\found no threats.';
+  assert.equal(interpretScan({ code: 0, stdout: `Scanning ${tricky}`, file: tricky, fileExists: true }).status, 'review');
+  const misleading = 'C:\\Games\\found 5 threats.rar';
+  assert.equal(interpretScan({ code: 0, stdout: `Scanning ${misleading} found no threats.`, file: misleading, fileExists: true }).status, 'clean');
 });
 
 test('the scanner runs a custom Defender file scan with a hidden window and a time limit', async () => {
@@ -53,6 +98,18 @@ test('the scanner runs a custom Defender file scan with a hidden window and a ti
   assert.deepEqual(calls[0].args, ['-Scan', '-ScanType', '3', '-File', FILE]);
   assert.equal(calls[0].options.windowsHide, true);
   assert.equal(calls[0].options.timeout, 5000);
+});
+
+test('scanner stderr and ambiguous command success reach the result classifier', async () => {
+  for (const [stdout, stderr, expected] of [
+    ['', '', 'review'],
+    ['Found no threats.', 'Threat : Trojan:Win32/Fixture', 'threat'],
+    ['Found no threats.', 'unexpected warning', 'review'],
+  ]) {
+    const scan = createDefenderScanner({ platform: 'win32', fsApi: fakeFs({ files: [FILE] }), findTool: () => inboxTool,
+      execFileImpl(_tool, _args, _options, done) { done(null, stdout, stderr); } });
+    assert.equal((await scan(FILE)).status, expected);
+  }
 });
 
 test('the scanner reports a threat when Defender removes the file, and handles failures', async () => {

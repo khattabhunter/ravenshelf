@@ -160,3 +160,63 @@ test('the Defender scan selector sends a boolean and restores the old value on f
   assert.equal(sent[0].defenderScan,false);assert.equal(Object.keys(sent[0]).length,1);
   assert.equal(control.value,'on');assert.equal(control.disabled,false);
 });
+
+test('scan review replaces a clean badge with a neutral alert and keeps untrusted output out of HTML',()=>{
+  const f=rendererFixture(),htmlWrites=[],createElement=f.document.createElement;
+  f.document.createElement=(...args)=>{
+    const node=createElement(...args);let html;
+    Object.defineProperty(node,'innerHTML',{get:()=>html,set:value=>{html=String(value);htmlWrites.push(html);}});
+    return node;
+  };
+  f.context.card={querySelector:f.get};
+  f.context.item={id:'review',name:'game.part01.rar',status:'completed',received:3,total:3,scan:{status:'clean'}};
+  f.run('updateDownloadCard(card,item)');
+  const scan=f.get('.download-scan');assert.ok(scan.className.split(/\s+/).includes('clean'));
+  f.context.item.scan={status:'review'};f.run('updateDownloadCard(card,item)');
+  assert.equal(scan.hidden,false);assert.ok(!scan.className.split(/\s+/).includes('clean'));
+  assert.ok(!scan.className.split(/\s+/).includes('threat'),'ambiguous output must not claim a detected threat');
+  assert.equal(f.run('scanText(item).glyph'),'alert');
+  assert.match(scan.children[1].textContent,/needs review.*Protection history/);
+  assert.doesNotMatch(scan.children[1].textContent,/found no threats/i);
+  assert.ok(f.get('.download-actions').children.some(node=>node.attributes['aria-label']==='Scan again with Microsoft Defender'));
+  const payload='Review required <img src=x onerror="window.reviewPayloadRan=true"><script>window.reviewPayloadRan=true</script>';
+  f.context.window.reviewPayloadRan=false;f.context.item.scan.message=payload;f.run('updateDownloadCard(card,item)');
+  assert.equal(scan.children[1].textContent,payload);assert.equal(scan.children[1].innerHTML,undefined);
+  assert.ok(htmlWrites.every(markup=>!markup.includes('reviewPayloadRan')),'only developer SVG markup reaches an HTML sink');
+  assert.equal(f.context.window.reviewPayloadRan,false);
+  assert.ok(!scan.className.split(/\s+/).includes('clean'));
+});
+
+test('real applyState shows the global credential warning as text and clears it across views',()=>{
+  const f=rendererFixture(),warning=f.get('#credential-warning');
+  Object.defineProperty(warning,'innerHTML',{set(){assert.fail('Credential warnings must never be rendered as HTML');}});
+  warning.insertAdjacentHTML=()=>assert.fail('Credential warnings must never be inserted as HTML');
+  f.run('applyState({})');assert.equal(warning.hidden,true);assert.equal(warning.textContent,'');
+  const payload='Sign-in details were not saved securely. <img src=x onerror="window.warningPayloadRan=true">';
+  f.context.warningPayload=payload;f.context.window.warningPayloadRan=false;
+  for(const view of ['discover','downloads','library','settings']){
+    f.context.warningView=view;
+    f.run('currentView=warningView;applyState({headerStorageWarning:warningPayload})');
+    assert.equal(warning.hidden,false,view);assert.equal(warning.textContent,payload);
+    f.run('applyState({settings:{connectionsPerFile:2}})');
+    assert.equal(warning.hidden,false,'unrelated partial updates must preserve the warning');
+    assert.equal(warning.textContent,payload);
+    f.run('applyState({headerStorageWarning:""})');
+    assert.equal(warning.hidden,true,view);assert.equal(warning.textContent,'');
+  }
+  assert.equal(f.context.window.warningPayloadRan,false);
+});
+
+test('completion controls can arm close while a finished file has a pending scan',async()=>{
+  for(const status of ['queued','scanning']){
+    const sent=[],f=rendererFixture({setCompletionAction:async mode=>{
+      sent.push(mode);return {completionAction:{mode,phase:'armed',message:'Waiting for Microsoft Defender scans to finish.'}};
+    }});
+    f.context.scanStatus=status;f.run('state.downloads=[{id:"done",status:"completed",scan:{status:scanStatus}}];wireEvents();renderCompletionAction();');
+    const control=f.get('#completion-mode');assert.equal(control.disabled,false);control.value='close';
+    control.events.get('change')();await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(sent,['close']);assert.equal(f.run('state.completionAction.phase'),'armed');
+    assert.match(f.get('#completion-status').textContent,/Waiting for Microsoft Defender/);
+    assert.equal(control.disabled,false);
+  }
+});

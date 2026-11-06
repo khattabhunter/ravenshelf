@@ -129,9 +129,9 @@ test('catalogue IPC forwards manual freshness only for a true boolean',async()=>
   await f.invoke('listCatalog',{section:'rpg',page:3,search:'Example',forceRefresh:'true'});
   assert.deepEqual(f.catalogRequests,[{section:'rpg',page:3,search:'Example',forceRefresh:true},{section:'rpg',page:3,search:'Example',forceRefresh:false}]);
 });
-test('IPC cannot resume or retry old history once a completion action is executing',async()=>{
+test('IPC cannot resume, retry or start scans once a completion action is executing',async()=>{
   const f=await mainFixture({phase:'executing'});
-  for(const action of ['resume','retry'])await assert.rejects(f.invoke('downloadAction',{id:'cancelled-history',action}),/completion action|Wait before/i);
+  for(const action of ['resume','retry','scan'])await assert.rejects(f.invoke('downloadAction',{id:'cancelled-history',action}),/completion action|Wait before/i);
   assert.equal(f.actions.length,0);
 });
 test('isolated test profile never reaches the OS power boundary',async()=>{
@@ -143,6 +143,19 @@ test('execution guard rechecks the full queue immediately before requesting powe
   const f=await mainFixture({testMode:false});f.manager.downloads=[{id:'a',status:'completed'},{id:'new',status:'queued'}];
   await assert.rejects(f.scheduler.options.onExecute('shutdown',{ids:['a']}),/queue changed/);
   assert.equal(f.powerCalls.length,0);
+});
+
+test('the final OS boundary rejects pending or adverse scan results for both actions',async()=>{
+  for(const mode of ['close','shutdown'])for(const status of ['queued','scanning','threat','error','missing','unavailable','review','unknown']){
+    const f=await mainFixture({testMode:false});f.manager.downloads=[{id:'a',status:'completed',scan:{status}}];
+    await assert.rejects(f.scheduler.options.onExecute(mode,{ids:['a']}),/Defender scans|scan.*blocked/i);
+    assert.equal(f.powerCalls.length,0);assert.equal(f.saved,0);assert.equal(f.quit,undefined);
+  }
+});
+
+test('a late scan of completed history also blocks the final OS boundary',async()=>{
+  const f=await mainFixture({testMode:false});f.manager.downloads=[{id:'a',status:'completed'},{id:'old',status:'completed',scan:{status:'queued'}}];
+  await assert.rejects(f.scheduler.options.onExecute('shutdown',{ids:['a']}),/Defender scans/);assert.equal(f.powerCalls.length,0);
 });
 test('shutdown command requests graceful immediate shutdown without forced app termination',async()=>{
   const f=await mainFixture({testMode:false});f.manager.downloads=[{id:'a',status:'completed'}];

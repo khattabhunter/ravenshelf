@@ -28,6 +28,8 @@ jobs:
         run: npm test
       - name: Build unsigned portable application
         run: npm run dist -- --config.compression=normal
+      - name: Verify packaged security fuses
+        run: npm run verify:build
       - name: Write SHA-256 checksum
         shell: pwsh
         run: |

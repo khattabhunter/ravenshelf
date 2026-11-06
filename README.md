@@ -2,15 +2,15 @@
 
 [![Tests](https://github.com/khattabhunter/ravenshelf/actions/workflows/test.yml/badge.svg)](https://github.com/khattabhunter/ravenshelf/actions/workflows/test.yml) [![CodeQL](https://github.com/khattabhunter/ravenshelf/actions/workflows/codeql.yml/badge.svg)](https://github.com/khattabhunter/ravenshelf/actions/workflows/codeql.yml)
 
-**A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account, no tracking, and every finished file can be checked by Microsoft Defender.
+**A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.1)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.3.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.0) and download `Ravenshelf-0.3.0-Windows.exe` from **Assets**.
+1. Open the [v0.3.1 maintenance prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.1) and download `Ravenshelf-0.3.1-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -24,32 +24,34 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 
 | Protection | What it means for you |
 | --- | --- |
-| Built in the open by GitHub | Every release is built from the tagged source on GitHub's own Windows machines, after the full test suite passes. Nothing is built on a personal PC. |
+| Public release workflow | Published Windows releases are built on GitHub-hosted Windows machines after tests pass, with a matching source tag. |
 | Signed build record | Each release carries a signed provenance record you can check with one command, plus a SHA-256 checksum. |
-| No tracking | No account, no analytics and no telemetry. Your library and installed-game scan stay on your PC. |
-| Microsoft Defender scan | Finished files are scanned with Microsoft Defender one at a time, and the result is shown on each download card. You can turn this off or scan again at any time. |
+| No app telemetry | No account, analytics endpoint or automatic inventory upload. External sites still receive normal network requests. |
+| Microsoft Defender scan | Finished files are scanned one at a time. Only an explicitly recognized clean result is labeled as no threats found; unclear results need review. You can turn automatic scans off or scan again. |
 | Downloads never run by themselves | Ravenshelf never extracts archives or starts installers. Host windows only hand over archive file types. |
-| Home-network protection | Requests to your router or other local devices are blocked, checked again at connection time and after every redirect, so a web page cannot use Ravenshelf to reach your home network. |
-| Encrypted cookies | Host cookies saved with your queue, and the host browser's cookie store, are encrypted with your Windows account. |
+| Home-network protection | File and cover-image requests check public addresses at connection time and after redirects. Protected host windows have separate domain restrictions; these controls are not a universal browser-security guarantee. |
+| Protected saved headers | Queue cookies and other request headers are encrypted with your Windows account. If encryption fails, they stay in memory and are omitted from saved queue data; affected links are refreshed after restart. The host browser's cookie store is also encrypted. |
 | Locked-down windows | Pages run sandboxed with a strict content policy and no access to Node.js; pop-ups, off-site navigation, camera, microphone and other permissions are blocked. |
-| Hardened executable | Electron's run-as-Node, `NODE_OPTIONS`, debugger flags and extra `file://` privileges are switched off, and app code loads only from its packaged archive, so other programs cannot reuse Ravenshelf to run their own code. |
+| Hardened executable | Electron's run-as-Node, `NODE_OPTIONS`, debugger flags and extra `file://` privileges are switched off. App code loads only from its packaged archive, with embedded archive-integrity validation enabled. This is hardening, not a digital publisher signature. |
 | Automatic checks | Over 200 automated tests run on Windows for every change and release. CodeQL scans the code and workflows, and Dependabot proposes dependency updates. |
 
 **Limits, honestly stated:** a Defender scan and a working link do not prove a file is safe. Ravenshelf does not hide your IP address from the websites it connects to, and it is not an antivirus. See [PRIVACY.md](docs/PRIVACY.md) and [SECURITY.md](SECURITY.md) for details and how to report a problem privately.
 
 ### Verify your download
 
-Check that the file is exactly the one GitHub built, in PowerShell:
+Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.3.0-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.3.1-Windows.exe -Algorithm SHA256
 ```
 
-The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also confirm it was built by this repository's release workflow:
+The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.3.0-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.3.1-Windows.exe --repo khattabhunter/ravenshelf
 ```
+
+A matching checksum detects a mismatch with the published file; provenance records its build origin. Neither certifies that software is malware-free, and the executable remains unsigned.
 
 ## Features
 
@@ -64,11 +66,11 @@ gh attestation verify .\Ravenshelf-0.3.0-Windows.exe --repo khattabhunter/ravens
 | Link handling | Supported host adapters, encrypted paste expansion, protected host windows, link export and JDownloader handoff. |
 | On this PC | Reads supported launcher records and local file metadata to show installed games and reported versions. |
 | Gameplay and guides | YouTube gameplay search in a separate viewer, plus clearly labeled guide searches. |
-| Finish actions | Optional app close or laptop shutdown after successful queue completion, with a cancellable countdown. |
+| Finish actions | Optional app close or laptop shutdown after transfers and requested scans finish successfully, with a cancellable countdown and a final safety check. Unclear or adverse scan results block the action. |
 
 ## Host support
 
-| Source | Status in 0.3.0 |
+| Source | Status in 0.3.1 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
@@ -103,9 +105,10 @@ To build the Windows portable executable:
 
 ```powershell
 npm run dist
+npm run verify:build
 ```
 
-The output appears in `dist/`. See [BUILDING.md](docs/BUILDING.md) for requirements, validation and packaging details, and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
+The output appears in `dist/`. The verification command inspects the packaged executable's actual Electron fuse settings. See [BUILDING.md](docs/BUILDING.md) for requirements, validation and packaging details, and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## License and independence
 

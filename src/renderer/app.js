@@ -33,7 +33,7 @@ const icons = {
   book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1zm0 0v15"/>',
 };
 
-const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.3.0' };
+const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.3.1' };
 const catalog = { page: 1, search: '', section: 'newest', games: [], hasMore: false, loading: false, request: 0 };
 let catalogAutoReady = false;
 let catalogCheckSeen = null;
@@ -559,6 +559,7 @@ function scanText(item) {
   if (scan.status === 'scanning') return { tone: 'busy', glyph: 'shield', text: 'Scanning with Microsoft Defender…' };
   if (scan.status === 'clean') return { tone: 'clean', glyph: 'shield', text: scan.message || 'Microsoft Defender found no threats.' };
   if (scan.status === 'threat') return { tone: 'threat', glyph: 'alert', text: scan.message || 'Microsoft Defender found a threat. Do not open this file.' };
+  if (scan.status === 'review') return { tone: '', glyph: 'alert', text: scan.message || 'The scan result needs review in Windows Security → Protection history. Automatic close and shutdown are waiting.' };
   return { tone: '', glyph: 'alert', text: scan.message || 'This file was not scanned.' };
 }
 function downloadActionButton(item, action, label, glyph) {
@@ -765,6 +766,9 @@ function applyState(next) {
   if (Array.isArray(next.downloads)) state.downloads = next.downloads;
   if (next.settings) state.settings = { ...state.settings, ...next.settings };
   if (next.version) state.version = next.version;
+  if (typeof next.headerStorageWarning === 'string') state.headerStorageWarning = next.headerStorageWarning;
+  const credentialWarning = $('#credential-warning');
+  if (credentialWarning) { credentialWarning.textContent = state.headerStorageWarning || ''; credentialWarning.hidden = !state.headerStorageWarning; }
   if(next.completionAction)state.completionAction=next.completionAction;
   if(next.catalogRefresh)receiveCatalogCheck(next.catalogRefresh);
   $('#version').textContent = `v${state.version}`;

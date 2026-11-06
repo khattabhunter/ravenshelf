@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — Maintenance prerelease
+
+### Fixed
+
+- Automatic close and shutdown wait for queued/running Defender scans. Unclear, failed, unavailable, missing-file and threat results block the action; readiness is checked again before the final action.
+- Defender's successful exit code alone no longer means no threats were found. A clean result requires recognized explicit clean output; ambiguous or unsupported output is shown as needing review. Threat/remediation evidence takes precedence.
+- Queue request headers never fall back to plaintext when Windows encryption is unavailable or fails. Headers remain in memory, saved headers are empty, and affected links are refreshed before a resumed request after restart. Legacy plaintext is removed from the current saved queue, and the app shows a storage warning when headers cannot be saved securely.
+- Enabled embedded ASAR-integrity validation alongside archive-only application loading. Added `npm run verify:build` to inspect the actual packaged executable's fuse settings.
+
+The executable remains unsigned. This maintenance release does not change download tuning or claim a measured speed increase. See [the release notes](docs/RELEASE-0.3.1.md).
+
 ## 0.3.0 — Ravenshelf
 
 Atlas Library is now **Ravenshelf**. Your library, collections, download queue, saved cookies and default download folder are kept.

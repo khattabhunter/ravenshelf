@@ -154,7 +154,7 @@ app.whenReady().then(async()=>{
   installedCache=loadJSON(path.join(app.getPath('userData'),'installed-games.json'),{games:[],scannedAt:null,warnings:[],locations:[]});
   completion=new CompletionAction({getDownloads:()=>manager.downloads,onChange:publishState,onExecute:async(mode,{ids})=>{
     if(isTest)throw new Error('System completion actions are disabled in this isolated test session.');
-    if(manager.downloads.some(d=>!['completed','cancelled'].includes(d.status))||ids.some(id=>manager.downloads.find(d=>d.id===id)?.status!=='completed'))throw new Error('The queue changed; the completion action was stopped.');
+    require('./completion-policy.cjs').assertCompletionReady(manager.downloads,ids);
     manager.save();
     if(mode==='close'){app.quit();return;}
     // Countdown stays inside Ravenshelf. Windows /t greater than 0 implies /f, so use
@@ -222,7 +222,7 @@ app.whenReady().then(async()=>{
     const d=manager.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
     if(action==='openFolder')return shell.openPath(d.folder);
     if(!['pause','resume','cancel','retry','scan'].includes(action))throw new Error('Unknown action.');
-    if(['resume','retry'].includes(action))assertQueueAvailable();
+    if(['resume','retry','scan'].includes(action))assertQueueAvailable();
     return manager.action(id,action);
   });
   handle('chooseFolder',async()=>{const r=await dialog.showOpenDialog(win,{title:'Choose download folder',defaultPath:manager.settings.downloadDir,properties:['openDirectory','createDirectory']});if(r.canceled)return null;manager.updateSettings({downloadDir:r.filePaths[0]});return r.filePaths[0];});

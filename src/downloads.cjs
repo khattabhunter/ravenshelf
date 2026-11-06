@@ -7,6 +7,7 @@ const {safeFetch,safeURL}=require('./net.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace}=require('./parallel-download.cjs');
 const APP_VERSION=require('../package.json').version;
+const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
 function safeName(value,fallback='download') {
   let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
   if(!s || s==='.' || s==='..') s=fallback;
@@ -22,7 +23,7 @@ function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'u
 class DownloadManager extends EventEmitter {
   constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null}) {
     super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile;
-    this.running=new Map(); this.tasks=new Set(); this.stopping=false; this.scanQueue=[]; this.scanning=null;
+    this.running=new Map(); this.tasks=new Set(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     const stored=loadJSON(stateFile,{});
     this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],defenderScan:true,...stored.settings};
     this.settings.defenderScan=this.settings.defenderScan!==false;
@@ -35,25 +36,31 @@ class DownloadManager extends EventEmitter {
       if('sealedHeaders' in d){
         // Headers that cannot be opened (another Windows account or PC) are dropped;
         // the job then refreshes its link from the source page when it resumes.
-        d.headers=this.vault?.open(d.sealedHeaders)||{};delete d.sealedHeaders;
+        const opened=this.vault?.open(d.sealedHeaders);
+        d.headers=opened||{};if(!opened)d.headersNeedRefresh=true;delete d.sealedHeaders;
       }else if(d.headers&&typeof d.headers==='object'&&Object.keys(d.headers).length)plainHeaders=true;
       if(!d.headers||typeof d.headers!=='object'||Array.isArray(d.headers))d.headers={};
     }
-    // Rewrite profiles from older versions so their saved cookies are sealed.
-    if(plainHeaders&&this.vault?.available())this.save();
+    // Remove legacy plaintext even when encryption is unavailable. Working
+    // credentials remain in memory, but only sealed credentials go to disk.
+    if(plainHeaders||this.downloads.some(d=>d.headersNeedRefresh))this.save();
     // Scans interrupted by closing the app run again on the next start.
     for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
     if(this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
     this.timer=setInterval(()=>{if(this.running.size) this.save();},2000); this.timer.unref();
   }
-  state(){ return {downloads:this.downloads.map(({headers,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION}; }
+  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning}; }
   persisted(d){
-    const {headers,sealedHeaders,...rest}=d;
-    if(!headers||!Object.keys(headers).length)return {...rest,headers:{}};
-    const sealed=this.vault?.seal(headers);
-    return sealed?{...rest,sealedHeaders:sealed}:{...rest,headers};
+    const {headers,sealedHeaders,headersNeedRefresh,...rest}=d;
+    if(!headers||!Object.keys(headers).length)return {...rest,headers:{},...(headersNeedRefresh?{headersNeedRefresh:true}:{})};
+    let sealed=null;try{sealed=this.vault?.seal(headers);}catch{}
+    return sealed?{...rest,sealedHeaders:sealed}:{...rest,headers:{},headersNeedRefresh:true};
   }
-  save(){atomicJSON(this.stateFile,{settings:this.settings,downloads:this.downloads.map(d=>this.persisted(d))});}
+  save(){
+    const downloads=this.downloads.map(d=>this.persisted(d));
+    this.headerStorageWarning=downloads.some(d=>d.headersNeedRefresh)?HEADER_STORAGE_WARNING:'';
+    atomicJSON(this.stateFile,{settings:this.settings,downloads});
+  }
   changed(){this.emit('state',this.state());}
   updateSettings(patch){this.settings={...this.settings,...patch};this.settings.defenderScan=this.settings.defenderScan!==false;this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
   add({links,gameTitle}) {
@@ -113,20 +120,26 @@ class DownloadManager extends EventEmitter {
     let handle,rateTimer,refreshPromise;
     const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
     rateTimer=setInterval(()=>{if(d.status==='downloading'){d.speed=rateMeter.sample(d.received);this.changed();}},500);
+    const refreshHeaders=()=>{
+      if(!refreshPromise)refreshPromise=(async()=>{
+        if(!this.resolveLink)throw new Error('Saved sign-in details are unavailable. Check this download link again before resuming.');
+        const fresh=await this.resolveLink(d.sourceUrl||d.url);
+        if(fresh.status!=='ready')throw new Error(fresh.message||'This link needs a browser check.');
+        d.url=safeURL(fresh.url).href;d.headers={...fresh.headers};if(fresh.referer)d.headers.Referer=safeURL(fresh.referer).href;
+        delete d.headersNeedRefresh;
+      })().finally(()=>{refreshPromise=null;});
+      return refreshPromise;
+    };
     const request=async(extraHeaders,signal=controller.signal)=>{
       signal.throwIfAborted();
+      if(d.headersNeedRefresh){await refreshHeaders();signal.throwIfAborted();}
       const originalUrl=d.url;
       let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
       lastActivity=Date.now();
       if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url){
         await res.body?.cancel();
         if(originalUrl===d.url){
-          if(!refreshPromise)refreshPromise=(async()=>{
-            const fresh=await this.resolveLink(d.sourceUrl);
-            if(fresh.status!=='ready')throw new Error(fresh.message||'This link needs a browser check.');
-            d.url=safeURL(fresh.url).href;d.headers={...fresh.headers};if(fresh.referer)d.headers.Referer=safeURL(fresh.referer).href;
-          })().finally(()=>{refreshPromise=null;});
-          await refreshPromise;
+          await refreshHeaders();
         }
         signal.throwIfAborted();
         res=await this.fetcher(d.url,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
@@ -228,12 +241,14 @@ class DownloadManager extends EventEmitter {
     this.scanning=id;d.scan={status:'scanning',startedAt:new Date().toISOString()};this.changed();
     try{
       const result=await this.scanFile(path.join(d.folder,d.name));
-      const status=['clean','threat','missing','unavailable','error'].includes(result?.status)?result.status:'error';
+      const status=['clean','threat','missing','unavailable','error','review'].includes(result?.status)?result.status:'error';
       d.scan={status,message:String(result?.message||'').slice(0,300),scannedAt:result?.scannedAt||new Date().toISOString()};
     }catch{d.scan={status:'error',message:'Microsoft Defender could not finish this scan.',scannedAt:new Date().toISOString()};}
     finally{this.scanning=null;this.save();this.changed();}
     return this.pumpScans();
   }
+  // Manual closing stays responsive. Queued/running scan states are persisted
+  // and resumed on next launch; automatic completion waits for scans beforehand.
   async stop(){this.stopping=true;clearInterval(this.timer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}await Promise.allSettled([...this.tasks]);this.save();}
 }
 module.exports={DownloadManager,safeName,atomicJSON,loadJSON};
