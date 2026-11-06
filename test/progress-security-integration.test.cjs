@@ -155,6 +155,7 @@ test('completion observes scans immediately without progress and remains blocked
   manager.add({ gameTitle: 'Fixture game', links: [link('scan')] });
   completion.arm('close');
   manager.publishProgress();
+  await until(()=>typeof releaseFile==='function','file request after local validation');
   releaseFile(response('abc', { 'content-length': '3', etag: '"revision-1"' }));
   await until(() => scanResolvers.length === 1, 'pending scan');
   assert.ok(events.some(event => event.type === 'state' && event.value.downloads[0]?.scan?.status === 'queued'));
@@ -183,7 +184,7 @@ function managerWithControlledTimers(clock) {
     require: request => request === './rate-meter.cjs' && clock
       ? { RateMeter: class extends RateMeter { constructor(options) { super({ ...options, clock }); } } } : localRequire(request),
     module: exported, exports: exported.exports, __dirname: path.dirname(filename),
-    Buffer, URL, AbortController, setImmediate,
+    Buffer, URL, Headers, AbortController, setImmediate,
     setInterval(callback, milliseconds) { const timer = { callback, milliseconds, cleared: false, unref() {} }; timers.push(timer); return timer; },
     clearInterval(timer) { if (timer) timer.cleared = true; },
   }, { filename });

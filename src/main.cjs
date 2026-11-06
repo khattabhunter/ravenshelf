@@ -15,6 +15,7 @@ const catalog=require('./catalog.cjs');
 const {scanInstalledGames}=require('./installed-games.cjs');
 const {CompletionAction}=require('./completion-action.cjs');
 const {CatalogRefresh}=require('./catalog-refresh.cjs');
+const {publicErrorMessage,publicError,ERROR_RESPONSE_HEADERS}=require('./public-errors.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,manager,completion,catalogRefresh,installedCache,scanPromise;
 const checked=new Map(),hostWindows=new Set(),mediaWindows=new Set();
@@ -46,8 +47,8 @@ function validateLinks(urls){
   return [...new Set(urls.map(x=>safeURL(typeof x==='string'?x:x.url).href))];
 }
 function handle(name,fn){ipcMain.handle('atlas:'+name,async(event,value)=>{
-  if(!win || event.sender!==win.webContents || event.senderFrame!==win.webContents.mainFrame || event.senderFrame.url!=='atlas://app/index.html')throw new Error('Invalid app request.');
-  return fn(value);
+  if(!win || event.sender!==win.webContents || event.senderFrame!==win.webContents.mainFrame || event.senderFrame.url!=='atlas://app/index.html')throw publicError(new Error('Invalid app request.'));
+  try{return await fn(value);}catch(error){throw publicError(error,name);}
 });}
 let updateSequence=0;
 function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,updateSequence:++updateSequence};}
@@ -119,7 +120,7 @@ async function openHost({url,gameTitle='Imported files'}={}){
       const cookies=await ses.cookies.get({url:direct});
       const entry={url:direct,sourceUrl:u.href,filename,size:item.getTotalBytes(),host:root,status:'ready',headers:{'User-Agent':browser.webContents.getUserAgent(),Referer:u.href,Cookie:cookies.map(c=>`${c.name}=${c.value}`).join('; ')}};
       assertQueueAvailable();manager.add({links:[entry],gameTitle});browser.close();
-    }catch(err){dialog.showErrorBox('Could not queue file',err.message);}
+    }catch(error){dialog.showErrorBox('Could not queue file',publicErrorMessage(error,'openHost'));}
   };
   ses.on('will-download',onDownload);
   browser.on('closed',()=>{hostWindows.delete(browser);ses.removeListener('will-download',onDownload);});
@@ -133,15 +134,15 @@ app.whenReady().then(async()=>{
     '/styles.css':['styles.css','text/css; charset=utf-8'],
     '/app.js':['app.js','text/javascript; charset=utf-8']
   };
-  protocol.handle('atlas',request=>{
+  protocol.handle('atlas',async request=>{
     try {
     const u=new URL(request.url);
-    if(u.hostname!=='app')return new Response('Not found',{status:404});
-    if(u.pathname==='/image')return imageResponse(request);
+    if(u.hostname!=='app')return new Response('Not found',{status:404,headers:ERROR_RESPONSE_HEADERS});
+    if(u.pathname==='/image')return await imageResponse(request);
     const entry=resources[u.pathname];
-    if(!entry)return new Response('Not found',{status:404});
+    if(!entry)return new Response('Not found',{status:404,headers:ERROR_RESPONSE_HEADERS});
     return new Response(fs.readFileSync(path.join(__dirname,'renderer',entry[0])),{headers:{'content-type':entry[1],'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}});
-    } catch(err) {console.error('Protocol error',err);return new Response(String(err),{status:500});}
+    } catch {console.error('Ravenshelf could not load an app resource.');return new Response('App resource unavailable',{status:500,headers:ERROR_RESPONSE_HEADERS});}
   });
   session.defaultSession.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));
   session.defaultSession.setPermissionCheckHandler(()=>false);
@@ -172,7 +173,7 @@ app.whenReady().then(async()=>{
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
   catalogRefresh=new CatalogRefresh({fetchLatest:()=>catalog.listCatalog({section:'newest',page:1,forceRefresh:true}),onChange:publishState,
     intervalMs:isTest&&Number.isFinite(testInterval)&&testInterval>=15000?Math.min(testInterval,300000):300000});
-  const checkCatalogIfDue=()=>{catalogRefresh.check().catch(error=>console.error('Catalogue refresh failed',error.message));};
+  const checkCatalogIfDue=()=>{catalogRefresh.check().catch(()=>console.error('Catalogue refresh failed.'));};
   powerMonitor.on('resume',checkCatalogIfDue);
   win.on('focus',checkCatalogIfDue);
   win.on('restore',checkCatalogIfDue);
@@ -211,7 +212,7 @@ app.whenReady().then(async()=>{
       const result={...await resolveAppLink(unique[i]),sourceUrl:unique[i]};
       const {headers,...publicResult}=result;results[i]=publicResult;
       if(result.status==='ready')checked.set(unique[i],result);
-    }catch(err){results[i]={sourceUrl:unique[i],url:unique[i],host:new URL(unique[i]).hostname,status:'unavailable',message:err.message};}}}));
+    }catch(error){results[i]={sourceUrl:unique[i],url:unique[i],host:new URL(unique[i]).hostname,status:'unavailable',message:publicErrorMessage(error,'checkLinks')};}}}));
     return results;
   });
   handle('addDownloads',({links,gameTitle})=>{
@@ -260,7 +261,7 @@ app.whenReady().then(async()=>{
   win.once('ready-to-show',()=>win.show());
   catalogRefresh.start();
   await win.loadURL('atlas://app/index.html');
-}).catch(err=>{dialog.showErrorBox('Ravenshelf could not start',err.stack||err.message);app.quit();});
+}).catch(()=>{console.error('Ravenshelf startup failed.');dialog.showErrorBox('Ravenshelf could not start','Ravenshelf could not start. Close it and try again. If the problem continues, replace the app with a fresh copy of the latest release.');app.quit();});
 app.on('window-all-closed',()=>app.quit());
 let exiting=false;
 app.on('before-quit',event=>{

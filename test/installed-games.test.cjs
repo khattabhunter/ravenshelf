@@ -66,3 +66,81 @@ test('Update installers, verification utilities and REDlauncher are excluded',()
   assert.equal(t.parseUninstall({title:'REDlauncher',installPath:root}),null);
   assert.equal(t.parseUninstall({title:'wallpaper_engine',installPath:root}),null);
 });
+
+test('Bounded descriptor reads retain Steam, Epic and library manifest parsing',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');
+  fs.writeFileSync(manifest,'\uFEFF'+steam());
+  assert.equal(t.parseSteamManifest(t.readSmall(manifest),root,manifest).buildId,'987654');
+  const epic={DisplayName:'Example',InstallLocation:path.join(root,'Game'),AppName:'example',AppVersionString:'1.2.3',LaunchExecutable:'Game.exe'};
+  fs.writeFileSync(manifest,JSON.stringify(epic));
+  assert.equal(t.parseEpicManifest(t.readSmall(manifest),manifest).version,'1.2.3');
+  fs.writeFileSync(manifest,'"libraryfolders" { "0" "D:\\\\SteamLibrary" }');
+  assert.deepEqual(t.libraryRootsFromVdf(t.readSmall(manifest)),['D:\\SteamLibrary']);
+});
+
+test('Manifest reader uses one descriptor, handles short reads and accepts the exact byte limit',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest'),content='1234567890123456';
+  fs.writeFileSync(manifest,content);let opens=0,closes=0,reads=0;
+  const io={...fs,openSync(...args){opens++;return fs.openSync(...args);},closeSync(fd){closes++;return fs.closeSync(fd);},
+    readFileSync(){assert.fail('Manifest data must not reopen the filename.');},
+    readSync(fd,buffer,offset,length,position){assert.equal(typeof fd,'number');reads++;return fs.readSync(fd,buffer,offset,Math.min(length,3),position);}};
+  assert.equal(t.readSmall(manifest,content.length,io),content);
+  assert.equal(opens,1);assert.equal(closes,1);assert.ok(reads>2);
+});
+
+test('Oversized manifests are rejected without reading bytes and the handle is closed',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'x'.repeat(17));let closes=0;
+  const io={...fs,readSync(){assert.fail('Oversized files must not be read.');},closeSync(fd){closes++;return fs.closeSync(fd);}};
+  assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
+});
+
+test('Nonregular opened descriptors and final-path links are rejected before any data read',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'small');
+  for(const mode of ['nonregular','link']){
+    let closes=0;
+    const io={...fs,readSync(){assert.fail('Untrusted file types must not be read.');},closeSync(fd){closes++;return fs.closeSync(fd);},
+      fstatSync(...args){const stat=fs.fstatSync(...args);return mode==='nonregular'?Object.assign(Object.create(stat),{isFile:()=>false}):stat;},
+      lstatSync(file,...args){const stat=fs.lstatSync(file,...args);return mode==='link'&&file===manifest?Object.assign(Object.create(stat),{isSymbolicLink:()=>true}):stat;}};
+    assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
+  }
+});
+
+test('Replacing a manifest after open cannot substitute the replacement or return stale data',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'original');let closes=0;
+  const io={...fs,openSync(file,flags){const fd=fs.openSync(file,flags);fs.renameSync(file,path.join(root,'original'));fs.writeFileSync(file,'replaced');return fd;},
+    readSync(){assert.fail('Identity mismatch must be detected before reading.');},closeSync(fd){closes++;return fs.closeSync(fd);}};
+  assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
+});
+
+test('A manifest growing after validation cannot cause an unbounded read',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'original');let bytesRead=0,closes=0,grew=false;
+  const io={...fs,readSync(fd,buffer,offset,length,position){if(!grew){grew=true;fs.appendFileSync(manifest,'x'.repeat(128));}const count=fs.readSync(fd,buffer,offset,length,position);bytesRead+=count;return count;},
+    closeSync(fd){closes++;return fs.closeSync(fd);}};
+  assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(bytesRead,17);assert.equal(closes,1);
+});
+
+test('Same-size mutation during a manifest read is rejected by descriptor metadata',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'original');let stats=0,closes=0;
+  const io={...fs,fstatSync(...args){const stat=fs.fstatSync(...args);return ++stats===2?Object.assign(Object.create(stat),{mtimeNs:stat.mtimeNs+1n}):stat;},
+    closeSync(fd){closes++;return fs.closeSync(fd);}};
+  assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
+});
+
+test('Windows junctions and directory symlinks are rejected before the manifest opens',ctx=>{
+  const root=fixture(ctx),directory=path.join(root,'real'),alias=path.join(root,'alias');
+  fs.mkdirSync(directory);fs.writeFileSync(path.join(directory,'manifest'),'small');fs.symlinkSync(directory,alias,process.platform==='win32'?'junction':'dir');
+  const io={...fs,openSync(){assert.fail('Reparse ancestors must not be opened.');}};
+  assert.throws(()=>t.readSmall(path.join(alias,'manifest'),16,io),/bounded regular file/);
+});
+
+test('Changed ancestor identity before or after reading invalidates a manifest',ctx=>{
+  const root=fixture(ctx),manifest=path.join(root,'manifest');fs.writeFileSync(manifest,'small');
+  for(const phase of ['before','after']){
+    let opened=false,ended=false,closes=0;
+    const io={...fs,openSync(...args){const fd=fs.openSync(...args);opened=true;return fd;},
+      lstatSync(file,...args){const stat=fs.lstatSync(file,...args);return file===root&&(phase==='before'?opened:ended)?Object.assign(Object.create(stat),{ino:stat.ino+1n}):stat;},
+      readSync(...args){if(phase==='before')assert.fail('Changed parent must be detected before reading.');const count=fs.readSync(...args);if(!count)ended=true;return count;},
+      closeSync(fd){closes++;return fs.closeSync(fd);}};
+    assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
+  }
+});

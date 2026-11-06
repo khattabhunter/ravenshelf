@@ -19,7 +19,7 @@ Redact usernames and personal paths from logs or screenshots. Signed direct-down
 - Releases are built on GitHub-hosted Windows machines from tagged source after the test suite passes, and carry a SHA-256 checksum and a signed build-provenance attestation (`gh attestation verify <file> --repo khattabhunter/ravenshelf`).
 - The executable disables Electron's run-as-Node mode, `NODE_OPTIONS`, debugger flags and extra `file://` privileges. From 0.3.1, archive-only application loading is paired with embedded ASAR-integrity validation. `npm run verify:build` inspects the actual packaged fuse values. The executable remains unsigned; these settings are not a publisher-authenticity guarantee.
 - Finished downloads can be scanned with Microsoft Defender. A successful process exit alone is not labeled clean: recognized explicit clean output is required, and ambiguous output needs review. Threat or remediation evidence takes precedence. Ravenshelf does not change antivirus settings; no scan result certifies a file as harmless.
-- CodeQL code scanning and Dependabot dependency updates run on the repository.
+- CodeQL security-and-quality analysis, locked-dependency audits and Dependabot dependency updates run on the repository. A successful scan workflow does not mean its alert list is empty.
 
 - The main application page uses an isolated preload bridge with a limited set of operations. Remote host and gameplay windows do not receive that bridge.
 - File and cover-image requests enforce HTTPS and public-network checks. Cover images use a bounded raster-only loader without browser-session credentials. Supported-host windows restrict navigation, popups and requests, but they are not an antivirus or a universal ad blocker.

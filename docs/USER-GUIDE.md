@@ -1,6 +1,6 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.3.2 for Windows, a maintenance prerelease.
+This guide describes Ravenshelf 0.3.3 for Windows, a security maintenance prerelease.
 
 ## Start and update Ravenshelf
 

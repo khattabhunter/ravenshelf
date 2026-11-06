@@ -4,13 +4,13 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.2)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.3)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.3.2 maintenance prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.2) and download `Ravenshelf-0.3.2-Windows.exe` from **Assets**.
+1. Open the [v0.3.3 security maintenance prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.3.3) and download `Ravenshelf-0.3.3-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -33,7 +33,7 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 | Protected saved headers | Queue cookies and other request headers are encrypted with your Windows account. If encryption fails, they stay in memory and are omitted from saved queue data; affected links are refreshed after restart. The host browser's cookie store is also encrypted. |
 | Locked-down windows | Pages run sandboxed with a strict content policy and no access to Node.js; pop-ups, off-site navigation, camera, microphone and other permissions are blocked. |
 | Hardened executable | Electron's run-as-Node, `NODE_OPTIONS`, debugger flags and extra `file://` privileges are switched off. App code loads only from its packaged archive, with embedded archive-integrity validation enabled. This is hardening, not a digital publisher signature. |
-| Automatic checks | Over 200 automated tests run on Windows for every change and release. CodeQL scans the code and workflows, and Dependabot proposes dependency updates. |
+| Automatic checks | Automated tests and dependency audits run on Windows for changes and releases. CodeQL's security-and-quality suite scans the code and workflows; Dependabot proposes dependency updates. A successful scan run does not mean there are no alerts. |
 
 **Limits, honestly stated:** a Defender scan and a working link do not prove a file is safe. Ravenshelf does not hide your IP address from the websites it connects to, and it is not an antivirus. See [PRIVACY.md](docs/PRIVACY.md) and [SECURITY.md](SECURITY.md) for details and how to report a problem privately.
 
@@ -42,13 +42,13 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.3.2-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.3.3-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.3.2-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.3.3-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
 A matching checksum detects a mismatch with the published file; provenance records its build origin. Neither certifies that software is malware-free, and the executable remains unsigned.
@@ -70,7 +70,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Host support
 
-| Source | Status in 0.3.2 |
+| Source | Status in 0.3.3 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |

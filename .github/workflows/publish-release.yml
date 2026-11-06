@@ -61,6 +61,8 @@ jobs:
         run: npm ci
       - name: Run offline tests
         run: npm test
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=high
       - name: Build unsigned portable application
         run: npm run dist -- --config.compression=normal
       - name: Verify packaged security fuses

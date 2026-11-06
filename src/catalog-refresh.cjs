@@ -1,4 +1,5 @@
 'use strict';
+const {publicErrorMessage}=require('./public-errors.cjs');
 
 // Main-process polling is independent of Chromium's background-tab throttling.
 // Requests, clocks and timers are injected so tests do not wait or access a site.
@@ -64,7 +65,7 @@ class CatalogRefresh {
       if(fingerprint!==this.fingerprint){this.revision++;this.fingerprint=fingerprint;}
       this.latest=latest;this.lastCheckedAt=new Date(this.clock()).toISOString();this.error='';
     }).catch(error=>{
-      if(this.enabled&&generation===this.generation)this.error=String(error?.message||'The catalogue could not be refreshed.').slice(0,900);
+      if(this.enabled&&generation===this.generation)this.error=publicErrorMessage(error,'catalogRefresh');
     }).finally(()=>{
       if(this.inFlight===task)this.inFlight=null;
       if(generation!==this.generation){

@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { DownloadManager, safeName } = require('../src/downloads.cjs');
+const { DownloadManager, safeName, atomicJSON } = require('../src/downloads.cjs');
 
 const fixtureRoot = path.resolve(__dirname, '.download-fixtures');
 fs.mkdirSync(fixtureRoot, { recursive: true });
@@ -44,7 +44,7 @@ function seedPartial({ status = 'paused', etag = '"revision-1"', lastModified = 
     return { settings: { downloadDir, concurrency: 1, favorites: [] }, downloads: [{
       id: 'partial', name: 'part01.rar', folder, gameTitle: 'Game', status,
       url: 'https://files.example.com/partial', sourceUrl: 'https://host.example.com/partial',
-      received: content.length, total: 6, etag, lastModified, speed: 99, headers: {}, error: '',
+      received: content.length, total: 6, etag, lastModified, lastModifiedVerified:Boolean(lastModified), speed: 99, headers: {}, error: '',
     }] };
   };
 }
@@ -304,4 +304,97 @@ test('safe filenames remove path separators, reserved devices, and trailing Wind
   assert.equal(/[\\/:]/.test(safeName('../../outside.rar')), false);
   assert.match(safeName('CON.rar'), /^_/);
   assert.equal(/[. ]$/.test(safeName('a'.repeat(179) + '.more')), false, 'truncation must not leave a trailing dot');
+});
+
+test('a partial created during a network wait is never truncated or overwritten', async t => {
+  let release,requested=false,cancelled=false;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const {manager}=fixture(t,async()=>{requested=true;await gate;return response(new ReadableStream({cancel(){cancelled=true;}}),{'content-length':'3'});});
+  manager.add({gameTitle:'Game',links:[link('local-race')]});
+  await until(()=>requested,'host request');
+  const d=manager.downloads[0],partial=path.join(d.folder,d.name+'.atlas-part');
+  fs.writeFileSync(partial,'keep this file');release();await finished(manager);
+  assert.equal(d.status,'error');assert.equal(fs.readFileSync(partial,'utf8'),'keep this file');
+  assert.equal(cancelled,true,'unconsumed host response is cancelled after a file error');
+});
+
+test('replacing a saved partial during a request neither writes the replacement nor commits a new validator',async t=>{
+  let release,requested=false;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const {manager}=fixture(t,async()=>{requested=true;await gate;return response('uvwxyz',{'content-length':'6',etag:'"revision-2"'});},seedPartial());
+  manager.action('partial','resume');await until(()=>requested,'resume request');
+  const d=manager.downloads[0],partial=path.join(d.folder,d.name+'.atlas-part'),old=partial+'.original';
+  fs.renameSync(partial,old);fs.writeFileSync(partial,'private replacement');
+  release();await finished(manager);
+  assert.equal(d.status,'error');assert.equal(d.etag,'"revision-1"');
+  assert.equal(fs.readFileSync(partial,'utf8'),'private replacement');assert.equal(fs.readFileSync(old,'utf8'),'abc');
+  assert.equal(fs.existsSync(path.join(d.folder,d.name)),false);
+});
+
+test('a resumed partial changed in place during the request is rejected before appending',async t=>{
+  let release,requested=false;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const {manager}=fixture(t,async()=>{requested=true;await gate;return response('def',{'content-range':'bytes 3-5/6',etag:'"revision-1"'},206);},seedPartial());
+  manager.action('partial','resume');await until(()=>requested,'resume request');
+  const d=manager.downloads[0],partial=path.join(d.folder,d.name+'.atlas-part');
+  fs.appendFileSync(partial,'X');release();await finished(manager);
+  assert.equal(d.status,'error');assert.equal(fs.readFileSync(partial,'utf8'),'abcX');
+});
+
+test('hard-linked partial files are refused before a download can modify another name',async t=>{
+  let requested=false;
+  const {manager}=fixture(t,async()=>{requested=true;return response('def',{'content-range':'bytes 3-5/6',etag:'"revision-1"'},206);},(root,dir)=>{
+    const stored=seedPartial()(root,dir),partial=path.join(dir,'Game','part01.rar.atlas-part');
+    fs.linkSync(partial,path.join(root,'other-file'));return stored;
+  });
+  manager.action('partial','resume');await finished(manager);
+  assert.equal(manager.downloads[0].status,'error');assert.equal(requested,false);
+  assert.equal(fs.readFileSync(path.join(manager.downloads[0].folder,'part01.rar.atlas-part'),'utf8'),'abc');
+});
+
+for(const type of ['application/javascript','text/javascript','application/xml'])test(`single downloads reject ${type} before creating an archive`,async t=>{
+  const {manager}=fixture(t,async()=>response('unexpected active page',{'content-type':type}));
+  manager.add({gameTitle:'Game',links:[link('active-page')]});await finished(manager);
+  const d=manager.downloads[0];assert.equal(d.status,'error');
+  assert.equal(fs.existsSync(path.join(d.folder,d.name+'.atlas-part')),false);
+});
+
+test('a recent Last-Modified value does not authorize resuming a different same-second revision',async t=>{
+  const requests=[];let first=true;
+  const {manager}=fixture(t,async(_url,options)=>{
+    requests.push(options.headers);
+    if(first){first=false;return response('abc',{'content-length':'6','last-modified':'Fri, 06 Nov 2026 10:00:00 GMT',date:'Fri, 06 Nov 2026 10:00:01 GMT'});}
+    return response('UVWXYZ',{'content-length':'6','last-modified':'Fri, 06 Nov 2026 10:00:00 GMT',date:'Fri, 06 Nov 2026 10:00:02 GMT'});
+  });
+  manager.add({gameTitle:'Game',links:[link('recent-version')]});await finished(manager);
+  const d=manager.downloads[0];assert.equal(d.status,'error');assert.equal(d.lastModified,null);
+  manager.action(d.id,'retry');await finished(manager);
+  assert.equal(requests[1].Range,undefined);assert.equal(d.status,'completed');
+  assert.equal(fs.readFileSync(path.join(d.folder,d.name),'utf8'),'UVWXYZ');
+});
+
+test('old unverified Last-Modified checkpoints restart instead of being trusted on upgrade',async t=>{
+  let sent;
+  const {manager}=fixture(t,async(_url,options)=>{sent=options.headers;return response('UVWXYZ',{'content-length':'6'});},(root,dir)=>{
+    const stored=seedPartial({etag:null,lastModified:'Fri, 06 Nov 2026 10:00:00 GMT'})(root,dir);delete stored.downloads[0].lastModifiedVerified;return stored;
+  });
+  manager.action('partial','resume');await finished(manager);
+  assert.equal(sent.Range,undefined);assert.equal(manager.downloads[0].status,'completed');
+});
+
+test('queue saves never follow a preexisting predictable temporary-file hard link',async t=>{
+  const {root,stateFile}=fixture(t,async()=>response('unused'));
+  const victim=path.join(root,'other-data.txt');fs.writeFileSync(victim,'preserve existing data');
+  fs.linkSync(victim,stateFile+'.tmp');atomicJSON(stateFile,{downloads:[]});
+  assert.equal(fs.readFileSync(victim,'utf8'),'preserve existing data');
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile,'utf8')),{downloads:[]});
+});
+
+test('unexpected download exceptions do not leak paths or signed links through saved/UI errors',async t=>{
+  const secret='C:\\Users\\FixturePrivate\\secret.txt https://files.example.com/file?token=private-fixture';
+  const {manager,stateFile}=fixture(t,async()=>{throw new Error(secret);});
+  manager.add({gameTitle:'Game',links:[link('private-failure')]});await finished(manager);
+  assert.equal(manager.downloads[0].status,'error');
+  assert.doesNotMatch(JSON.stringify(manager.state()),/FixturePrivate|private-fixture/);
+  assert.doesNotMatch(fs.readFileSync(stateFile,'utf8'),/FixturePrivate|private-fixture/);
 });

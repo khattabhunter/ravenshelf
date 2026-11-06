@@ -7,6 +7,7 @@ const zlib = require('node:zlib');
 const { promisify } = require('node:util');
 const { setTimeout: delay } = require('node:timers/promises');
 const { safeFetch } = require('./net.cjs');
+const {publicErrorMessage}=require('./public-errors.cjs');
 const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
 const pbkdf2 = promisify(crypto.pbkdf2);
 const BASE = 'https://fitgirl-repacks.site';
@@ -190,7 +191,7 @@ function decodeBase58(value) {
   return Buffer.concat([Buffer.alloc(value.match(/^1*/)[0].length),num===0n?Buffer.alloc(0):Buffer.from(hex,'hex')]);
 }
 async function decryptPaste(data,key) {
-  if(data.status!==0 || data.v!==2 || !Array.isArray(data.adata)) throw new Error(data.message || 'Paste is unavailable or uses an unsupported format.');
+  if(data.status!==0 || data.v!==2 || !Array.isArray(data.adata)) throw new Error('Paste is unavailable or uses an unsupported format.');
   const spec=data.adata[0];
   if(!Array.isArray(spec)||spec.length!==8||spec[3]!==256||spec[4]!==128||spec[5]!=='aes'||spec[6]!=='gcm'||!['zlib','none'].includes(spec[7])) throw new Error('Unsupported paste encryption settings.');
   if(!Number.isInteger(spec[2])||spec[2]<1||spec[2]>1000000) throw new Error('Invalid paste derivation settings.');
@@ -231,10 +232,10 @@ async function expandLinks(text) {
         for(const found of extractUrls(decrypted)) { try{append(validUrl(found).href);}catch{} }
         const notes=decrypted.split(/\r?\n/).filter(line=>line.trim()&&!/https?:\/\//i.test(line)).join('\n').replace(/^#+\s*/gm,'').trim();
         if(notes) warnings.push(`Source notes: ${notes.slice(0,2000)}`);
-      } catch(error) { warnings.push(`Could not expand paste: ${error.message}`); }
+      } catch(error) { warnings.push(`Could not expand paste: ${publicErrorMessage(error,'paste')}`); }
     } else if(url.hostname==='fitgirl-repacks.site') {
       try { const game=await getGame(url.href); for(const group of game.groups) for(const link of group.urls) append(link); warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.'); }
-      catch(error){warnings.push(error.message);}
+      catch(error){warnings.push(publicErrorMessage(error,'getGame'));}
     } else append(url.href);
     if(links.length>=1000) break;
   }
@@ -397,7 +398,7 @@ async function resolveLink(value,{fastFetch}={}) {
     if(new URL(url).hostname==='datanodes.to') return manual(url,'DataNodes requires its browser download steps. Open the host and import the final direct file URL.');
     if(host==='FitGirl paste') return manual(url,'Import this paste to expand its file links first.');
     return await probeDirect(url,readableName(url),host);
-  } catch(error) { return manual(url,error.message||'Could not check this link.',host); }
+  } catch(error) { return manual(url,publicErrorMessage(error,'checkLinks'),host); }
 }
 
 module.exports={listGames,getGame,expandLinks,resolveLink,parseListing,limitedText};

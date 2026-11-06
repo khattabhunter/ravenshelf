@@ -55,7 +55,7 @@ test('failed checks retain good results and retry on the interval without a tigh
   let fail=false;const f=setup({fetchLatest:()=>{if(fail)throw Error('Site unavailable');return result('available');}});
   await f.action.start();const good=f.action.snapshot();fail=true;await f.advance(300000);
   const failed=f.action.snapshot();assert.equal(f.requests,2);assert.equal(failed.latest.games[0].title,'available');
-  assert.equal(failed.lastCheckedAt,good.lastCheckedAt);assert.equal(failed.revision,good.revision);assert.match(failed.error,/Site unavailable/);assert.equal(failed.checking,false);
+  assert.equal(failed.lastCheckedAt,good.lastCheckedAt);assert.equal(failed.revision,good.revision);assert.match(failed.error,/catalogue could not be refreshed/);assert.equal(failed.checking,false);
   await f.action.check();await f.advance(299999);assert.equal(f.requests,2);
   fail=false;await f.advance(1);assert.equal(f.requests,3);assert.equal(f.action.snapshot().error,'');f.action.stop();
 });

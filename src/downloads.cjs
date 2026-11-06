@@ -5,7 +5,9 @@ const crypto=require('node:crypto');
 const {EventEmitter}=require('node:events');
 const {safeFetch,safeURL}=require('./net.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
-const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace}=require('./parallel-download.cjs');
+const {openDownloadFile}=require('./download-file.cjs');
+const {publicErrorMessage}=require('./public-errors.cjs');
+const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
 const APP_VERSION=require('../package.json').version;
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
 function safeName(value,fallback='download') {
@@ -16,8 +18,12 @@ function safeName(value,fallback='download') {
 }
 function atomicJSON(file,data) {
   fs.mkdirSync(path.dirname(file),{recursive:true});
-  fs.writeFileSync(file+'.tmp',JSON.stringify(data,null,2));
-  fs.renameSync(file+'.tmp',file);
+  const temporary=file+'.'+crypto.randomUUID()+'.tmp';
+  const fd=fs.openSync(temporary,'wx',0o600);
+  try{fs.writeFileSync(fd,JSON.stringify(data,null,2));fs.fsyncSync(fd);}
+  catch(error){fs.closeSync(fd);fs.unlinkSync(temporary);throw error;}
+  fs.closeSync(fd);
+  try{fs.renameSync(temporary,file);}catch(error){fs.unlinkSync(temporary);throw error;}
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
@@ -120,7 +126,7 @@ class DownloadManager extends EventEmitter {
     while(this.running.size<this.settings.concurrency){
       const d=this.downloads.find(x=>x.status==='queued'&&!this.running.has(x.id));if(!d)break;
       const controller=new AbortController();this.running.set(d.id,controller);
-      const task=this.run(d,controller).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=err.message;}}).finally(()=>{
+      const task=this.run(d,controller).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'download');}}).finally(()=>{
         this.running.delete(d.id);d.speed=0;d.activeConnections=0;this.save();this.changed();this.pump();
       });
       this.tasks.add(task);task.finally(()=>this.tasks.delete(task));
@@ -131,13 +137,10 @@ class DownloadManager extends EventEmitter {
     const partial=path.join(d.folder,d.name+'.atlas-part'), final=path.join(d.folder,d.name);
     const workspace=workspaceFor(partial,d.id),connections=normalizeConnections(this.settings.connectionsPerFile);
     fs.mkdirSync(d.folder,{recursive:true});
-    let offset=fs.existsSync(partial)?fs.statSync(partial).size:0;
-    d.received=offset;
-    // A resumed request without a strong validator could join two different versions.
-    if(offset && !d.etag && !d.lastModified){offset=0;d.received=0;}
+    let offset=0;
     let lastActivity=Date.now();
     const watchdog=setInterval(()=>{if(Date.now()-lastActivity>60000)controller.abort(new Error('The host stopped responding. Retry to resume.'));},5000);
-    let handle,refreshPromise;
+    let handle,partialFile,responseBody,refreshPromise;
     const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
     this.progressMeters.set(d.id,{download:d,rateMeter});
     const refreshHeaders=()=>{
@@ -180,21 +183,28 @@ class DownloadManager extends EventEmitter {
       if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
     };
     const parallel=async()=>{
+      if(partialFile){await partialFile.handle.close();partialFile=null;handle=null;}
       d.connectionMode='checking';d.activeConnections=0;this.changed();
       const result=await downloadRanges({workspace,partialPath:partial,sourceId:d.id,request,signal:controller.signal,connections,
         onProgress:(received,total)=>{d.received=received;d.total=total;},
         onActivity:()=>{lastActivity=Date.now();},
         onConnections:count=>{d.activeConnections=d.status==='downloading'?count:0;},
         onMode:(mode,note)=>{d.connectionMode=mode;d.connectionNote=note;this.changed();}});
-      if(result.path){d.received=result.total;d.total=result.total;d.etag=result.etag;d.lastModified=result.lastModified;await publish(result.path);return true;}
+      if(result.path){d.received=result.total;d.total=result.total;d.etag=result.etag;d.lastModified=result.lastModified;d.lastModifiedVerified=Boolean(result.lastModified);await publish(result.path);return true;}
       d.connectionMode='single';d.connectionNote=result.note;
-      if(result.reset&&fs.existsSync(partial))fs.truncateSync(partial,0);
-      if(result.prefixBytes){d.etag=result.etag;d.lastModified=result.lastModified;}
-      offset=fs.existsSync(partial)?fs.statSync(partial).size:0;
-      if(offset&&!d.etag&&!d.lastModified)offset=0;
+      if(result.prefixBytes){d.etag=result.etag;d.lastModified=result.lastModified;d.lastModifiedVerified=Boolean(result.lastModified);}
+      partialFile=await openDownloadFile(partial,{allowMissing:true});handle=partialFile?.handle;
+      offset=result.reset?0:partialFile?.size||0;
+      if(offset&&!d.etag&&!(d.lastModified&&d.lastModifiedVerified))offset=0;
       d.received=offset;rateMeter.reset(offset);this.changed();return false;
     };
     try{
+      partialFile=await openDownloadFile(partial,{allowMissing:true});handle=partialFile?.handle;
+      offset=partialFile?.size||0;
+      // Only a verified resource validator can authorize a resumed prefix.
+      if(d.etag&&!validatorFor(new Headers({etag:d.etag})))d.etag=null;
+      if(offset&&!d.etag&&!(d.lastModified&&d.lastModifiedVerified))offset=0;
+      d.received=offset;rateMeter.reset(offset);
       const saved=readState(workspace);let triedParallel=false;
       if((saved&&!saved.disabled)||(connections>1&&!offset&&d.total>=MIN_PARALLEL_SIZE&&!saved?.disabled)){
         triedParallel=true;if(await parallel())return;
@@ -202,40 +212,49 @@ class DownloadManager extends EventEmitter {
       if(saved?.disabled)d.connectionNote=saved.note||'Using one connection for this file.';
       let headers=offset?{Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified}:{};
       d.activeConnections=1;
-      let res=await request(headers);
+      let res=await request(headers);responseBody=res.body;
       if(!triedParallel&&!saved?.disabled&&connections>1&&!offset&&res.status===200&&Number(res.headers.get('content-length'))>=MIN_PARALLEL_SIZE){
         await res.body?.cancel();d.activeConnections=0;triedParallel=true;
         if(await parallel())return;
         headers=offset?{Range:`bytes=${offset}-`,'If-Range':d.etag||d.lastModified}:{};
-        d.activeConnections=1;res=await request(headers);
+        d.activeConnections=1;res=await request(headers);responseBody=res.body;
       }
       d.connectionMode='single';if(!d.connectionNote)d.connectionNote=connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
       if(!res.ok){await res.body?.cancel();throw new Error(`Host returned HTTP ${res.status}. Check the source link or retry.`);}
       const encoding=res.headers.get('content-encoding');
       if(encoding&&encoding.toLowerCase()!=='identity'){await res.body?.cancel();throw new Error('Host ignored the uncompressed transfer request. Use another mirror to preserve reliable byte ranges.');}
       const type=(res.headers.get('content-type')||'').toLowerCase();
-      if(/text\/html|application\/(?:json|xhtml)/.test(type)){await res.body?.cancel();throw new Error('The host returned a web page instead of a file. Open the protected host.');}
+      if(/text\/(?:html|javascript)|application\/(?:json|xhtml|xml|javascript)/.test(type)){await res.body?.cancel();throw new Error('The host returned a web page instead of a file. Open the protected host.');}
       if(offset&&res.status===200){offset=0;d.received=0;}
       let expectedResponse=0;
       if(res.status===206){
         const range=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get('content-range')||'');
-        if(!range || Number(range[1])!==offset || Number(range[2])<offset || Number(range[2])>=Number(range[3])) {await res.body?.cancel();throw new Error('Host sent an invalid resume range. File was not modified.');}
+        if(!range || !range.slice(1).every(value=>Number.isSafeInteger(Number(value))) || Number(range[1])!==offset || Number(range[2])<offset || Number(range[2])>=Number(range[3])) {await res.body?.cancel();throw new Error('Host sent an invalid resume range. File was not modified.');}
         if(offset&&d.etag&&d.etag!==res.headers.get('etag')){await res.body?.cancel();throw new Error('The host could not verify the saved file version. Cancel and queue it again.');}
-        if(offset&&!d.etag&&d.lastModified&&d.lastModified!==res.headers.get('last-modified')){await res.body?.cancel();throw new Error('The file changed on the host. Cancel and queue it again.');}
+        if(offset&&!d.etag&&d.lastModified&&(validatorFor(res.headers)?.kind!=='last-modified'||d.lastModified!==res.headers.get('last-modified'))){await res.body?.cancel();throw new Error('The file changed on the host. Cancel and queue it again.');}
         d.total=Number(range[3]);
         expectedResponse=Number(range[2])-Number(range[1])+1;
         if(res.headers.has('content-length')&&Number(res.headers.get('content-length'))!==expectedResponse){await res.body?.cancel();throw new Error('Host returned inconsistent range and file lengths.');}
-      }else if(res.status===200){d.total=Number(res.headers.get('content-length'))||0;}
+      }else if(res.status===200){d.total=Number(res.headers.get('content-length'))||0;if(!Number.isSafeInteger(d.total)||d.total<0)throw new Error('Host returned an invalid file length.');}
       else {await res.body?.cancel();throw new Error('The host did not return a downloadable file.');}
-      d.etag=res.headers.get('etag');if(d.etag?.startsWith('W/'))d.etag=null;
-      d.lastModified=res.headers.get('last-modified');
-      // Mode/host details are lifecycle state, not part of numeric progress deltas.
+      const validator=validatorFor(res.headers);
+      controller.signal.throwIfAborted();
+      if(partialFile)await partialFile.verifyUnchanged();
+      else partialFile=await openDownloadFile(partial,{create:true});
+      handle=partialFile.handle;
+      controller.signal.throwIfAborted();
+      if(!offset)await handle.truncate(0);
+      // Commit new validators only after any old prefix has been safely reset.
+      // Otherwise a pause/error could authorize old bytes with a new validator.
+      d.etag=validator?.kind==='etag'?validator.value:null;
+      d.lastModified=validator?.kind==='last-modified'?validator.value:null;
+      d.lastModifiedVerified=validator?.kind==='last-modified';
       this.changed();
-      handle=await fs.promises.open(partial,offset?'a':'w');
       rateMeter.reset(d.received);
       for await (const chunk of res.body){
         if(controller.signal.aborted)throw controller.signal.reason||new Error('Paused');
-        let pos=0;while(pos<chunk.length){const result=await handle.write(chunk,pos,chunk.length-pos);pos+=result.bytesWritten;}
+        if(d.total&&d.received+chunk.length>d.total)throw new Error('Host sent more bytes than expected.');
+        let pos=0;while(pos<chunk.length){const result=await handle.write(chunk,pos,chunk.length-pos,d.received+pos);if(!result.bytesWritten)throw new Error('Could not save download bytes.');pos+=result.bytesWritten;}
         d.received+=chunk.length;lastActivity=Date.now();
         if(d.total&&d.received>d.total)throw new Error('Host sent more bytes than expected.');
       }
@@ -243,11 +262,11 @@ class DownloadManager extends EventEmitter {
       if(expectedResponse&&d.received-offset!==expectedResponse)throw new Error('Transfer length did not match the requested range.');
       if(d.total&&d.received!==d.total)throw new Error('Transfer ended early. Retry to resume.');
       if(!d.received)throw new Error('The host returned an empty file.');
-      await handle.sync();await handle.close();handle=null;
+      await handle.sync();await partialFile.verify(d.received);await handle.close();handle=null;partialFile=null;
       await publish(partial);
     }catch(err){
-      if(d.status==='downloading'){d.status='error';d.error=err.message||'Download failed.';}
-    }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);if(handle)await handle.close();d.activeConnections=0;}
+      if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'download');}
+    }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);try{await responseBody?.cancel();}catch{}if(handle)await handle.close();d.activeConnections=0;}
   }
   queueScan(d){
     if(['queued','scanning'].includes(d.scan?.status)&&(this.scanning===d.id||this.scanQueue.includes(d.id)))return;

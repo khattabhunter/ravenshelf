@@ -137,8 +137,9 @@ async function finished(manager) {
 function assertComplete(d, expected = expectedDigest) {
   assert.equal(d.status, 'completed', d.error);
   const finalPath = path.join(d.folder, d.name);
-  assert.equal(fs.statSync(finalPath).size, payload.length);
-  assert.equal(digest(fs.readFileSync(finalPath)), expected, 'every output byte must match the source');
+  const actual=fs.readFileSync(finalPath);
+  assert.equal(actual.length, payload.length);
+  assert.equal(digest(actual), expected, 'every output byte must match the source');
   assert.equal(d.received, payload.length);
   assert.equal(d.activeConnections, 0);
 }

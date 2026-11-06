@@ -1,6 +1,7 @@
 'use strict';
 const {performance}=require('node:perf_hooks');
 const {isScanPending,scanCompletionBlocker,assertCompletionReady}=require('./completion-policy.cjs');
+const {publicErrorMessage}=require('./public-errors.cjs');
 
 // Session-only queue action. No OS calls live here: production supplies a handler,
 // and tests supply a recorder. Only a successfully completed queue can trigger it.
@@ -73,7 +74,7 @@ class CompletionAction {
     Promise.resolve().then(()=>{assertCompletionReady(this.getDownloads(),ids);return this.onExecute(mode,{ids});}).then(()=>{
       this.mode='none';this.phase='idle';this.targets.clear();this.observedIds.clear();this.deadline=null;this.message='Completion action was requested.';this.emit();
     }).catch(err=>{
-      this.mode='none';this.phase='error';this.deadline=null;this.targets.clear();this.observedIds.clear();this.message=err.message||'The completion action could not run.';this.emit();
+      this.mode='none';this.phase='error';this.deadline=null;this.targets.clear();this.observedIds.clear();this.message=publicErrorMessage(err,'completion');this.emit();
     });
   }
   dispose(){this.clearTimer();this.mode='none';this.phase='idle';this.targets.clear();this.observedIds.clear();this.deadline=null;}

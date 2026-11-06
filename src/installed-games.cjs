@@ -26,10 +26,47 @@ function safeDirectory(value) {
   try{let ancestor=p;while(ancestor!==path.parse(ancestor).root){const s=fs.lstatSync(ancestor);if(!s.isDirectory()||s.isSymbolicLink())return null;ancestor=path.dirname(ancestor);}return p;}catch{return null;}
 }
 function directoryEntries(dir){try{return fs.readdirSync(dir,{withFileTypes:true});}catch{return [];}}
-function readSmall(file,max=MAX_FILE) {
-  const stat=fs.lstatSync(file);
-  if(!stat.isFile()||stat.isSymbolicLink()||stat.size>max)throw new Error('Manifest is not a bounded regular file.');
-  return fs.readFileSync(file,'utf8').replace(/^\uFEFF/,'');
+function readSmall(file,max=MAX_FILE,io=fs) {
+  const target=validLocalPath(file);
+  if(!target||!Number.isSafeInteger(max)||max<1||max>MAX_FILE)throw new Error('Invalid manifest read.');
+  const fail=()=>{throw new Error('Manifest is not a stable bounded regular file.');};
+  // BigInt identities avoid rounding Windows file IDs. Do not reopen a path
+  // after checking its type/size: every byte comes from this one descriptor.
+  const sameFile=(a,b)=>a.ino!==0n&&a.dev===b.dev&&a.ino===b.ino&&a.birthtimeNs===b.birthtimeNs;
+  const sameContent=(a,b)=>sameFile(a,b)&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs;
+  const regular=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.size>=0n&&stat.size<=BigInt(max);
+  const parents=[];
+  for(let ancestor=path.dirname(target);;ancestor=path.dirname(ancestor)){
+    const stat=io.lstatSync(ancestor,{bigint:true});
+    if(!stat.isDirectory()||stat.isSymbolicLink()||stat.ino===0n)fail();
+    parents.push({path:ancestor,stat});
+    if(ancestor===path.parse(ancestor).root)break;
+  }
+  let fd;
+  try{
+    // NOFOLLOW/NONBLOCK are not provided by Node on Windows. There we reject
+    // links/junctions and changed identities before reading the opened handle.
+    fd=io.openSync(target,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
+    const opened=io.fstatSync(fd,{bigint:true});
+    if(!regular(opened)||opened.ino===0n)fail();
+    const verifyPath=()=>{
+      for(const parent of parents){const current=io.lstatSync(parent.path,{bigint:true});if(!current.isDirectory()||current.isSymbolicLink()||!sameFile(parent.stat,current))fail();}
+      const current=io.lstatSync(target,{bigint:true});
+      if(!regular(current)||!sameContent(opened,current))fail();
+    };
+    verifyPath();
+    const buffer=Buffer.allocUnsafe(Math.min(64*1024,max+1)),chunks=[];
+    let total=0;
+    while(total<=max){
+      const count=io.readSync(fd,buffer,0,Math.min(buffer.length,max+1-total),total);
+      if(!count)break;
+      total+=count;if(total>max)fail();
+      chunks.push(Buffer.from(buffer.subarray(0,count)));
+    }
+    if(total!==Number(opened.size)||!sameContent(opened,io.fstatSync(fd,{bigint:true})))fail();
+    verifyPath();
+    return Buffer.concat(chunks,total).toString('utf8').replace(/^\uFEFF/,'');
+  }finally{if(fd!==undefined)io.closeSync(fd);}
 }
 function parseVdf(input) {
   if(typeof input!=='string'||input.length>MAX_FILE)throw new Error('Invalid VDF size.');
@@ -200,4 +237,4 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   return {games:complete,scannedAt:new Date().toISOString(),locations:[...locations],warnings:[...warnings]};
 }
 module.exports={scanInstalledGames};
-module.exports._test={parseVdf,libraryRootsFromVdf,parseSteamManifest,parseEpicManifest,parseUninstall,meaningfulVersion,validLocalPath,inside,executableScore,mergeGame,applyVersionMetadata,findExecutables};
+module.exports._test={parseVdf,libraryRootsFromVdf,parseSteamManifest,parseEpicManifest,parseUninstall,meaningfulVersion,validLocalPath,inside,executableScore,mergeGame,applyVersionMetadata,findExecutables,readSmall};

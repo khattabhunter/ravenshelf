@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3 — Security maintenance prerelease
+
+- Replaced internal protocol, startup and unexpected operation errors with safe messages that do not expose raw paths, signed URLs or exception stacks.
+- File transfers retain validated file handles across network waits. New partials are created exclusively; replaced files, hard links and directory links are rejected. Parallel data and fallback-prefix copying use the same checks.
+- Installed-game manifests are read through one validated descriptor with a strict byte ceiling, preventing filename replacement and file growth from bypassing the checks.
+- Queue and split-download checkpoints use unique, exclusively created temporary files. The test-only size/hash check now reads the output once.
+- Bounded split-download metadata to 65,536 sections (512 GiB per file), with single-stream fallback for larger remote files; saved manifests have a 4 MiB read ceiling.
+- Single streams reject script/XML responses and require a strong validator for resuming. New validators are saved only after resetting an old prefix succeeds. Older unverified Last-Modified-only partials restart safely; strong-ETag partials retain resume support.
+- Expanded CodeQL to its security-and-quality suite and added dependency audits to tests and release builds.
+
+See [the release notes](docs/RELEASE-0.3.3.md) for upgrade behavior and security boundaries.
+
 ## 0.3.2 — Progress update maintenance prerelease
 
 ### Changed

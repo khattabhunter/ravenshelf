@@ -30,7 +30,7 @@ test('user cancellation during countdown prevents any later action',async()=>{
  const f=setup([{id:'a',status:'queued'}]);f.action.arm('shutdown');f.queue[0].status='completed';f.tick();f.tick(59000);f.action.cancel();f.tick(999999);await flush();assert.equal(f.calls.length,0);
 });
 test('failed OS handler reports error and never retries itself',async()=>{
- const f=setup([{id:'a',status:'queued'}]);f.action.onExecute=async()=>{throw Error('Windows rejected the request');};f.action.arm('shutdown');f.queue[0].status='completed';f.tick();f.tick(60000);await flush();assert.equal(f.action.snapshot().phase,'error');assert.match(f.action.snapshot().message,/Windows rejected/);assert.equal(f.action.snapshot().mode,'none');
+ const f=setup([{id:'a',status:'queued'}]);f.action.onExecute=async()=>{throw Error('Windows rejected the request');};f.action.arm('shutdown');f.queue[0].status='completed';f.tick();f.tick(60000);await flush();assert.equal(f.action.snapshot().phase,'error');assert.match(f.action.snapshot().message,/completion action could not run/);assert.equal(f.action.snapshot().mode,'none');
 });
 test('fresh session and disposed scheduler do not retain an armed action',async()=>{
  const f=setup([{id:'a',status:'queued'}]);f.action.arm('shutdown');f.action.dispose();f.queue[0].status='completed';f.tick(999999);await flush();assert.equal(f.calls.length,0);assert.equal(setup(f.queue).action.snapshot().mode,'none');
