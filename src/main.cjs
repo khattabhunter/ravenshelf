@@ -5,6 +5,7 @@ const path=require('node:path');
 const {execFile}=require('node:child_process');
 const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
 const {safeURL}=require('./net.cjs');
+const {imageResponse}=require('./image-loader.cjs');
 const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
 const {createFastSessionFetch}=require('./fast-session.cjs');
 const providers=require('./providers.cjs');
@@ -122,9 +123,12 @@ app.whenReady().then(async()=>{
   };
   protocol.handle('atlas',request=>{
     try {
-    const u=new URL(request.url),entry=resources[u.pathname];
-    if(u.hostname!=='app'||!entry)return new Response('Not found',{status:404});
-    return new Response(fs.readFileSync(path.join(__dirname,'renderer',entry[0])),{headers:{'content-type':entry[1],'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}});
+    const u=new URL(request.url);
+    if(u.hostname!=='app')return new Response('Not found',{status:404});
+    if(u.pathname==='/image')return imageResponse(request);
+    const entry=resources[u.pathname];
+    if(!entry)return new Response('Not found',{status:404});
+    return new Response(fs.readFileSync(path.join(__dirname,'renderer',entry[0])),{headers:{'content-type':entry[1],'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}});
     } catch(err) {console.error('Protocol error',err);return new Response(String(err),{status:500});}
   });
   session.defaultSession.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));

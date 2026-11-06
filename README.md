@@ -2,11 +2,11 @@
 
 A visual game catalogue and direct-download manager for Windows. Browse the live FitGirl catalogue, organize a personal library, inspect installed-game metadata and manage multipart downloads in one place.
 
-**[Download the Windows preview](https://github.com/khattabhunter/atlas-library/releases/tag/v0.2.3)** · **[User guide](docs/USER-GUIDE.md)** · **[Build from source](docs/BUILDING.md)** · **[Changelog](CHANGELOG.md)**
+**[Download the Windows preview](https://github.com/khattabhunter/atlas-library/releases/tag/v0.2.4)** · **[User guide](docs/USER-GUIDE.md)** · **[Build from source](docs/BUILDING.md)** · **[Changelog](CHANGELOG.md)**
 
 ## Get started
 
-1. Open the [v0.2.3 release](https://github.com/khattabhunter/atlas-library/releases/tag/v0.2.3) and download `Atlas-Library-0.2.3-Windows.exe` from **Assets**.
+1. Open the [v0.2.4 release](https://github.com/khattabhunter/atlas-library/releases/tag/v0.2.4) and download `Atlas-Library-0.2.4-Windows.exe` from **Assets**.
 2. Open the executable. This portable preview does not require an installer or administrator rights.
 3. Browse **Discover**, open a game and choose a file host.
 4. Select **Check download links**, review the results and choose **Download all** when the required files are ready.
@@ -29,7 +29,7 @@ The preview is unsigned. Check that you are using this repository's release; you
 
 ## Host support
 
-| Source | Status in 0.2.3 |
+| Source | Status in 0.2.4 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
@@ -48,7 +48,7 @@ Close the older Atlas window, download the new executable from [Releases](https:
 - Host changes, CAPTCHA checks, expired links and network conditions can affect availability and speed. Multiple connections do not guarantee a speed increase.
 - Atlas does not automatically extract archives or run downloaded installers. The installed-game scan does not launch the games it finds.
 
-See the [user guide](docs/USER-GUIDE.md) for downloading, resume behavior, installed versions, troubleshooting and local data storage.
+See the [user guide](docs/USER-GUIDE.md) for downloading, resume behavior, installed versions, troubleshooting and local data storage. The [privacy notes](docs/PRIVACY.md) explain what stays on your computer and what websites can see, including your connection's IP address.
 
 ## Development
 

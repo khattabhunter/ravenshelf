@@ -109,6 +109,8 @@ The app normally stores its profile under `%APPDATA%\atlas-repack-library`. It c
 
 Close Atlas before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
+Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue, image and download services still see the IP used to connect; Atlas's ad protections do not make those requests anonymous.
+
 | Problem | Next step |
 | --- | --- |
 | A link needs verification | Use its protected host button, then check the links again. |

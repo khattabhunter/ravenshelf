@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4
+
+### Protection
+
+- Cover images now use a restricted app loader with public-address validation at the socket and on redirects. The renderer can no longer load arbitrary remote images directly.
+- Image responses have byte/time limits and must contain a supported raster format; HTML and SVG responses are rejected.
+- Cover requests do not forward browser-session cookies, credentials or referrers.
+- Added a privacy guide describing public source, local profile storage and the IP visibility of normal network connections.
+
 ## 0.2.3
 
 ### Fixed

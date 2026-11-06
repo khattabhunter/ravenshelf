@@ -110,7 +110,11 @@ function formatBytes(value, fallback = 'Size unknown') {
 }
 function safeImageUrl(value) {
   if (!value || typeof value !== 'string') return '';
-  try { const url = new URL(value); return url.protocol === 'https:' ? url.href : ''; }
+  try {
+    const url = new URL(value);
+    if(url.protocol!=='https:'||url.username||url.password||url.href.length>16384)return '';
+    return 'atlas://app/image?url='+encodeURIComponent(url.href);
+  }
   catch { return ''; }
 }
 function gameTitle(game) { return game?.title || 'Untitled game'; }

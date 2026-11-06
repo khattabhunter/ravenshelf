@@ -1,6 +1,6 @@
 {
   "name": "atlas-repack-library",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "A local visual catalogue and batch download manager",
   "author": "Atlas Library contributors",

@@ -17,9 +17,9 @@ Redact usernames and personal paths from logs or screenshots. Signed direct-down
 ## Project boundaries
 
 - The main application page uses an isolated preload bridge with a limited set of operations. Remote host and gameplay windows do not receive that bridge.
-- File requests enforce HTTPS and public-network checks. Supported-host windows restrict navigation, popups and requests, but they are not an antivirus or a universal ad blocker.
+- File and cover-image requests enforce HTTPS and public-network checks. Cover images use a bounded raster-only loader without browser-session credentials. Supported-host windows restrict navigation, popups and requests, but they are not an antivirus or a universal ad blocker.
 - Byte ranges and file-version validators help prevent incorrect resumptions and mixed file sections. This is separate from scanning archive contents or checking publisher-provided hashes.
 - Installed-game detection reads local metadata; it does not launch discovered executables.
 - Close/shutdown completion actions are opt-in for the current session and use a cancellable countdown.
 
-Dependency updates and regression tests are part of maintenance, not a guarantee that all vulnerabilities have been found. See [the architecture notes](docs/ARCHITECTURE.md) for the current implementation boundaries.
+Dependency updates and regression tests are part of maintenance, not a guarantee that all vulnerabilities have been found. See [the architecture notes](docs/ARCHITECTURE.md) for implementation boundaries and [the privacy guide](docs/PRIVACY.md) for local data and network visibility.

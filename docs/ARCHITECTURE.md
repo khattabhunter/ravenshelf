@@ -1,6 +1,6 @@
 # Architecture
 
-Atlas 0.2.3 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Atlas account service or hosted backend.
+Atlas 0.2.4 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Atlas account service or hosted backend.
 
 ## Main components
 
@@ -15,6 +15,7 @@ Atlas 0.2.3 is a Windows Electron application. The interface uses HTML, CSS and 
 | `src/fast-session.cjs` | Uses an isolated Chromium session for supported FuckingFast page/form requests, without opening a page or evaluating scripts. |
 | `src/ff-policy.cjs` | Supported FuckingFast endpoints, redirect boundaries and selected filename checks. |
 | `src/net.cjs` | HTTPS validation, redirect handling and socket-level public-address checks for Node file requests. |
+| `src/image-loader.cjs` | Bounded raster-image requests through the guarded Node transport, without browser-session credentials. |
 | `src/downloads.cjs` | Persistent queue, file concurrency, pause/resume, URL refresh, transfer state and completed-file publication. |
 | `src/parallel-download.cjs` | Section requests, resource validators, durable section checkpoints and single-stream fallback. |
 | `src/rate-meter.cjs` | Recent transfer-rate measurement over a five-second window. |
@@ -37,7 +38,7 @@ flowchart LR
 
 ## Application and network boundaries
 
-The main page is served from `atlas://app/index.html` through a small resource allowlist. It runs with context isolation and sandboxing enabled and Node integration disabled. IPC checks that calls originate from this window's expected main frame. Catalogue text is rendered as text, not injected as source HTML. Remote cover images can still make network requests to their image hosts.
+The main page is served from `atlas://app/index.html` through a small resource allowlist. It runs with context isolation and sandboxing enabled and Node integration disabled. IPC checks that calls originate from this window's expected main frame. Catalogue text is rendered as text, not injected as source HTML. Covers use an app image route backed by the guarded Node transport; the renderer's content policy blocks direct remote images. The loader checks public addresses and redirects, limits response size/time and accepts supported raster images. Image hosts still receive normal network requests and see the connection IP.
 
 Protected host windows use host-specific sessions and do not load the application preload. They deny permissions and new popup windows, restrict navigation and network requests, and intercept supported archive downloads into the queue. The separate gameplay viewer also lacks download/file-control access. External links opened in the user's browser are governed by that browser's own settings.
 
