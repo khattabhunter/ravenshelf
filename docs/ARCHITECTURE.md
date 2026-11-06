@@ -1,6 +1,6 @@
 # Architecture
 
-Atlas 0.2.4 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Atlas account service or hosted backend.
+Atlas 0.2.5 is a Windows Electron application. The interface uses HTML, CSS and plain JavaScript; the main process uses CommonJS modules. There is no Atlas account service or hosted backend.
 
 ## Main components
 
@@ -17,6 +17,7 @@ Atlas 0.2.4 is a Windows Electron application. The interface uses HTML, CSS and 
 | `src/net.cjs` | HTTPS validation, redirect handling and socket-level public-address checks for Node file requests. |
 | `src/image-loader.cjs` | Bounded raster-image requests through the guarded Node transport, without browser-session credentials. |
 | `src/downloads.cjs` | Persistent queue, file concurrency, pause/resume, URL refresh, transfer state and completed-file publication. |
+| `src/header-vault.cjs` | Seals saved download request headers (cookies, referrers) with Windows account encryption through Electron `safeStorage`. |
 | `src/parallel-download.cjs` | Section requests, resource validators, durable section checkpoints and single-stream fallback. |
 | `src/rate-meter.cjs` | Recent transfer-rate measurement over a five-second window. |
 | `src/installed-games.cjs`, `src/installed-scan.ps1` | Bounded, read-only inventory of installed-game records, manifests and executable version metadata. |

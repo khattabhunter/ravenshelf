@@ -1,6 +1,6 @@
 {
   "name": "atlas-repack-library",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "A local visual catalogue and batch download manager",
   "author": "Atlas Library contributors",
@@ -46,6 +46,9 @@
       "NOTICE.md"
     ],
     "asar": true,
+    "electronFuses": {
+      "enableCookieEncryption": true
+    },
     "win": {
       "target": "portable",
       "signAndEditExecutable": false

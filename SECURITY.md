@@ -10,7 +10,7 @@ Include the Atlas version, affected component, impact, and a minimal reproductio
 
 ## Data to keep private
 
-Atlas's local profile can contain download URLs, request headers, cookies, installed-game paths and saved collections. The protected host browser keeps its own session data. Do not upload profile folders, `library.json`, `installed-games.json`, browser storage, `.atlas-part` files or `.atlas-segments-*` folders to GitHub.
+Atlas's local profile can contain download URLs, request headers, cookies, installed-game paths and saved collections. From 0.2.5, saved download headers and the host browser's cookie store are encrypted with the Windows account, but the profile should still be treated as private. The protected host browser keeps its own session data. Do not upload profile folders, `library.json`, `installed-games.json`, browser storage, `.atlas-part` files or `.atlas-segments-*` folders to GitHub.
 
 Redact usernames and personal paths from logs or screenshots. Signed direct-download URLs can grant temporary access and should be treated as private.
 

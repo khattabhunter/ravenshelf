@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.5
+
+### Protection
+
+- Saved download request headers, including host cookies, are now encrypted in `library.json` with Electron `safeStorage` (Windows DPAPI, tied to your Windows account). Existing queues from older versions are converted the first time 0.2.5 opens.
+- Headers that cannot be decrypted, for example in a profile copied from another PC or account, are discarded; affected downloads refresh their link from the source page when resumed.
+- The protected host browser's Chromium cookie store is now encrypted on disk (Electron cookie-encryption fuse).
+
+### Fixed
+
+- The user guide and startup version label now match the current release.
+
 ## 0.2.4
 
 ### Protection

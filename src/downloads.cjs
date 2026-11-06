@@ -20,19 +20,36 @@ function atomicJSON(file,data) {
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink}) {
-    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink;
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null}) {
+    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault;
     this.running=new Map(); this.tasks=new Set(); this.stopping=false;
     const stored=loadJSON(stateFile,{});
     this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],...stored.settings};
     this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);
     this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));
     this.downloads=Array.isArray(stored.downloads)?stored.downloads:[];
-    for(const d of this.downloads){if(['queued','downloading'].includes(d.status))d.status='paused';d.speed=0;d.activeConnections=0;}
+    let plainHeaders=false;
+    for(const d of this.downloads){
+      if(['queued','downloading'].includes(d.status))d.status='paused';d.speed=0;d.activeConnections=0;
+      if('sealedHeaders' in d){
+        // Headers that cannot be opened (another Windows account or PC) are dropped;
+        // the job then refreshes its link from the source page when it resumes.
+        d.headers=this.vault?.open(d.sealedHeaders)||{};delete d.sealedHeaders;
+      }else if(d.headers&&typeof d.headers==='object'&&Object.keys(d.headers).length)plainHeaders=true;
+      if(!d.headers||typeof d.headers!=='object'||Array.isArray(d.headers))d.headers={};
+    }
+    // Rewrite profiles from older versions so their saved cookies are sealed.
+    if(plainHeaders&&this.vault?.available())this.save();
     this.timer=setInterval(()=>{if(this.running.size) this.save();},2000); this.timer.unref();
   }
   state(){ return {downloads:this.downloads.map(({headers,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION}; }
-  save(){atomicJSON(this.stateFile,{settings:this.settings,downloads:this.downloads});}
+  persisted(d){
+    const {headers,sealedHeaders,...rest}=d;
+    if(!headers||!Object.keys(headers).length)return {...rest,headers:{}};
+    const sealed=this.vault?.seal(headers);
+    return sealed?{...rest,sealedHeaders:sealed}:{...rest,headers};
+  }
+  save(){atomicJSON(this.stateFile,{settings:this.settings,downloads:this.downloads.map(d=>this.persisted(d))});}
   changed(){this.emit('state',this.state());}
   updateSettings(patch){this.settings={...this.settings,...patch};this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
   add({links,gameTitle}) {

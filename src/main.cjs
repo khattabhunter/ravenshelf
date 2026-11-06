@@ -1,11 +1,12 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor}=require('electron');
+const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage}=require('electron');
 const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
 const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
 const {safeURL}=require('./net.cjs');
 const {imageResponse}=require('./image-loader.cjs');
+const {createHeaderVault}=require('./header-vault.cjs');
 const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
 const {createFastSessionFetch}=require('./fast-session.cjs');
 const providers=require('./providers.cjs');
@@ -140,7 +141,7 @@ app.whenReady().then(async()=>{
     await session.defaultSession.clearCache();
     atomicJSON(rendererCacheFile,{version:appVersion});
   }
-  manager=new DownloadManager({stateFile:path.join(app.getPath('userData'),'library.json'),downloadDir:path.join(app.getPath('downloads'),'Atlas'),resolveLink:resolveAppLink});
+  manager=new DownloadManager({stateFile:path.join(app.getPath('userData'),'library.json'),downloadDir:path.join(app.getPath('downloads'),'Atlas'),resolveLink:resolveAppLink,vault:createHeaderVault(safeStorage)});
   installedCache=loadJSON(path.join(app.getPath('userData'),'installed-games.json'),{games:[],scannedAt:null,warnings:[],locations:[]});
   completion=new CompletionAction({getDownloads:()=>manager.downloads,onChange:publishState,onExecute:async(mode,{ids})=>{
     if(isTest)throw new Error('System completion actions are disabled in this isolated test session.');

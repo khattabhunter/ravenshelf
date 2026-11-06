@@ -24,11 +24,19 @@ Atlas does not configure, verify or enforce a VPN or proxy. Browser traffic and 
 
 ## Data kept locally
 
-Atlas's Windows profile stores settings, saved collections, download queue/history, installed-game metadata and separate host-browser session data. Download records can include local paths, signed URLs and request headers. Cookie storage and other browser state also remain in that profile. Downloaded files and partial-transfer support files live in the selected download folder.
+Atlas's Windows profile stores settings, saved collections, download queue/history, installed-game metadata and separate host-browser session data. Download records can include local paths and signed URLs. From 0.2.5, their request headers (host cookies, referrers) are encrypted with your Windows account (see below). Other browser state also remains in that profile. Downloaded files and partial-transfer support files live in the selected download folder.
 
 Treat these files and backups as private. They are not a secure vault: another local account or program with sufficient file access may be able to read them. Do not publish the profile, `library.json`, `installed-games.json`, cookies, signed links, `.atlas-part` files or `.atlas-segments-*` folders. The repository's ignore rules help avoid accidental commits, but cannot prevent someone deliberately uploading a file.
 
 See [the user guide](USER-GUIDE.md#local-data-and-troubleshooting) for the profile location and [SECURITY.md](../SECURITY.md) for safe reporting. Redact usernames, personal paths and private links from screenshots or logs before sharing them.
+
+## Saved-cookie encryption in 0.2.5
+
+Version 0.2.5 encrypts the request headers saved with each download, including host cookies, before writing `library.json`. It uses Electron `safeStorage`, which on Windows uses DPAPI keys tied to your signed-in Windows account. A copy of `library.json` taken to another PC or Windows account cannot reveal those cookies; Atlas discards headers it cannot decrypt and refreshes the affected link when you resume. Queues saved by older versions are converted the first time 0.2.5 opens. If Windows encryption is unavailable, Atlas keeps the previous plain-text format rather than losing your queue.
+
+The protected host browser's own Chromium cookie database is also encrypted on disk from 0.2.5 onward. This change is one-way: if you later run 0.2.4 or older with the same profile, the host windows will not be able to read those sessions and may ask you to complete host checks again.
+
+Encryption at rest protects against copied files and other Windows accounts. It does not protect against malware or another program already running as your Windows user, which can ask Windows to decrypt the same data.
 
 ## Image-request hardening in 0.2.4
 

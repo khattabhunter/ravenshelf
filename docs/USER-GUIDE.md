@@ -1,6 +1,6 @@
 # Atlas user guide
 
-This guide describes Atlas Library 0.2.3 for Windows.
+This guide describes Atlas Library 0.2.5 for Windows.
 
 ## Start and update Atlas
 
