@@ -8,7 +8,7 @@ class CompletionAction {
     if(typeof getDownloads!=='function'||typeof onExecute!=='function')throw new Error('Completion action needs queue and action handlers.');
     this.getDownloads=getDownloads;this.onExecute=onExecute;this.onChange=onChange;this.clock=clock;
     this.countdownMs=countdownMs;this.autoTick=autoTick;this.timer=null;this.mode='none';this.phase='idle';
-    this.targets=new Set();this.observedIds=new Set();this.deadline=null;this.message='Keep Atlas open after downloads.';
+    this.targets=new Set();this.observedIds=new Set();this.deadline=null;this.message='Keep Ravenshelf open after downloads.';
   }
   snapshot(){
     const byId=new Map(this.getDownloads().map(d=>[d.id,d]));
@@ -18,17 +18,17 @@ class CompletionAction {
   emit(){this.onChange(this.snapshot());}
   arm(mode){
     if(mode==='none')return this.cancel();
-    if(!['close','shutdown'].includes(mode))throw new Error('Choose keep open, close Atlas, or turn off laptop.');
+    if(!['close','shutdown'].includes(mode))throw new Error('Choose keep open, close Ravenshelf, or turn off laptop.');
     if(this.phase==='executing')throw new Error('The completion action is already running.');
     const queue=this.getDownloads(),pending=queue.filter(d=>!['completed','cancelled'].includes(d.status));
     if(!pending.length)throw new Error('Add downloads before choosing an action. Completed history cannot trigger it.');
     this.clearTimer();this.mode=mode;this.phase='armed';this.targets=new Set(pending.map(d=>d.id));this.observedIds=new Set(queue.map(d=>d.id));this.deadline=null;
-    this.message=mode==='shutdown'?'Turn off laptop after every queued file completes successfully.':'Close Atlas after every queued file completes successfully.';
+    this.message=mode==='shutdown'?'Turn off laptop after every queued file completes successfully.':'Close Ravenshelf after every queued file completes successfully.';
     if(this.autoTick){this.timer=setInterval(()=>this.tick(),1000);this.timer.unref?.();}
     this.emit();return this.snapshot();
   }
   clearTimer(){if(this.timer){clearInterval(this.timer);this.timer=null;}}
-  cancel(message='Keep Atlas open after downloads.'){
+  cancel(message='Keep Ravenshelf open after downloads.'){
     if(this.phase==='executing')throw new Error('The completion action has already started.');
     this.clearTimer();this.mode='none';this.phase='idle';this.targets.clear();this.observedIds.clear();this.deadline=null;this.message=message;this.emit();return this.snapshot();
   }
@@ -54,17 +54,17 @@ class CompletionAction {
     if(unfinished.length){
       this.phase='armed';this.deadline=null;
       this.message=unfinished.some(d=>d.status==='error')?'Waiting for failed downloads to be retried and completed.':unfinished.some(d=>d.status==='paused')?'Waiting for paused downloads to resume and complete.':
-        this.mode==='shutdown'?'Laptop shutdown is armed for this queue.':'Close Atlas is armed for this queue.';
+        this.mode==='shutdown'?'Laptop shutdown is armed for this queue.':'Close Ravenshelf is armed for this queue.';
       this.emit();return;
     }
     if(!this.targets.size){this.cancel();return;}
     if(this.phase!=='countdown'){
       this.phase='countdown';this.deadline=this.clock()+this.countdownMs;
-      this.message=this.mode==='shutdown'?'All queued files completed. Laptop shutdown is counting down.':'All queued files completed. Atlas will close after the countdown.';
+      this.message=this.mode==='shutdown'?'All queued files completed. Laptop shutdown is counting down.':'All queued files completed. Ravenshelf will close after the countdown.';
       this.emit();return;
     }
     if(this.clock()<this.deadline){this.emit();return;}
-    const mode=this.mode,ids=[...this.targets];this.phase='executing';this.clearTimer();this.message=mode==='shutdown'?'Requesting Windows shutdown…':'Closing Atlas…';this.emit();
+    const mode=this.mode,ids=[...this.targets];this.phase='executing';this.clearTimer();this.message=mode==='shutdown'?'Requesting Windows shutdown…':'Closing Ravenshelf…';this.emit();
     Promise.resolve().then(()=>this.onExecute(mode,{ids})).then(()=>{
       this.mode='none';this.phase='idle';this.targets.clear();this.observedIds.clear();this.deadline=null;this.message='Completion action was requested.';this.emit();
     }).catch(err=>{

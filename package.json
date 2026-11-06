@@ -1,17 +1,17 @@
 {
   "name": "atlas-repack-library",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "private": true,
-  "description": "A local visual catalogue and batch download manager",
-  "author": "Atlas Library contributors",
+  "description": "Ravenshelf: a privacy-hardened game catalogue and batch download manager for Windows",
+  "author": "Ravenshelf contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/khattabhunter/atlas-library.git"
+    "url": "git+https://github.com/khattabhunter/ravenshelf.git"
   },
-  "homepage": "https://github.com/khattabhunter/atlas-library#readme",
+  "homepage": "https://github.com/khattabhunter/ravenshelf#readme",
   "bugs": {
-    "url": "https://github.com/khattabhunter/atlas-library/issues"
+    "url": "https://github.com/khattabhunter/ravenshelf/issues"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -35,7 +35,7 @@
   },
   "build": {
     "appId": "local.atlas.repacklibrary",
-    "productName": "Atlas Library",
+    "productName": "Ravenshelf",
     "directories": {
       "output": "dist"
     },
@@ -47,14 +47,19 @@
     ],
     "asar": true,
     "electronFuses": {
-      "enableCookieEncryption": true
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
     },
     "win": {
       "target": "portable",
       "signAndEditExecutable": false
     },
     "portable": {
-      "artifactName": "Atlas-Library-${version}-Windows.exe"
+      "artifactName": "Ravenshelf-${version}-Windows.exe"
     }
   }
 }

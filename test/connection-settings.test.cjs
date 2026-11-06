@@ -120,3 +120,43 @@ test('connection selector defaults to four, preserves focused edits, and sends a
   assert.equal(control.disabled,false);
   assert.equal(f.run('state.settings.connectionsPerFile'),2);
 });
+
+test('the Defender scan setting only accepts true or false through trusted IPC',async()=>{
+  const f=await mainFixture();
+  for(const value of ['yes',1,null,{}])await assert.rejects(f.invoke({defenderScan:value}),/Choose whether to scan/);
+  assert.equal((await f.invoke({defenderScan:false})).settings.defenderScan,false);
+  assert.equal((await f.invoke({defenderScan:true})).settings.defenderScan,true);
+  await assert.rejects(f.invoke({defenderScan:false},{sender:{},senderFrame:f.win.webContents.mainFrame}),/Invalid app request/);
+  assert.equal(f.manager.settings.defenderScan,true);
+});
+
+test('finished download cards show the Defender result as plain text with a Scan again button',()=>{
+  const f=rendererFixture();
+  f.context.card={querySelector:f.get};
+  f.context.item={id:'done',name:'game.part01.rar',status:'completed',received:3,total:3,scan:{status:'scanning'}};
+  f.run('updateDownloadCard(card,item)');
+  const scan=f.get('.download-scan'),controls=f.get('.download-actions');
+  assert.equal(scan.hidden,false);assert.match(scan.className,/busy/);
+  assert.match(scan.children[1].textContent,/Scanning with Microsoft Defender/);
+  assert.equal(controls.children.length,1,'no Scan again button while a scan is running');
+  f.context.item.scan={status:'threat',message:'Microsoft Defender found a threat. <img src=x onerror=alert(1)>'};
+  f.run('updateDownloadCard(card,item)');
+  assert.match(scan.className,/threat/);
+  assert.equal(scan.children[1].textContent,'Microsoft Defender found a threat. <img src=x onerror=alert(1)>');
+  assert.equal(scan.children[1].innerHTML,undefined,'scan messages stay plain text');
+  assert.equal(controls.children.length,2,'Scan again appears once the scan finishes');
+  f.context.item={id:'active',name:'x',status:'downloading',received:1,total:3};
+  f.run('updateDownloadCard(card,item)');
+  assert.equal(scan.hidden,true);
+});
+
+test('the Defender scan selector sends a boolean and restores the old value on failure',async()=>{
+  const sent=[];
+  const f=rendererFixture({saveSettings:async patch=>{sent.push(patch);if(patch.defenderScan===false)throw new Error('Not saved');return {settings:{defenderScan:true}};}});
+  f.run('renderSettings();wireEvents();toast=()=>{};applyState=()=>{};');
+  const control=f.get('#defender-scan');
+  assert.equal(control.value,'on');
+  control.value='off';await control.events.get('change')();
+  assert.equal(sent[0].defenderScan,false);assert.equal(Object.keys(sent[0]).length,1);
+  assert.equal(control.value,'on');assert.equal(control.disabled,false);
+});

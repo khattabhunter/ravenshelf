@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 — Ravenshelf
+
+Atlas Library is now **Ravenshelf**. Your library, collections, download queue, saved cookies and default download folder are kept.
+
+### Protection
+
+- Finished downloads are scanned with Microsoft Defender, one at a time, with the result shown on each download card. Automatic scans can be turned off in Settings, and any finished file can be scanned again.
+- Hardened executable: Electron's run-as-Node mode, `NODE_OPTIONS`, debugger flags and extra `file://` privileges are disabled, and application code loads only from the packaged archive.
+- Releases now include a signed build-provenance attestation that can be checked with `gh attestation verify`.
+- Added CodeQL code scanning and Dependabot updates for dependencies and workflows.
+
+### Changed
+
+- New name, logo letter and executable name (`Ravenshelf-<version>-Windows.exe`). The README has a new Security section and download-verification steps.
+
 ## 0.2.5
 
 ### Protection

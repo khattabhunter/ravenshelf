@@ -1,20 +1,25 @@
 # Security
 
-Atlas is a preview application. Its link checks, popup restrictions and transfer validation do not certify a website, archive or installer as safe. Downloaded files never run automatically.
+Ravenshelf is a preview application. Its link checks, popup restrictions and transfer validation do not certify a website, archive or installer as safe. Downloaded files never run automatically.
 
 ## Reporting a vulnerability
 
-Please avoid publishing exploitable vulnerability details in a public issue. If this repository's **Security** tab offers **Report a vulnerability**, use that private reporting option. If it is unavailable, open a brief issue asking the maintainer for a private reporting channel, without the exploit, private links or sensitive data. No dedicated security email or response-time guarantee is currently published.
+Please avoid publishing exploitable vulnerability details in a public issue. Use **Security → Report a vulnerability** in this repository to send a private report to the maintainer. If that option is unavailable, open a brief issue asking for a private reporting channel, without the exploit, private links or sensitive data. No dedicated security email or response-time guarantee is currently published.
 
-Include the Atlas version, affected component, impact, and a minimal reproduction using fictional data once a private channel is available. Do not send credentials, cookies, payment information, game archives or your complete application profile. Focus reports on the latest published version.
+Include the Ravenshelf version, affected component, impact, and a minimal reproduction using fictional data once a private channel is available. Do not send credentials, cookies, payment information, game archives or your complete application profile. Focus reports on the latest published version.
 
 ## Data to keep private
 
-Atlas's local profile can contain download URLs, request headers, cookies, installed-game paths and saved collections. From 0.2.5, saved download headers and the host browser's cookie store are encrypted with the Windows account, but the profile should still be treated as private. The protected host browser keeps its own session data. Do not upload profile folders, `library.json`, `installed-games.json`, browser storage, `.atlas-part` files or `.atlas-segments-*` folders to GitHub.
+Ravenshelf's local profile can contain download URLs, request headers, cookies, installed-game paths and saved collections. From 0.2.5, saved download headers and the host browser's cookie store are encrypted with the Windows account, but the profile should still be treated as private. The protected host browser keeps its own session data. Do not upload profile folders, `library.json`, `installed-games.json`, browser storage, `.atlas-part` files or `.atlas-segments-*` folders to GitHub.
 
 Redact usernames and personal paths from logs or screenshots. Signed direct-download URLs can grant temporary access and should be treated as private.
 
 ## Project boundaries
+
+- Releases are built on GitHub-hosted Windows machines from tagged source after the test suite passes, and carry a SHA-256 checksum and a signed build-provenance attestation (`gh attestation verify <file> --repo khattabhunter/ravenshelf`).
+- The executable disables Electron's run-as-Node mode, `NODE_OPTIONS`, debugger flags and extra `file://` privileges, and loads code only from its packaged archive.
+- Finished downloads can be scanned with Microsoft Defender. Results are informational; Ravenshelf does not change antivirus settings.
+- CodeQL code scanning and Dependabot dependency updates run on the repository.
 
 - The main application page uses an isolated preload bridge with a limited set of operations. Remote host and gameplay windows do not receive that bridge.
 - File and cover-image requests enforce HTTPS and public-network checks. Cover images use a bounded raster-only loader without browser-session credentials. Supported-host windows restrict navigation, popups and requests, but they are not an antivirus or a universal ad blocker.

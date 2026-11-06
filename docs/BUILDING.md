@@ -1,4 +1,4 @@
-# Build Atlas from source
+# Build Ravenshelf from source
 
 ## Requirements
 
@@ -12,8 +12,8 @@ Node is needed for development and building, not for running the packaged execut
 ## Install, test and run
 
 ```powershell
-git clone https://github.com/khattabhunter/atlas-library.git
-cd atlas-library
+git clone https://github.com/khattabhunter/ravenshelf.git
+cd ravenshelf
 npm ci
 npm test
 npm start
@@ -21,14 +21,14 @@ npm start
 
 `npm ci` installs the versions in `package-lock.json`. Electron's installation may download its runtime. Keep the lockfile with dependency changes; avoid substituting unreviewed packages or bypassing Windows security controls to make a build succeed.
 
-The development app uses the same normal profile name as the packaged app. Close another Atlas instance before running it. For development that must not touch your normal profile, use a dedicated directory:
+The development app uses the same normal profile name as the packaged app. Close another Ravenshelf instance before running it. For development that must not touch your normal profile, use a dedicated directory:
 
 ```powershell
 $env:ATLAS_TEST_DIR = Join-Path $PWD '.local-test-profile'
 npm start
 ```
 
-With `ATLAS_TEST_DIR` set, Atlas uses that separate profile and disables actual system completion actions. Clear the variable when finished:
+With `ATLAS_TEST_DIR` set, Ravenshelf uses that separate profile and disables actual system completion actions. Clear the variable when finished:
 
 ```powershell
 Remove-Item Env:ATLAS_TEST_DIR
@@ -40,7 +40,7 @@ Remove-Item Env:ATLAS_TEST_DIR
 npm run dist
 ```
 
-The portable executable is written to `dist/Atlas-Library-<version>-Windows.exe`. An unpacked app is also available in `dist/win-unpacked/` for inspection. Close any app running from the output directory before rebuilding it.
+The portable executable is written to `dist/Ravenshelf-<version>-Windows.exe`. An unpacked app is also available in `dist/win-unpacked/` for inspection. Close any app running from the output directory before rebuilding it.
 
 The build configuration produces an unsigned Windows x64 portable application. It does not configure a signing certificate, auto-updater service or Linux/macOS release. Electron-builder may download packaging tools on the first build.
 
@@ -83,7 +83,7 @@ Passing tests establish the exercised cases, not that every host response, Windo
 5. Generate a checksum for the exact executable being published:
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 '.\dist\Atlas-Library-<version>-Windows.exe'
+   Get-FileHash -Algorithm SHA256 '.\dist\Ravenshelf-<version>-Windows.exe'
    ```
 
 6. Create a matching release tag and attach the reviewed executable and checksum file. Publish source through Git, not a copy of the app's local profile or build cache.

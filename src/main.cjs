@@ -7,6 +7,7 @@ const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
 const {safeURL}=require('./net.cjs');
 const {imageResponse}=require('./image-loader.cjs');
 const {createHeaderVault}=require('./header-vault.cjs');
+const {createDefenderScanner}=require('./defender-scan.cjs');
 const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
 const {createFastSessionFetch}=require('./fast-session.cjs');
 const providers=require('./providers.cjs');
@@ -26,8 +27,16 @@ async function resolveAppLink(value){
 }
 const isTest=process.env.ATLAS_TEST_DIR;
 if(isTest)app.setPath('userData',path.resolve(isTest));
+// Keep the profile folder used since Atlas Library so the rename keeps every user's library and queue.
+else app.setPath('userData',path.join(app.getPath('appData'),'atlas-repack-library'));
 if(!app.requestSingleInstanceLock())app.exit(0);
 app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
+// New installs save to Downloads\Ravenshelf; existing users keep Downloads\Atlas if it is there.
+function defaultDownloadDir(){
+  const legacy=path.join(app.getPath('downloads'),'Atlas');
+  try{if(fs.statSync(legacy).isDirectory())return legacy;}catch{}
+  return path.join(app.getPath('downloads'),'Ravenshelf');
+}
 function hostRoot(url){
   const host=safeURL(url).hostname;
   return ['fuckingfast.co','fuckingfast.net','datanodes.to','datanodes.in','datanodes.com','filekeeper.net'].find(h=>host===h||host.endsWith('.'+h));
@@ -70,7 +79,7 @@ async function openGameplay(game){
   ses.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));ses.setPermissionCheckHandler(()=>false);
   if(!ses.__atlasNoDownloads){ses.on('will-download',event=>event.preventDefault());ses.__atlasNoDownloads=true;}
   const allowed=value=>{try{const u=safeURL(value);return ['www.youtube.com','youtube.com','m.youtube.com','consent.youtube.com','consent.google.com'].includes(u.hostname);}catch{return false;}};
-  const browser=new BrowserWindow({width:1180,height:820,parent:win,title:'Atlas — YouTube gameplay',autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  const browser=new BrowserWindow({width:1180,height:820,parent:win,title:'Ravenshelf — YouTube gameplay',autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
   mediaWindows.add(browser);
   browser.webContents.setWindowOpenHandler(({url})=>{if(allowed(url))setImmediate(()=>{if(!browser.isDestroyed())browser.loadURL(url).catch(()=>{});});return {action:'deny'};});
   browser.webContents.on('will-navigate',(event,url)=>{if(!allowed(url))event.preventDefault();});
@@ -86,7 +95,7 @@ async function openHost({url,gameTitle='Imported files'}={}){
   const allowed=value=>{try{const v=safeURL(value);return v.hostname===root||v.hostname.endsWith('.'+root)||v.hostname==='challenges.cloudflare.com';}catch{return false;}};
   ses.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));ses.setPermissionCheckHandler(()=>false);
   ses.webRequest.onBeforeRequest((details,cb)=>{cb({cancel:!allowed(details.url)});});
-  const browser=new BrowserWindow({width:1000,height:780,parent:win,title:'Atlas protected host — popups and off-site requests blocked',autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  const browser=new BrowserWindow({width:1000,height:780,parent:win,title:'Ravenshelf protected host — popups and off-site requests blocked',autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
   hostWindows.add(browser);
   browser.webContents.setWindowOpenHandler(({url:popup})=>{
     // Same-host download buttons sometimes use window.open; route only those into this window.
@@ -116,7 +125,7 @@ async function openHost({url,gameTitle='Imported files'}={}){
   return {opened:true};
 }
 app.whenReady().then(async()=>{
-  app.setName('Atlas Library');
+  app.setName('Ravenshelf');
   const resources={
     '/index.html':['index.html','text/html; charset=utf-8'],
     '/styles.css':['styles.css','text/css; charset=utf-8'],
@@ -141,21 +150,21 @@ app.whenReady().then(async()=>{
     await session.defaultSession.clearCache();
     atomicJSON(rendererCacheFile,{version:appVersion});
   }
-  manager=new DownloadManager({stateFile:path.join(app.getPath('userData'),'library.json'),downloadDir:path.join(app.getPath('downloads'),'Atlas'),resolveLink:resolveAppLink,vault:createHeaderVault(safeStorage)});
+  manager=new DownloadManager({stateFile:path.join(app.getPath('userData'),'library.json'),downloadDir:defaultDownloadDir(),resolveLink:resolveAppLink,vault:createHeaderVault(safeStorage),scanFile:createDefenderScanner()});
   installedCache=loadJSON(path.join(app.getPath('userData'),'installed-games.json'),{games:[],scannedAt:null,warnings:[],locations:[]});
   completion=new CompletionAction({getDownloads:()=>manager.downloads,onChange:publishState,onExecute:async(mode,{ids})=>{
     if(isTest)throw new Error('System completion actions are disabled in this isolated test session.');
     if(manager.downloads.some(d=>!['completed','cancelled'].includes(d.status))||ids.some(id=>manager.downloads.find(d=>d.id===id)?.status!=='completed'))throw new Error('The queue changed; the completion action was stopped.');
     manager.save();
     if(mode==='close'){app.quit();return;}
-    // Countdown stays inside Atlas. Windows /t greater than 0 implies /f, so use
+    // Countdown stays inside Ravenshelf. Windows /t greater than 0 implies /f, so use
     // /t 0 without /f and let Windows handle applications with unsaved work.
     const shutdown=path.join(process.env.SystemRoot||'C:\\Windows','System32','shutdown.exe');
     await new Promise((resolve,reject)=>execFile(shutdown,['/s','/t','0'],{windowsHide:true,timeout:15000},error=>error?reject(new Error('Windows could not perform the shutdown request.')):resolve()));
   }});
   manager.on('state',()=>{completion.refresh();publishState();});
-  win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Atlas Library',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
-  // This timer lives in the main process so minimizing Atlas cannot throttle it.
+  win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Ravenshelf',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
   catalogRefresh=new CatalogRefresh({fetchLatest:()=>catalog.listCatalog({section:'newest',page:1,forceRefresh:true}),onChange:publishState,
@@ -190,7 +199,7 @@ app.whenReady().then(async()=>{
     return shell.openPath(game.installPath);
   });
   handle('setCompletionAction',mode=>{completion.arm(mode);return appState();});
-  handle('cancelCompletionAction',()=>{completion.cancel('Completion action cancelled. Atlas will stay open.');return appState();});
+  handle('cancelCompletionAction',()=>{completion.cancel('Completion action cancelled. Ravenshelf will stay open.');return appState();});
   handle('getGame',url=>providers.getGame(String(url)));
   handle('expandLinks',text=>{if(typeof text!=='string'||text.length>500000)throw new Error('Paste is too large.');return providers.expandLinks(text);});
   handle('checkLinks',async urls=>{
@@ -212,13 +221,14 @@ app.whenReady().then(async()=>{
   handle('downloadAction',({id,action})=>{
     const d=manager.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
     if(action==='openFolder')return shell.openPath(d.folder);
-    if(!['pause','resume','cancel','retry'].includes(action))throw new Error('Unknown action.');
+    if(!['pause','resume','cancel','retry','scan'].includes(action))throw new Error('Unknown action.');
     if(['resume','retry'].includes(action))assertQueueAvailable();
     return manager.action(id,action);
   });
   handle('chooseFolder',async()=>{const r=await dialog.showOpenDialog(win,{title:'Choose download folder',defaultPath:manager.settings.downloadDir,properties:['openDirectory','createDirectory']});if(r.canceled)return null;manager.updateSettings({downloadDir:r.filePaths[0]});return r.filePaths[0];});
   handle('saveSettings',patch=>{
     const changes={};
+    if(patch?.defenderScan!==undefined){if(typeof patch.defenderScan!=='boolean')throw new Error('Choose whether to scan finished downloads.');changes.defenderScan=patch.defenderScan;}
     if(patch?.concurrency!==undefined)changes.concurrency=Math.max(1,Math.min(4,Number(patch.concurrency)||2));
     if(patch?.connectionsPerFile!==undefined){
       if(!Number.isInteger(patch.connectionsPerFile)||![1,2,4].includes(patch.connectionsPerFile))throw new Error('Choose 1, 2 or 4 connections per file.');
@@ -233,11 +243,11 @@ app.whenReady().then(async()=>{
   handle('openExternal',url=>shell.openExternal(safeURL(url).href));
   handle('openDownloadsFolder',()=>{fs.mkdirSync(manager.settings.downloadDir,{recursive:true});return shell.openPath(manager.settings.downloadDir);});
   handle('copyText',text=>{if(typeof text!=='string'||text.length>1000000)throw new Error('Text is too long.');clipboard.writeText(text);return true;});
-  handle('exportLinks',async({urls,gameTitle})=>{const clean=validateLinks(urls);const result=await dialog.showSaveDialog(win,{title:'Export download links',defaultPath:path.join(app.getPath('downloads'),safeName(gameTitle,'Atlas links')+'.txt'),filters:[{name:'Link list',extensions:['txt']}]});if(result.canceled)return {cancelled:true};await fs.promises.writeFile(result.filePath,clean.join('\r\n')+'\r\n','utf8');return {saved:true,path:result.filePath};});
+  handle('exportLinks',async({urls,gameTitle})=>{const clean=validateLinks(urls);const result=await dialog.showSaveDialog(win,{title:'Export download links',defaultPath:path.join(app.getPath('downloads'),safeName(gameTitle,'Ravenshelf links')+'.txt'),filters:[{name:'Link list',extensions:['txt']}]});if(result.canceled)return {cancelled:true};await fs.promises.writeFile(result.filePath,clean.join('\r\n')+'\r\n','utf8');return {saved:true,path:result.filePath};});
   handle('sendToJDownloader',async({urls,gameTitle})=>{
     const clean=validateLinks(urls);
     try{
-      const res=await fetch('http://127.0.0.1:9666/flash/add',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({urls:clean.join('\n'),source:'https://fitgirl-repacks.site/',package:String(gameTitle||'Atlas links').slice(0,200)}),signal:AbortSignal.timeout(7000)});
+      const res=await fetch('http://127.0.0.1:9666/flash/add',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({urls:clean.join('\n'),source:'https://fitgirl-repacks.site/',package:String(gameTitle||'Ravenshelf links').slice(0,200)}),signal:AbortSignal.timeout(7000)});
       if(!res.ok)throw new Error('JDownloader rejected the batch.');
       const body=await res.text();if(!/success/i.test(body))throw new Error('JDownloader did not confirm receiving the links.');
       return {sent:clean.length};
@@ -247,7 +257,7 @@ app.whenReady().then(async()=>{
   win.once('ready-to-show',()=>win.show());
   catalogRefresh.start();
   await win.loadURL('atlas://app/index.html');
-}).catch(err=>{dialog.showErrorBox('Atlas could not start',err.stack||err.message);app.quit();});
+}).catch(err=>{dialog.showErrorBox('Ravenshelf could not start',err.stack||err.message);app.quit();});
 app.on('window-all-closed',()=>app.quit());
 let exiting=false;
 app.on('before-quit',event=>{

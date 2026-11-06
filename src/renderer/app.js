@@ -33,7 +33,7 @@ const icons = {
   book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1zm0 0v15"/>',
 };
 
-const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.2.5' };
+const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.3.0' };
 const catalog = { page: 1, search: '', section: 'newest', games: [], hasMore: false, loading: false, request: 0 };
 let catalogAutoReady = false;
 let catalogCheckSeen = null;
@@ -165,9 +165,9 @@ function makeGameCard(game) {
   const imageUrl = safeImageUrl(game.image);
   if (imageUrl) {
     const image = el('img'); image.src = imageUrl; image.alt = ''; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer';
-    image.addEventListener('error', () => { image.remove(); cover.prepend(el('div', 'image-placeholder', 'A')); }, { once: true });
+    image.addEventListener('error', () => { image.remove(); cover.prepend(el('div', 'image-placeholder', 'R')); }, { once: true });
     cover.append(image);
-  } else cover.append(el('div', 'image-placeholder', 'A'));
+  } else cover.append(el('div', 'image-placeholder', 'R'));
   cover.append(el('span', 'cover-badge', 'REPACK'));
   if (Number.isInteger(game.sourceRank) && game.sourceRank > 0) {
     const rank = el('span', 'rank-badge', `#${game.sourceRank} monthly`);
@@ -359,7 +359,7 @@ function renderGameDetails(game) {
   const resources=el('section','game-resources'); body.append(resources); loadGameResources(game,resources);
   const panel = el('section', 'download-panel');
   const heading = el('div', 'panel-heading'); heading.append(icon('download'), el('h3', '', 'Get the complete file set'));
-  panel.append(heading, el('p', 'panel-intro', 'Choose one host. Atlas expands the links, checks each part, and queues the ready files together.'));
+  panel.append(heading, el('p', 'panel-intro', 'Choose one host. Ravenshelf expands the links, checks each part, and queues the ready files together.'));
   const groups = (Array.isArray(game.groups) ? game.groups : []).filter(group => Array.isArray(group.urls) && group.urls.length);
   const results = el('div');
   if (groups.length) {
@@ -386,8 +386,8 @@ function renderGameDetails(game) {
   panel.append(results); body.append(panel);
   const installation = el('details', 'installation-section');
   installation.append(el('summary', '', 'Installation notes'));
-  installation.append(el('div', 'installation-text', game.installation || 'Keep all parts of the same repack in one folder. Review the source page for its extraction, verification, language, disk-space, and installation requirements. Atlas does not automatically run downloaded files.'));
-  installation.append(el('p', 'host-helper', 'Link availability does not verify the contents of an installer. Atlas does not run downloads or change Windows security settings.'));
+  installation.append(el('div', 'installation-text', game.installation || 'Keep all parts of the same repack in one folder. Review the source page for its extraction, verification, language, disk-space, and installation requirements. Ravenshelf does not automatically run downloaded files.'));
+  installation.append(el('p', 'host-helper', 'Link availability does not verify the contents of an installer. Ravenshelf does not run downloads or change Windows security settings.'));
   body.append(installation);
   $('#detail-content').replaceChildren(header, body);
 }
@@ -538,21 +538,34 @@ function updateDownloadCard(node, item) {
   connections.textContent = connectionText;
   connections.hidden = !connectionText;
   const error = $('.download-error', node); error.textContent = item.error || ''; error.hidden = !item.error;
-  const controls = $('.download-actions', node);
-  if (controls.dataset.status !== item.status) {
-    controls.dataset.status = item.status; controls.replaceChildren();
+  const scan = $('.download-scan', node), scanInfo = scanText(item);
+  scan.hidden = !scanInfo; scan.className = `download-scan ${scanInfo?.tone || ''}`;
+  if (scanInfo) scan.replaceChildren(icon(scanInfo.glyph), el('span', '', scanInfo.text)); else scan.replaceChildren();
+  const scanBusy = ['queued', 'scanning'].includes(item.scan?.status);
+  const controls = $('.download-actions', node), scanKey = item.status === 'completed' ? String(scanBusy) : '';
+  if (controls.dataset.status !== item.status || (controls.dataset.scan || '') !== scanKey) {
+    controls.dataset.status = item.status; controls.dataset.scan = scanKey; controls.replaceChildren();
     if (['downloading', 'queued'].includes(item.status)) controls.append(downloadActionButton(item, 'pause', 'Pause download', 'pause'));
     if (item.status === 'paused') controls.append(downloadActionButton(item, 'resume', 'Resume download', 'play'));
     if (['error', 'cancelled'].includes(item.status)) controls.append(downloadActionButton(item, 'retry', 'Retry download', 'refresh'));
     if (item.status === 'completed') controls.append(downloadActionButton(item, 'openFolder', 'Show downloaded file', 'folder'));
+    if (item.status === 'completed' && !scanBusy) controls.append(downloadActionButton(item, 'scan', item.scan ? 'Scan again with Microsoft Defender' : 'Scan with Microsoft Defender', 'shield'));
     if (['downloading', 'queued', 'paused', 'error'].includes(item.status)) controls.append(downloadActionButton(item, 'cancel', 'Cancel download', 'close'));
   }
+}
+function scanText(item) {
+  const scan = item.scan; if (!scan || item.status !== 'completed') return null;
+  if (scan.status === 'queued') return { tone: 'busy', glyph: 'clock', text: 'Waiting for the Microsoft Defender scan…' };
+  if (scan.status === 'scanning') return { tone: 'busy', glyph: 'shield', text: 'Scanning with Microsoft Defender…' };
+  if (scan.status === 'clean') return { tone: 'clean', glyph: 'shield', text: scan.message || 'Microsoft Defender found no threats.' };
+  if (scan.status === 'threat') return { tone: 'threat', glyph: 'alert', text: scan.message || 'Microsoft Defender found a threat. Do not open this file.' };
+  return { tone: '', glyph: 'alert', text: scan.message || 'This file was not scanned.' };
 }
 function downloadActionButton(item, action, label, glyph) {
   const node = iconButton(label, glyph);
   node.addEventListener('click', async () => {
     node.disabled = true;
-    try { await api.downloadAction({ id: item.id, action }); applyState(await api.getState()); }
+    try { await api.downloadAction({ id: item.id, action }); applyState(await api.getState()); if (action === 'scan') toast('Microsoft Defender scan queued.'); }
     catch (error) { toast(errorText(error), true); }
     finally { node.disabled = false; }
   });
@@ -564,7 +577,7 @@ function makeDownloadCard(item) {
   const information = el('div', 'download-information');
   const progress = el('div', 'download-progress'); progress.setAttribute('role', 'progressbar'); progress.setAttribute('aria-valuemin', '0'); progress.setAttribute('aria-valuemax', '100'); progress.append(el('div', 'download-progress-fill'));
   const bottom = el('div', 'download-bottom'); bottom.append(el('span', 'download-status'), el('span', 'download-transfer'));
-  information.append(el('h3', 'download-name'), el('div', 'download-game'), progress, bottom, el('p', 'download-connections'), el('p', 'download-error'));
+  information.append(el('h3', 'download-name'), el('div', 'download-game'), progress, bottom, el('p', 'download-connections'), el('p', 'download-scan'), el('p', 'download-error'));
   card.append(file, information, el('div', 'download-actions')); updateDownloadCard(card, item); return card;
 }
 function renderDownloads() {
@@ -593,6 +606,7 @@ function renderSettings() {
   $('#download-path').textContent = state.settings.downloadDir || 'Choose a download folder';
   if (document.activeElement !== $('#concurrency')) $('#concurrency').value = String(state.settings.concurrency || 2);
   if (document.activeElement !== $('#connections-per-file')) $('#connections-per-file').value = String(state.settings.connectionsPerFile || 4);
+  if (document.activeElement !== $('#defender-scan')) $('#defender-scan').value = state.settings.defenderScan === false ? 'off' : 'on';
 }
 function renderCatalogSections() {
   const container=$('#catalog-sections');container.replaceChildren();
@@ -714,13 +728,13 @@ function renderCompletionAction(){
   const mode=['close','shutdown'].includes(action.mode)?action.mode:'none';
   if($('#shutdown-confirm').hidden&&document.activeElement!==$('#completion-mode'))$('#completion-mode').value=mode;
   $('#completion-mode').disabled=completionBusy;
-  $('#completion-status').textContent=action.message||(mode==='none'?'Keep Atlas open. Choose an action for the current unfinished queue.':`Atlas will ${mode==='shutdown'?'request laptop shutdown':'close'} after this queue completes. You can change this any time.`);
+  $('#completion-status').textContent=action.message||(mode==='none'?'Keep Ravenshelf open. Choose an action for the current unfinished queue.':`Ravenshelf will ${mode==='shutdown'?'request laptop shutdown':'close'} after this queue completes. You can change this any time.`);
   const dialog=$('#completion-dialog');
   if(['countdown','executing','error'].includes(action.phase)){
     $('#shutdown-confirm').hidden=true;
     $('#completion-title').textContent=action.phase==='error'?'The action could not finish':mode==='shutdown'?'Ready to turn off the laptop':'Downloads complete';
     $('#completion-countdown').textContent=action.phase==='error'?'!':String(Math.max(0,Math.ceil(Number(action.remainingSeconds)||0)));
-    $('#completion-message').textContent=action.phase==='error'?action.message||'Your files are saved. You can keep working and choose an action again later.':action.phase==='executing'?action.message||'Completing your selected action…':mode==='shutdown'?'Windows shutdown will be requested when this countdown ends. Save your work, or cancel to keep using the laptop.':'Atlas will close when this countdown ends. Your downloaded files are saved.';
+    $('#completion-message').textContent=action.phase==='error'?action.message||'Your files are saved. You can keep working and choose an action again later.':action.phase==='executing'?action.message||'Completing your selected action…':mode==='shutdown'?'Windows shutdown will be requested when this countdown ends. Save your work, or cancel to keep using the laptop.':'Ravenshelf will close when this countdown ends. Your downloaded files are saved.';
     $('#cancel-completion').textContent=action.phase==='error'?'Dismiss — keep working':'Cancel — keep working';
     $('#cancel-completion').disabled=completionBusy||action.phase==='executing';
     if(!dialog.open)showDialog(dialog);
@@ -807,6 +821,12 @@ function wireEvents() {
     catch (error) { control.value = String(state.settings.connectionsPerFile || 4); toast(errorText(error), true); }
     finally { control.disabled = false; }
   });
+  $('#defender-scan').addEventListener('change', async () => {
+    const control = $('#defender-scan'); const defenderScan = control.value === 'on'; control.disabled = true;
+    try { applyState(await api.saveSettings({ defenderScan })); toast(defenderScan ? 'Finished downloads will be scanned with Microsoft Defender.' : 'Automatic scans are off. You can still scan a finished file from its card.'); }
+    catch (error) { control.value = state.settings.defenderScan === false ? 'off' : 'on'; toast(errorText(error), true); }
+    finally { control.disabled = false; }
+  });
   $('#new-collection').addEventListener('click',()=>openCollectionForm());
   $('#rename-collection').addEventListener('click',()=>openCollectionForm(selectedCollection));
   $('#delete-collection').addEventListener('click',()=>{$('#collection-delete-confirm').hidden=false;});
@@ -836,7 +856,7 @@ async function start() {
   hydrateIcons(); wireEvents();
   if (!api) {
     $('#catalog-meta').textContent = 'Desktop connection unavailable';
-    emptyState($('#catalog-empty'), 'Open Atlas from the desktop app', 'The desktop app connects this library to the catalog and your download folder.', 'alert');
+    emptyState($('#catalog-empty'), 'Open Ravenshelf from the desktop app', 'The desktop app connects this library to the catalog and your download folder.', 'alert');
     return;
   }
   if (typeof api.onState === 'function') api.onState(applyState);

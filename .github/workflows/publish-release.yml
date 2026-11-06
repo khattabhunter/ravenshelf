@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: atlas-public-release
+  group: ravenshelf-public-release
   cancel-in-progress: false
 
 jobs:
@@ -17,6 +17,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.prepare.outputs.version }}
     steps:
@@ -62,17 +66,21 @@ jobs:
       - name: Write SHA-256 checksum
         shell: pwsh
         run: |
-          $executables = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Atlas-Library-*-Windows.exe' -File)
+          $executables = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Ravenshelf-*-Windows.exe' -File)
           if ($executables.Count -ne 1) { throw 'Expected one portable executable.' }
           $checksum = Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256
           '{0}  {1}' -f $checksum.Hash.ToLowerInvariant(), $executables[0].Name |
             Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding utf8
+      - name: Record signed build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/Ravenshelf-*-Windows.exe
       - name: Preserve release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: atlas-release-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ravenshelf-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            dist/Atlas-Library-*-Windows.exe
+            dist/Ravenshelf-*-Windows.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
@@ -93,7 +101,7 @@ jobs:
       - name: Download tested build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: atlas-release-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ravenshelf-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: release-files
       - name: Verify files and publish prerelease
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -108,7 +116,7 @@ jobs:
             const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
             if (version !== packageVersion) throw new Error('Build and source versions do not match.');
             const tag = `v${version}`;
-            const executable = `Atlas-Library-${version}-Windows.exe`;
+            const executable = `Ravenshelf-${version}-Windows.exe`;
             const filenames = fs.readdirSync('release-files').sort();
             if (JSON.stringify(filenames) !== JSON.stringify([executable, 'SHA256SUMS.txt'].sort())) {
               throw new Error('Expected exactly the executable and checksum file.');
@@ -138,7 +146,7 @@ jobs:
               ...context.repo,
               tag_name: tag,
               target_commitish: context.sha,
-              name: `Atlas Library ${version} — Preview`,
+              name: `Ravenshelf ${version} — Preview`,
               body,
               draft: true,
               prerelease: true,
@@ -165,4 +173,4 @@ jobs:
               make_latest: 'false'
             });
             core.notice(`Published ${published.html_url}`);
-            await core.summary.addHeading(`Atlas Library ${version}`).addLink('Download the Windows prerelease', published.html_url).write();
+            await core.summary.addHeading(`Ravenshelf ${version}`).addLink('Download the Windows prerelease', published.html_url).write();

@@ -1,10 +1,10 @@
 # Notices
 
-Atlas Library is an independent application. It is not affiliated with FitGirl, Hydra, Sigma, Steam, Epic, GOG, YouTube or any file host.
+Ravenshelf is an independent application. It is not affiliated with FitGirl, Hydra, Sigma, Steam, Epic, GOG, YouTube or any file host.
 
 ## Original source
 
-Atlas's original implementation is distributed under the [MIT License](LICENSE). Catalogue descriptions, cover images, game names and other third-party content retain their respective owners' rights and are retrieved from external services. The repository does not grant rights to download or redistribute third-party games.
+Ravenshelf's original implementation is distributed under the [MIT License](LICENSE). Catalogue descriptions, cover images, game names and other third-party content retain their respective owners' rights and are retrieved from external services. The repository does not grant rights to download or redistribute third-party games.
 
 ## Dependencies
 
@@ -13,7 +13,7 @@ Atlas's original implementation is distributed under the [MIT License](LICENSE).
 - [Undici](https://github.com/nodejs/undici) is MIT-licensed.
 - [electron-builder](https://github.com/electron-userland/electron-builder) is a build-time dependency with its own license and bundled-tool notices.
 
-The lockfile records direct and transitive dependencies. Their licenses remain in their package distributions; Atlas's MIT license does not replace those terms.
+The lockfile records direct and transitive dependencies. Their licenses remain in their package distributions; Ravenshelf's MIT license does not replace those terms.
 
 The encrypted-paste reader implements the [PrivateBin](https://github.com/PrivateBin/PrivateBin) version 2 message format using Node.js crypto and zlib. PrivateBin's application code is not bundled as part of that implementation.
 
@@ -26,6 +26,6 @@ These projects were reviewed as references for product ideas and workflows:
 - [FitGirl Automatic Download Assistant](https://github.com/xmtaha/FitGirl-Automatic-Download-Assistant)
 - [Fit-girl-automator](https://github.com/bustacarl1331/Fit-girl-automator)
 
-They are separate projects with their own licenses. Atlas does not bundle their applications or claim to be an official fork. Reviewing a reference project is not a certification that its code or downloads are safe.
+They are separate projects with their own licenses. Ravenshelf does not bundle their applications or claim to be an official fork. Reviewing a reference project is not a certification that its code or downloads are safe.
 
-Only obtain files you have permission to download. Link availability, matching filenames and popup restrictions are not malware verdicts. Atlas does not automatically run third-party installers or change antivirus settings.
+Only obtain files you have permission to download. Link availability, matching filenames and popup restrictions are not malware verdicts. Ravenshelf does not automatically run third-party installers or change antivirus settings.

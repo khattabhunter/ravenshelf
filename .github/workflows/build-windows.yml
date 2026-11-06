@@ -31,7 +31,7 @@ jobs:
       - name: Write SHA-256 checksum
         shell: pwsh
         run: |
-          $executables = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Atlas-Library-*-Windows.exe' -File)
+          $executables = @(Get-ChildItem -LiteralPath 'dist' -Filter 'Ravenshelf-*-Windows.exe' -File)
           if ($executables.Count -ne 1) { throw 'Expected one portable executable.' }
           $checksum = Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256
           '{0}  {1}' -f $checksum.Hash.ToLowerInvariant(), $executables[0].Name |
@@ -39,9 +39,9 @@ jobs:
       - name: Upload Windows build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: atlas-windows-x64-${{ github.run_number }}
+          name: ravenshelf-windows-x64-${{ github.run_number }}
           path: |
-            dist/Atlas-Library-*-Windows.exe
+            dist/Ravenshelf-*-Windows.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14

@@ -1,12 +1,12 @@
-# Contributing to Atlas
+# Contributing to Ravenshelf
 
 Bug reports, focused fixes and documentation improvements are welcome. Read the [user guide](docs/USER-GUIDE.md) and [build instructions](docs/BUILDING.md) before changing the app.
 
 ## Report a problem
 
-Open an [issue](https://github.com/khattabhunter/atlas-library/issues) with:
+Open an [issue](https://github.com/khattabhunter/ravenshelf/issues) with:
 
-- The Atlas version and Windows version.
+- The Ravenshelf version and Windows version.
 - What you expected and what happened instead.
 - The shortest steps that reproduce the problem.
 - The visible error text and, if useful, a screenshot with personal information removed.
@@ -30,4 +30,4 @@ Use synthetic fixtures instead of personal profiles or whole captured host pages
 
 ## License
 
-Contributions to Atlas's original code are submitted under the repository's [MIT License](LICENSE). Preserve third-party notices and include appropriate attribution for any separately licensed material you add.
+Contributions to Ravenshelf's original code are submitted under the repository's [MIT License](LICENSE). Preserve third-party notices and include appropriate attribution for any separately licensed material you add.

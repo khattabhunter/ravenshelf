@@ -47,7 +47,7 @@ async function safeFetch(value, options={}) {
   let {timeoutMs=30000,maxBytes, ...init}=options;
   const signal = timeoutMs>0 ? (init.signal ? AbortSignal.any([init.signal,AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)) : init.signal;
   const headers = new Headers(init.headers || {});
-  if(!headers.has('User-Agent')) headers.set('User-Agent','Mozilla/5.0 AtlasLibrary/0.1');
+  if(!headers.has('User-Agent')) headers.set('User-Agent','Mozilla/5.0 Ravenshelf/0.3');
   let method=init.method || 'GET', body=init.body;
   for(let n=0;n<8;n++) {
     const res=await fetch(url.href,{...init,method,body,headers,signal,dispatcher,redirect:'manual'});

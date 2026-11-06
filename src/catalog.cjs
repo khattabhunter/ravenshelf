@@ -105,7 +105,7 @@ async function listCatalog({section='newest',page=1,search='',genre='',forceRefr
     const games=(search?listing.games.filter(game=>matchesGenre(game,info)):listing.games).map(enrich);
     // Do not cache challenge/error HTML as an empty newest catalogue. Empty
     // searches, genre pages and pages beyond the archive remain valid results.
-    if(newestHome&&!games.length)throw new Error('The newest catalogue page could not be read. Atlas will try again.');
+    if(newestHome&&!games.length)throw new Error('The newest catalogue page could not be read. Ravenshelf will try again.');
     const notice=info.tag?`Genre labels come from FitGirl. ${search?'Search results are also checked against the game’s genre metadata; later source pages may have more matches.':'Use Next page to browse the whole source genre archive.'}`:'Newest means the repack publication date, not the original game release date.';
     return {...listing,games,section,label:info.label,description:info.description,sourceUrl:url,notice};
   },5*60*1000,forceRefresh===true);

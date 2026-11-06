@@ -154,7 +154,7 @@ function parseDetail(html, url) {
   });
   const sourceNotes=[...new Set(installation)].slice(0,20);
   if(/Only updated files for a new non-HV repack/i.test(content.text()) && /unpack them OVER setup files/i.test(content.text())) sourceNotes.unshift('This mirror includes a separate replacement setup archive for the newer non-HV repack. The source says to unpack that archive over the main setup files, with overwriting. Keep it separate from the numbered multipart sequence.');
-  if(/turn off AV|disable.{0,30}(?:antivirus|defender)|installation folders to exclusions/i.test(content.text())) sourceNotes.push('The source page also contains instructions to weaken antivirus protection. Atlas does not apply those instructions.');
+  if(/turn off AV|disable.{0,30}(?:antivirus|defender)|installation folders to exclusions/i.test(content.text())) sourceNotes.push('The source page also contains instructions to weaken antivirus protection. Ravenshelf does not apply those instructions.');
   return {...game,screenshots:screenshots.slice(0,12),groups:[...groups.values()],installation:sourceNotes.length?'Source-reported installation notes (not independently verified):\n'+sourceNotes.join('\n'):''};
 }
 async function listGames({page=1,search='',letter=''}={}) {

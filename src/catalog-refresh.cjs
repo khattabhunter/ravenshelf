@@ -59,7 +59,7 @@ class CatalogRefresh {
       if(!result||!Array.isArray(result.games))throw new Error('The catalogue response could not be read.');
       // The newest homepage should contain games. An empty parse often means a
       // challenge, missing page or changed markup, not that every game vanished.
-      if(result.games.length===0)throw new Error('The newest catalogue response did not contain any games. Atlas will retry automatically.');
+      if(result.games.length===0)throw new Error('The newest catalogue response did not contain any games. Ravenshelf will retry automatically.');
       const latest=structuredClone(result),fingerprint=JSON.stringify(latest);
       if(fingerprint!==this.fingerprint){this.revision++;this.fingerprint=fingerprint;}
       this.latest=latest;this.lastCheckedAt=new Date(this.clock()).toISOString();this.error='';

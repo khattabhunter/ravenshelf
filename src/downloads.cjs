@@ -20,11 +20,12 @@ function atomicJSON(file,data) {
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null}) {
-    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault;
-    this.running=new Map(); this.tasks=new Set(); this.stopping=false;
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null}) {
+    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile;
+    this.running=new Map(); this.tasks=new Set(); this.stopping=false; this.scanQueue=[]; this.scanning=null;
     const stored=loadJSON(stateFile,{});
-    this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],...stored.settings};
+    this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],defenderScan:true,...stored.settings};
+    this.settings.defenderScan=this.settings.defenderScan!==false;
     this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);
     this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));
     this.downloads=Array.isArray(stored.downloads)?stored.downloads:[];
@@ -40,6 +41,9 @@ class DownloadManager extends EventEmitter {
     }
     // Rewrite profiles from older versions so their saved cookies are sealed.
     if(plainHeaders&&this.vault?.available())this.save();
+    // Scans interrupted by closing the app run again on the next start.
+    for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
+    if(this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
     this.timer=setInterval(()=>{if(this.running.size) this.save();},2000); this.timer.unref();
   }
   state(){ return {downloads:this.downloads.map(({headers,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION}; }
@@ -51,7 +55,7 @@ class DownloadManager extends EventEmitter {
   }
   save(){atomicJSON(this.stateFile,{settings:this.settings,downloads:this.downloads.map(d=>this.persisted(d))});}
   changed(){this.emit('state',this.state());}
-  updateSettings(patch){this.settings={...this.settings,...patch};this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
+  updateSettings(patch){this.settings={...this.settings,...patch};this.settings.defenderScan=this.settings.defenderScan!==false;this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));this.save();this.changed();this.pump();return this.state();}
   add({links,gameTitle}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
     const folderName=safeName(gameTitle,'Imported files').slice(0,100);
@@ -74,6 +78,11 @@ class DownloadManager extends EventEmitter {
   }
   action(id,action){
     const d=this.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
+    if(action==='scan'){
+      if(d.status!=='completed')throw new Error('Only finished downloads can be scanned.');
+      if(!this.scanFile)throw new Error('Microsoft Defender scanning is not available.');
+      this.queueScan(d);return this.state();
+    }
     if(action==='pause'&&['queued','downloading'].includes(d.status)){d.status='paused';this.running.get(id)?.abort();}
     else if(action==='cancel'&&!['completed','cancelled'].includes(d.status)){d.status='cancelled';this.running.get(id)?.abort();}
     else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';}
@@ -135,6 +144,7 @@ class DownloadManager extends EventEmitter {
       else await fs.promises.unlink(partial).catch(error=>{if(error.code!=='ENOENT')throw error;});
       await removeWorkspace(workspace).catch(()=>{d.connectionNote='Download complete. Some temporary files could not be removed.';});
       d.total=d.received;d.status='completed';d.completedAt=new Date().toISOString();
+      if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
     };
     const parallel=async()=>{
       d.connectionMode='checking';d.activeConnections=0;this.changed();
@@ -203,6 +213,26 @@ class DownloadManager extends EventEmitter {
     }catch(err){
       if(d.status==='downloading'){d.status='error';d.error=err.message||'Download failed.';}
     }finally{clearInterval(watchdog);clearInterval(rateTimer);if(handle)await handle.close();d.activeConnections=0;}
+  }
+  queueScan(d){
+    if(['queued','scanning'].includes(d.scan?.status)&&(this.scanning===d.id||this.scanQueue.includes(d.id)))return;
+    d.scan={status:'queued'};this.scanQueue.push(d.id);this.save();this.changed();
+    setImmediate(()=>this.pumpScans());
+  }
+  // One scan at a time keeps Defender from slowing the PC with parallel archive scans.
+  async pumpScans(){
+    if(this.scanning||this.stopping||!this.scanFile)return;
+    const id=this.scanQueue.shift();if(!id)return;
+    const d=this.downloads.find(x=>x.id===id);
+    if(!d||d.status!=='completed'){if(d)delete d.scan;return this.pumpScans();}
+    this.scanning=id;d.scan={status:'scanning',startedAt:new Date().toISOString()};this.changed();
+    try{
+      const result=await this.scanFile(path.join(d.folder,d.name));
+      const status=['clean','threat','missing','unavailable','error'].includes(result?.status)?result.status:'error';
+      d.scan={status,message:String(result?.message||'').slice(0,300),scannedAt:result?.scannedAt||new Date().toISOString()};
+    }catch{d.scan={status:'error',message:'Microsoft Defender could not finish this scan.',scannedAt:new Date().toISOString()};}
+    finally{this.scanning=null;this.save();this.changed();}
+    return this.pumpScans();
   }
   async stop(){this.stopping=true;clearInterval(this.timer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}await Promise.allSettled([...this.tasks]);this.save();}
 }
