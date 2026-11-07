@@ -8,8 +8,16 @@ permissions:
   contents: read
 
 jobs:
+  verify-source:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/source-integrity.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
   build:
     name: Portable Windows x64
+    needs: verify-source
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -26,6 +34,10 @@ jobs:
         run: npm ci
       - name: Run offline tests
         run: npm test
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=high
+      - name: Verify registry signatures and available provenance
+        run: npm audit signatures
       - name: Build unsigned portable application
         run: npm run dist -- --config.compression=normal
       - name: Verify packaged security fuses
@@ -41,9 +53,70 @@ jobs:
       - name: Upload Windows build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ravenshelf-windows-x64-${{ github.run_number }}
+          name: ravenshelf-windows-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             dist/Ravenshelf-*-Windows.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
+
+  attest:
+    name: Attest the preview artifact
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download this run's tested preview
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ravenshelf-windows-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-files
+      - name: Record signed build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-files/Ravenshelf-*-Windows.exe
+
+  verify:
+    name: Verify the preview artifact
+    needs: attest
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Check out the verified source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download this run's tested preview
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ravenshelf-windows-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-files
+      - name: Verify artifact signature and exact build origin
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $executables = @(Get-ChildItem -LiteralPath 'release-files' -Filter 'Ravenshelf-*-Windows.exe' -File)
+          if ($executables.Count -ne 1) { throw 'Expected one preview executable.' }
+          node scripts/verify-attestation.cjs --artifact $executables[0].FullName --commit "$env:GITHUB_SHA" --workflow .github/workflows/build-windows.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact provenance verification failed.' }
+      - name: Confirm wrong source and workflow are rejected
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $executables = @(Get-ChildItem -LiteralPath 'release-files' -Filter 'Ravenshelf-*-Windows.exe' -File)
+          if ($executables.Count -ne 1) { throw 'Expected one preview executable.' }
+          node scripts/verify-attestation.cjs --artifact $executables[0].FullName --commit 0000000000000000000000000000000000000000 --workflow .github/workflows/build-windows.yml
+          if ($LASTEXITCODE -eq 0) { throw 'Verification incorrectly accepted a different source commit.' }
+          node scripts/verify-attestation.cjs --artifact $executables[0].FullName --commit "$env:GITHUB_SHA" --workflow .github/workflows/publish-release.yml
+          if ($LASTEXITCODE -eq 0) { throw 'Verification incorrectly accepted a different signing workflow.' }
+          Write-Output 'Both expected provenance mismatches were rejected.'
+          exit 0

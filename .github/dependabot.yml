@@ -4,14 +4,26 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Asia/Baghdad
     open-pull-requests-limit: 5
+    versioning-strategy: increase
     groups:
       minor-and-patch:
+        update-types: [minor, patch]
+      security-minor-and-patch:
+        applies-to: security-updates
         update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Asia/Baghdad
+    open-pull-requests-limit: 5
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]

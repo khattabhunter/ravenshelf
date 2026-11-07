@@ -16,10 +16,12 @@ Redact usernames and personal paths from logs or screenshots. Signed direct-down
 
 ## Project boundaries
 
-- Releases are built on GitHub-hosted Windows machines from tagged source after the test suite passes, and carry a SHA-256 checksum and a signed build-provenance attestation (`gh attestation verify <file> --repo khattabhunter/ravenshelf`).
+- Releases are built on GitHub-hosted Windows machines from reviewed source, with a matching release tag, after the test suite passes. They carry a SHA-256 checksum and a signed build-provenance attestation; see [the restricted verification command](docs/SUPPLY-CHAIN.md#verify-the-published-executables-build-origin).
 - The executable disables Electron's run-as-Node mode, `NODE_OPTIONS`, debugger flags and extra `file://` privileges. From 0.3.1, archive-only application loading is paired with embedded ASAR-integrity validation. `npm run verify:build` inspects the actual packaged fuse values. The executable remains unsigned; these settings are not a publisher-authenticity guarantee.
 - Finished downloads can be scanned with Microsoft Defender. A successful process exit alone is not labeled clean: recognized explicit clean output is required, and ambiguous output needs review. Threat or remediation evidence takes precedence. Ravenshelf does not change antivirus settings; no scan result certifies a file as harmless.
-- CodeQL security-and-quality analysis, locked-dependency audits and Dependabot dependency updates run on the repository. A successful scan workflow does not mean its alert list is empty.
+- CodeQL security-and-quality analysis, locked-dependency audits and Dependabot dependency updates run on the repository. Test and build jobs also verify npm registry signatures and available package provenance. A successful scan workflow does not mean its alert list is empty, and not every dependency provides a publisher provenance attestation.
+- Prospective source checks require GitHub-verified signatures on checked PR commits and the exact source selected for hosted preview/release builds. GPG, SSH, S/MIME and supported GitHub platform signatures are accepted; this is not a claim that every historical commit was signed. Existing unsigned history is retained, and private signing keys are not stored in CI. See [the source-verification policy](docs/SUPPLY-CHAIN.md), including the proposed hosted ruleset rollout.
+- Public release builds require successful Test, CodeQL and Source integrity push runs for the exact source commit. Builders have read-only repository permission. A separate attestation job only downloads and attests the tested artifact; it does not check out source or run dependency/build code. Publication verifies the artifact's cryptographic attestation against the repository, expected workflow, exact source/workflow commit and GitHub-hosted runner policy. Preview builds exercise the same chain without publishing a release. These repository controls do not change the installed 0.4.1 app or its updater.
 
 - The main application page uses an isolated preload bridge with a limited set of operations. Remote host and gameplay windows do not receive that bridge.
 - File and cover-image requests enforce HTTPS and public-network checks. Cover images use a bounded raster-only loader without browser-session credentials. Supported-host windows restrict navigation, popups and requests, but they are not an antivirus or a universal ad blocker.
@@ -35,7 +37,7 @@ Redact usernames and personal paths from logs or screenshots. Signed direct-down
 
 A release checksum checks agreement with the published file. A valid build attestation records build provenance, not the safety of the code or downloaded games. Neither substitutes for an executable publisher signature.
 
-The automatic updater does not itself verify a GitHub build-provenance attestation. Users can verify it separately with the command above. GitHub documents the asset `digest` field in its [release asset API](https://docs.github.com/en/rest/releases/assets?apiVersion=2022-11-28).
+The automatic updater does not itself verify a GitHub build-provenance attestation. Users can verify it separately, restricting the expected repository, release workflow, reviewed source commit and runner type; see [the verification command](docs/SUPPLY-CHAIN.md#verify-the-published-executables-build-origin). GitHub documents the asset `digest` field in its [release asset API](https://docs.github.com/en/rest/releases/assets?apiVersion=2022-11-28).
 
 Ravenshelf has no built-in proxy/VPN enforcement or kill switch. Interface binding alone would not make both browser and download traffic leakproof. Search API integration, including Brave, is deferred and is not an anonymity or free-service guarantee.
 

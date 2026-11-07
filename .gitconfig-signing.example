@@ -1,0 +1,11 @@
+# Reference only. Git does not load this file automatically.
+# There are deliberately no active settings, default key IDs or personal paths.
+# Follow docs/SUPPLY-CHAIN.md from this repository and use git config --local.
+# Select your own full GPG fingerprint and matching verified email first.
+# Never put a private key or passphrase in this file, the repository or CI.
+#
+# Repository settings to configure after confirming your key works:
+#   gpg.format = openpgp
+#   user.signingkey = your selected full fingerprint (not supplied here)
+#   user.email = your matching verified email (not supplied here)
+#   commit.gpgsign = true

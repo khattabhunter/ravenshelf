@@ -1,0 +1,107 @@
+name: Source integrity
+
+# Runs before checkout or dependency execution. GitHub verifies the signatures;
+# no repository-provided executable or signature-verification script is loaded.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      verified_sha:
+        description: Exact commit verified for this run, or the verified PR head.
+        value: ${{ jobs.verify.outputs.verified_sha }}
+      commit_count:
+        description: Number of introduced commits whose signatures were checked.
+        value: ${{ jobs.verify.outputs.commit_count }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  verify:
+    name: Verify source signatures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      verified_sha: ${{ steps.signatures.outputs.verified_sha }}
+      commit_count: ${{ steps.signatures.outputs.commit_count }}
+    steps:
+      - name: Verify exact source through GitHub
+        id: signatures
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const validSha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+            const audit = [];
+            const verify = (commit, expectedSha) => {
+              if (!validSha(expectedSha) || commit?.sha !== expectedSha) {
+                throw new Error('GitHub returned a different or invalid commit identity.');
+              }
+              const verification = commit.commit?.verification;
+              if (verification?.verified !== true || verification.reason !== 'valid' ||
+                  typeof verification.signature !== 'string' || !verification.signature.trim() ||
+                  typeof verification.payload !== 'string' || !verification.payload.trim()) {
+                throw new Error('Every source commit must have a valid GitHub-verified signature and signed payload.');
+              }
+              // No signature-format allowlist: GitHub-verified GPG, SSH and
+              // S/MIME signatures are all accepted. Never log payloads/identities.
+              const timestamp = typeof verification.verified_at === 'string' ? Date.parse(verification.verified_at) : NaN;
+              audit.push([expectedSha, Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : 'not recorded']);
+            };
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            let verifiedSha;
+            if (context.eventName === 'pull_request') {
+              const pullNumber = context.payload.number;
+              const eventHead = context.payload.pull_request?.head?.sha;
+              if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0 || !validSha(eventHead)) {
+                throw new Error('The pull-request event is missing its exact source identity.');
+              }
+              const { data: before } = await github.rest.pulls.get({ ...repo, pull_number: pullNumber });
+              const expectedCount = before.commits;
+              if (before.head?.sha !== eventHead || !validSha(before.base?.sha) || before.base?.ref !== 'main' ||
+                  !Number.isSafeInteger(expectedCount) || expectedCount < 1 || expectedCount > 250) {
+                throw new Error('The pull-request head changed, its base is invalid, or its complete commit count exceeds the 250-commit review limit.');
+              }
+              const commits = [], seen = new Set();
+              let complete = false;
+              // GitHub caps this endpoint at 250. A full 100-commit final page
+              // needs one more page to prove completeness, even without a Link.
+              for (let page = 1; page <= 3; page++) {
+                const response = await github.rest.pulls.listCommits({ ...repo, pull_number: pullNumber, per_page: 100, page });
+                const batch = response.data;
+                if (!Array.isArray(batch) || batch.length > 100 || commits.length + batch.length > expectedCount || commits.length + batch.length > 250) {
+                  throw new Error('The introduced commit list is inconsistent or incomplete.');
+                }
+                for (const commit of batch) {
+                  if (!validSha(commit?.sha) || seen.has(commit.sha)) throw new Error('The introduced commit list contains a missing or duplicate identity.');
+                  seen.add(commit.sha); verify(commit, commit.sha); commits.push(commit);
+                }
+                if (batch.length < 100) {
+                  if (/\brel\s*=\s*"next"/i.test(response.headers?.link || '')) throw new Error('GitHub returned a truncated commit page.');
+                  complete = true; break;
+                }
+              }
+              if (!complete || commits.length !== expectedCount || commits.at(-1)?.sha !== eventHead) {
+                throw new Error('The complete introduced commit list and exact pull-request head could not be verified.');
+              }
+              const { data: after } = await github.rest.pulls.get({ ...repo, pull_number: pullNumber });
+              if (after.head?.sha !== eventHead || after.base?.sha !== before.base.sha || after.base?.ref !== before.base.ref || after.commits !== expectedCount) {
+                throw new Error('The pull-request head or base changed while signatures were being verified. Rerun for its current source.');
+              }
+              verifiedSha = eventHead;
+            } else {
+              if (!['push', 'workflow_dispatch', 'workflow_call'].includes(context.eventName) || !validSha(context.sha)) {
+                throw new Error('This event does not identify a supported exact source commit.');
+              }
+              const { data: commit } = await github.rest.repos.getCommit({ ...repo, ref: context.sha });
+              verify(commit, context.sha); verifiedSha = context.sha;
+            }
+            core.setOutput('verified_sha', verifiedSha);
+            core.setOutput('commit_count', audit.length);
+            core.notice(`Verified signatures for ${audit.length} source commit(s); exact source ${verifiedSha}.`);
+            await core.summary.addHeading('Verified source signatures')
+              .addTable([[{ data: 'Commit', header: true }, { data: 'GitHub verified at', header: true }], ...audit]).write();

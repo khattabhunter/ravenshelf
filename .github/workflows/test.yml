@@ -35,3 +35,5 @@ jobs:
         run: npm test
       - name: Audit locked dependencies
         run: npm audit --audit-level=high
+      - name: Verify registry signatures and available provenance
+        run: npm audit signatures

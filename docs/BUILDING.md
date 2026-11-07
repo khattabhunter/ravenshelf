@@ -17,10 +17,13 @@ git clone https://github.com/khattabhunter/ravenshelf.git
 cd ravenshelf
 npm ci
 npm test
+npm run verify:supply-chain
 npm start
 ```
 
 `npm ci` installs the versions in `package-lock.json`. Electron's installation may download its runtime. Keep the lockfile with dependency changes; avoid substituting unreviewed packages or bypassing Windows security controls to make a build succeed.
+
+`npm run verify:supply-chain` checks the dependency, Dependabot and workflow configuration for consistency. It does not contact a registry or verify signatures. Hosted test/build jobs separately run `npm audit signatures` to verify registry signatures and available provenance, alongside `npm audit --audit-level=high`. You can run those audits locally when online. See [source and release verification](SUPPLY-CHAIN.md).
 
 The development app uses the same normal profile name as the packaged app. Close another Ravenshelf instance before running it. For development that must not touch your normal profile, use a dedicated directory:
 
@@ -52,7 +55,11 @@ The helper is a compiled Windows program with no PowerShell update dependency. D
 
 The build configuration produces an unsigned Windows x64 portable application. It does not configure a signing certificate, background Windows service or Linux/macOS release. App-update checks run only while the portable app is open and use this repository's GitHub releases. Electron-builder may download packaging tools on the first build.
 
-The repository's **Build Windows preview** GitHub Actions workflow can also produce a Windows artifact. In the repository's **Actions** tab, select that workflow and choose **Run workflow**. Its `ravenshelf-windows-x64-<run number>` artifact contains the executable and `SHA256SUMS.txt`. The separate **Test** workflow runs the automated suite.
+The repository's **Build Windows preview** GitHub Actions workflow can also produce a Windows artifact. In the repository's **Actions** tab, select that workflow and choose **Run workflow** on `main`; other branches do not build. Its `ravenshelf-windows-x64-<run ID>-<run attempt>` artifact contains the executable and `SHA256SUMS.txt`. The separate **Test** workflow runs the automated suite.
+
+Hosted preview and release builds require the exact source commit to pass [source-integrity.yml](../.github/workflows/source-integrity.yml) before building. A separate job attests the tested artifact without checking out source or installing dependencies; the builder has read-only repository permission. Preview runs then verify the artifact's exact source/workflow provenance, allowing end-to-end checks without a new public release. This prospective policy preserves existing unsigned history; local source builds remain available for development. See [source and release verification](SUPPLY-CHAIN.md) for accepted signing routes, Dependabot handling and optional repository-only GPG setup. Private signing keys are never required in CI.
+
+These repository and CI changes leave the installed app version at 0.4.1. They do not require a replacement executable or alter runtime download/update behavior.
 
 Workflow artifacts are build outputs. For a release download link, a maintainer can publish the reviewed files or use the release workflow below.
 
@@ -98,7 +105,7 @@ Passing tests establish the exercised cases, not that every host response, Windo
 
 1. Review application changes and update `CHANGELOG.md`.
 2. Keep the version in `package.json` and the lockfile synchronized.
-3. Run `npm ci`, `npm test`, `npm run dist` and `npm run verify:build` on Windows. Review the fuse-check result for the freshly packaged executable.
+3. Run `npm ci`, `npm test`, `npm run verify:supply-chain`, `npm audit --audit-level=high`, `npm audit signatures`, `npm run dist` and `npm run verify:build` on Windows. Review the audit and fuse-check results for the freshly packaged executable.
 4. Open the packaged application using a separate test profile and check the affected flows. Do not use real shutdown actions for tests.
 5. Generate a checksum for the exact executable being published:
 
@@ -106,11 +113,11 @@ Passing tests establish the exercised cases, not that every host response, Windo
    Get-FileHash -Algorithm SHA256 '.\dist\Ravenshelf-<version>-Windows.exe'
    ```
 
-6. Create a matching release tag and attach the reviewed executable and checksum file. Publish source through Git, not a copy of the app's local profile or build cache.
+6. Confirm that the exact source commit is signed and verified on GitHub, then create a matching release tag and attach the reviewed executable and checksum file. Publish source through Git, not a copy of the app's local profile or build cache. Keep existing unsigned history and published tags unchanged.
 
-Alternatively, after reviewing and merging the release changes into `main`, a maintainer can select **Publish Windows prerelease** (`.github/workflows/publish-release.yml`) in the repository's **Actions** tab, then choose **Run workflow** with branch `main`. No other inputs are required. The workflow installs dependencies, runs tests and builds on Windows with Node.js 24, then publishes a prerelease tagged `v<package version>` with the executable and `SHA256SUMS.txt`. It takes release notes from `docs/RELEASE-<version>.md`; GitHub supplies source archives for the tag. An existing tag or release, including a draft, is refused. Check that the workflow, including packaged fuse verification, succeeds and inspect the release assets before sharing the download link.
+Alternatively, after reviewing and merging the release changes into `main`, wait for the latest main-branch push runs of **Test**, **CodeQL** and **Source integrity** to succeed on that exact commit. A maintainer can then select **Publish Windows prerelease** (`.github/workflows/publish-release.yml`) in the repository's **Actions** tab and choose **Run workflow** with branch `main`. No other inputs are required. The workflow checks source signatures and those completed runs before installing dependencies, testing and building on Windows with Node.js 24. After a separate job attests the tested artifact, the publication job verifies that attestation against the repository, expected workflow and exact source/workflow commits before publishing. It uses release notes from `docs/RELEASE-<version>.md` and creates a prerelease tagged `v<package version>` with the executable and `SHA256SUMS.txt`; GitHub supplies source archives for the tag. An existing tag or release, including a draft, is refused. Check that the entire workflow succeeds and inspect the release assets before sharing the download link.
 
-Published builds include a GitHub build-provenance attestation. Verify it with `gh attestation verify <executable> --repo khattabhunter/ravenshelf`. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.1 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
+Published builds include a GitHub build-provenance attestation. Follow the [restricted verification command](SUPPLY-CHAIN.md#verify-the-published-executables-build-origin) to check the repository, expected release workflow, exact reviewed source commit and GitHub-hosted runner. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.1 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
 
 CodeQL also analyzes the C# helper using an explicit native-helper compilation job, alongside JavaScript and workflow analysis. Review the alert lists as well as workflow completion; a finished scan is not itself a finding-free result.
 
