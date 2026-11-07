@@ -217,7 +217,7 @@ test('artifact verifier arguments bind the correct source and workflow without e
   rejected(config => { verification(config).run = command('build-windows.yml'); }, /run artifact signature verification/);
   rejected(config => { verification(config).run = command('publish-release.yml').replace('$env:GITHUB_SHA', '0'.repeat(40)); }, /run artifact signature verification/);
   rejected(config => { verification(config).run = command('publish-release.yml').replace('--artifact', '--commit fixture --artifact'); }, /pin this workflow/);
-  rejected(config => { verification(config).run = command('publish-release.yml').replace('\n', ' || true\n'); }, /pin this workflow/);
+  rejected(config => { verification(config).run = command('publish-release.yml').replaceAll('\n', ' || true\n'); }, /pin this workflow/);
 });
 
 test('publication cannot precede the required positive artifact verification', () => {
