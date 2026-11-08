@@ -51,3 +51,23 @@ test('Linked artifacts or ancestors and nonregular files are rejected before CLI
   let calls=0;for(const artifact of [hardlink,directory,path.join(alias,path.basename(f.artifact))])await assert.rejects(verifyAttestation({...f,artifact},{runner:()=>{calls++;return verified();}}),/local artifact/);
   assert.equal(calls,0);
 });
+test('The verified build record can be exported only to a new local .sigstore.json file',async t=>{
+  const f=fixture(t),record=path.join(f.root,'update-record.sigstore.json');
+  const bundle={mediaType:'application/vnd.dev.sigstore.bundle.v0.3+json',verificationMaterial:{tlogEntries:[]},dsseEnvelope:{payload:'e30=',payloadType:'application/vnd.in-toto+json',signatures:[]}};
+  const output=()=>{const results=JSON.parse(verified());results[0].attestation={bundle,bundle_url:'https://example.invalid/signed?sig=secret'};return JSON.stringify(results);};
+  const parsed=parseArgs(['--artifact','release-files/Ravenshelf-fixture.exe','--commit',commit,'--workflow',workflow,'--export','update-record.sigstore.json']);
+  assert.equal(parsed.exportPath,path.resolve('update-record.sigstore.json'));
+  // A backslash path is a UNC share only on Windows.
+  for(const values of [['--export','record.json'],['--export','record.sigstore.json','--export','other.sigstore.json'],['--export'],['--export','record.sigstore.json:hidden.sigstore.json'],...(process.platform==='win32'?[['--export','\\\\server\\share\\record.sigstore.json']]:[])])
+    assert.throws(()=>parseArgs(['--artifact','file.exe','--commit',commit,'--workflow',workflow,...values]),JSON.stringify(values));
+  const result=await verifyAttestation({...f,exportPath:record},{runner:output});
+  assert.deepEqual(result,{verified:true,repository:REPOSITORY,workflow,sourceCommit:commit,attestations:1,exported:'update-record.sigstore.json'});
+  assert.deepEqual(JSON.parse(fs.readFileSync(record,'utf8')),bundle);assert.doesNotMatch(fs.readFileSync(record,'utf8'),/secret|bundle_url/);
+  await assert.rejects(verifyAttestation({...f,exportPath:record},{runner:output}),/could not be saved to a new file/);assert.deepEqual(JSON.parse(fs.readFileSync(record,'utf8')),bundle,'an existing file is never replaced');
+  const missing=path.join(f.root,'missing.sigstore.json');
+  for(const changed of [{},{bundle:null},{bundle:{...bundle,mediaType:'application/json'}},{bundle:{...bundle,dsseEnvelope:undefined}},{bundle:{...bundle,padding:'x'.repeat(1024*1024)}}]){
+    const results=JSON.parse(verified());results[0].attestation=changed;
+    await assert.rejects(verifyAttestation({...f,exportPath:missing},{runner:()=>JSON.stringify(results)}),/did not return the verified build record/);
+  }
+  assert.equal(fs.existsSync(missing),false);
+});

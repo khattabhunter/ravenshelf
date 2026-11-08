@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 — Updates ask first and check the signed build record
+
+- Automatic update checks only find and announce a new version. Nothing is downloaded or installed until you choose **Download and install**; **What’s new** opens the exact release page. An install on close or with **Restart now** requires that approval.
+- Before downloading an approved update, verify the release's Sigstore build record: certificate chain and transparency proofs, the DSSE-signed SLSA provenance naming the exact executable and SHA-256, and a signer pinned to `publish-release.yml` on `main` in this repository (issuer, GitHub-hosted runner, repository and owner IDs). Sigstore's trusted root is refreshed through TUF with a bundled fallback. Any failure stops the update. Verification works with the BoringSSL library in Electron, not only with Node's OpenSSL.
+- Remove leftovers of finished updates: the staged copy, helper and job files, and the previous executable kept next to the app. A rollback copy is removed only after a recorded successful update and only when it matches the replaced executable byte for byte. Failed updates, links, unexpected files and profile backups are kept.
+- Releases now publish `Ravenshelf-<version>-Windows.exe.sigstore.json`. A read-only release job checks it with the in-app verifier against Sigstore's current and bundled trusted roots, in Node and in the shipped Electron runtime; a record installed copies would refuse stops publication.
+
+See [the release notes](docs/RELEASE-0.4.2.md).
+
 ## 0.4.1 — Download checks, storage and update reliability
 
 - Recover file sizes with one bounded probe when successful HEAD responses omit them; preserve ad, filename, response-type and redirect checks.

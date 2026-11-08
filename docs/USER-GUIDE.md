@@ -1,22 +1,26 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.4.1 for Windows, a maintenance prerelease. See the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for the fixes, validation and known limits.
+This guide describes Ravenshelf 0.4.2 for Windows, a security maintenance prerelease. See the [0.4.2 release notes](RELEASE-0.4.2.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.4.1-Windows.exe` from the [v0.4.1 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.1). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.4.2-Windows.exe` from the [v0.4.2 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.2). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, close its window before opening the new executable. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
 ### Automatic app updates
 
-In the packaged Windows portable release, **Settings → Ravenshelf updates** checks this repository for newer published versions, including prereleases. **Automatically check and prepare updates** is on by default: checks start shortly after launch and repeat every six hours while the app is open. **Check for updates** also downloads and verifies a newer eligible release; it is not only a version lookup. Turning automatic checks off leaves the manual button available. Development and unpacked builds do not replace themselves.
+In the packaged Windows portable release, **Settings → Ravenshelf updates** checks this repository for newer published versions, including prereleases. **Check for updates automatically** is on by default: checks start shortly after launch and repeat every six hours while the app is open. A check only looks for a newer release. When one is found, the status shows its version, a desktop notice appears (if notifications are on), and **What’s new** opens its release page. Nothing is downloaded until you choose **Download and install**. Turning automatic checks off leaves **Check for updates** available. Development and unpacked builds do not replace themselves.
 
-When the status says an update is ready, it installs on the next normal close. Background preparation does not restart or interrupt your queue. **Restart now** is available only while downloads, scans, file verification and completion actions are idle. Closing the app pauses unfinished downloads as usual; resume them after reopening.
+After you choose **Download and install**, Ravenshelf first checks GitHub's checksum and the release's signed build record, then downloads the executable. When the status says the update is verified, it installs on the next normal close. Downloading does not restart or interrupt your queue. **Restart now** is available only while downloads, scans, file verification and completion actions are idle. Closing the app pauses unfinished downloads as usual; resume them after reopening.
 
-Ravenshelf accepts the expected executable from this GitHub repository and release tag, verifies its size and SHA-256 against GitHub's asset digest and `SHA256SUMS.txt`, then checks the staged file again before installation. It backs up `library.json`, `installed-games.json`, `Local State`, `Preferences` and `renderer-cache.json` when present, under the profile's `updates/backups/` directory. This is a backup of critical profile files, not a complete backup of every browser partition or your downloaded files.
+The signed build record is GitHub's Sigstore attestation for that exact file. Ravenshelf accepts it only when it was created by this repository's `publish-release.yml` workflow on the `main` branch, on a GitHub-hosted runner, and names the executable's exact SHA-256. To check it, Ravenshelf refreshes Sigstore's public signing keys from `tuf-repo-cdn.sigstore.dev`, or uses the copy bundled with the app when that service is unreachable. If the record is missing or does not match, the update stops and your current app is unchanged. The executable must also match its size and SHA-256 in GitHub's asset digest and `SHA256SUMS.txt`, and the staged file is checked again before installation. It backs up `library.json`, `installed-games.json`, `Local State`, `Preferences` and `renderer-cache.json` when present, under the profile's `updates/backups/` directory. This is a backup of critical profile files, not a complete backup of every browser partition or your downloaded files.
 
-The native Windows helper applies the update after the app exits. It does not request elevation or change PowerShell execution policy or Windows security settings. Keep the portable executable in an ordinary writable folder. If verification or replacement fails, use the release page to update manually. The executable remains unsigned: checksum verification is not publisher signing or a malware verdict.
+The native Windows helper applies the update after the app exits. It does not request elevation or change PowerShell execution policy or Windows security settings. Keep the portable executable in an ordinary writable folder. If verification or replacement fails, use the release page to update manually. The executable remains unsigned: the build record shows where the file was built, but it is not Windows publisher signing or a malware verdict.
+
+After a successful update, the helper keeps the previous executable next to the app as a hidden-name `.ravenshelf-rollback-….exe` copy, and the downloaded copy stays in the profile's `updates/pending/` folder. From 0.4.2, Ravenshelf removes these shortly after it starts, but only when the update's own result shows success and the rollback copy exactly matches the executable that was replaced. After a failed update, the rollback copy is kept. Profile backups are kept.
+
+Updating from 0.4.1 to 0.4.2 still uses 0.4.1's behavior: it prepares the update automatically and installs it on close. The approval step applies to updates offered by 0.4.2 and later.
 
 ## Browse the catalogue
 
@@ -104,7 +108,7 @@ From 0.3.2, progress counters refresh together about twice per second, updating 
 
 Under **Download hours**, enable a schedule, choose the laptop's local start/end time and weekdays, then save. An overnight window belongs to its starting day: Friday 22:00–06:00 continues into Saturday morning. Matching start/end times allow the whole selected day. Ravenshelf pauses work when the window closes and resumes work paused by the schedule when it opens again. A download you paused manually remains paused. The app must remain open and the laptop awake; scheduling does not wake or launch it.
 
-The schedule controls the game download queue. Automatic app-update checks and preparation can still run outside that window; disable automatic updates separately if desired.
+The schedule controls the game download queue. Automatic app-update checks can still run outside that window; an update you approve downloads immediately and shares the speed limit. Disable automatic checks separately if desired.
 
 Speed-limit and schedule edits stay in the form when background progress or settings updates arrive, even after you move focus away. Use each form's save button to apply its changes; editing a value alone does not change the active setting.
 
@@ -149,7 +153,7 @@ A match detects agreement with the chosen manifest, useful for finding corruptio
 
 **Settings → Notice copied download links** is off by default. When enabled while Ravenshelf is open, it recognizes supported host and paste links in clipboard text and puts them in **Copied links**. Choose **Inspect link** to fill the Import links form, then press **Check links** yourself. Recognition makes no automatic network request and never starts a download. Dismiss unwanted entries or turn the preference off to clear the tray. Links are held in memory, expire after 30 minutes and are not a clipboard history.
 
-**Desktop notifications** controls generic completion, problem and ready-update notices. They omit game names, filenames and paths. Windows notification settings can also suppress them. They are not scan or checksum verdicts.
+**Desktop notifications** controls generic completion, problem, update-available and update-ready notices. They omit game names, filenames and paths. Windows notification settings can also suppress them. They are not scan or checksum verdicts.
 
 ## Microsoft Defender scans
 
@@ -208,6 +212,7 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | Check space shows less than expected | Expand missing files and other archives, and read any partial-check warning. Check the configured download folder; broad folders and unsupported files are not included in archive discovery. |
 | A checksum check finished with mismatches | Verify that the manifest and chosen folder belong together; review missing/error rows and reacquire damaged files from your intended source. |
 | App update is unavailable | Use the packaged Windows portable release, or update manually from Releases. |
+| An update could not be verified or downloaded | Your current app is unchanged. Choose **Check for updates** and try again later, or download the release manually and verify it as described in the README. |
 | A partial download cannot resume | Read the per-file error. The remote file or direct URL may have changed. |
 | A header-storage warning appears | Headers were not saved in plaintext. Keep the current session open if needed; after restart, resume or recheck the source link and complete any requested browser verification. |
 | Automatic close or shutdown is waiting | Check download cards for queued/running scans or results needing review. Resolve the result and scan again, or choose **Keep Ravenshelf open**. |

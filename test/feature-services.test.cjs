@@ -16,17 +16,18 @@ function load(file,replacements={},extra=''){
   const module={exports:{}},native=createRequire(file),requireFn=name=>Object.prototype.hasOwnProperty.call(replacements,name)?replacements[name]:native(name);
   vm.compileFunction(fs.readFileSync(file,'utf8')+extra,['require','module','exports','__filename','__dirname'],{filename:file})(requireFn,module,module.exports,file,path.dirname(file));return module.exports;
 }
-function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null}={}){
+function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null,Notification,packaged=false}={}){
   const root=fs.mkdtempSync(path.join(base,'case-')),profile=path.join(root,'profile'),folder=path.join(root,'Game');fs.mkdirSync(profile);fs.mkdirSync(folder);
   const manager=new DownloadManager({stateFile:path.join(profile,'library.json'),downloadDir:root,fetcher:async()=>{throw new Error('Network access is not part of feature tests.');}});
   manager.settings={...manager.settings,autoUpdateEnabled:false,clipboardWatchEnabled:false,notificationsEnabled:false,...settings};
   const calls={publish:0,quit:0,metadata:[],getGame:[],prepare:[],spawn:[],events:[],clipboardReads:0},handlers=new Map(),instances={};
   const completion={phase:'idle',snapshot(){return {phase:this.phase,mode:'none'};},cancel(){this.phase='idle';calls.events.push('completion:cancel');},dispose(){calls.events.push('completion:dispose');}};
-  const appEvents=new Map(),app={isPackaged:false,getVersion:()=> '0.4.0',getPath:()=>profile,setPath(){},requestSingleInstanceLock:()=>true,exit(){},on(name,fn){appEvents.set(name,fn);},whenReady:()=>new Promise(()=>{}),quit(){calls.quit++;},setName(){}};
+  const appEvents=new Map(),app={isPackaged:packaged,getVersion:()=> '0.4.0',getPath:()=>profile,setPath(){},requestSingleInstanceLock:()=>true,exit(){},on(name,fn){appEvents.set(name,fn);},whenReady:()=>new Promise(()=>{}),quit(){calls.quit++;},setName(){}};
   const frame={url:'atlas://app/index.html'},win={webContents:{mainFrame:frame,send(){}},isDestroyed:()=>false,show(){},focus(){}};
   class FakeUpdater{
     constructor(options){this.options=options;this.state={phase:'idle',currentVersion:options.currentVersion};instances.updater=this;}
     snapshot(){return {...this.state};}configure(enabled){this.enabled=enabled;}async check(){calls.events.push('update:check');return this.snapshot();}
+    async download(){calls.events.push('update:download');return this.snapshot();}async cleanupLeftovers(){calls.events.push('update:cleanup');return {removed:0};}
     dispose(){calls.events.push('update:dispose');}
     async prepareInstall(options){calls.prepare.push(options);calls.events.push('update:prepare');return {helper:path.join(root,'fixture-helper.exe'),job:path.join(root,'fixture-job.json')};}
   }
@@ -42,10 +43,10 @@ function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null}
     './download-cleanup.cjs':{createDownloadCleanup:options=>{const cleanup=createDownloadCleanup(options);return {...cleanup,async summary(value){instances.storageSignal=value?.signal;calls.events.push('storage:pending');if(storageGate)await storageGate.promise;return cleanup.summary(value);},async deletePreview(value){if(cleanupGate){calls.events.push('cleanup:pending');await cleanupGate.promise;}return cleanup.deletePreview(value);}};}},
     'node:child_process':{spawn(helper,args,options){calls.spawn.push({helper,args,options});const child=new EventEmitter();child.unref=()=>{};queueMicrotask(()=>child.emit('spawn'));return child;}}
   });
-  const services=module.createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification:undefined,register:(name,handler)=>{handlers.set(name,handler);register?.(name,handler);},publish:()=>calls.publish++,providers,checked,isTest:false});
+  const services=module.createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register:(name,handler)=>{handlers.set(name,handler);register?.(name,handler);},publish:()=>calls.publish++,providers,checked,isTest:false});
   const add=(id='one',name='archive.rar',content='fixture archive')=>{const download={id,name,folder,status:'paused',received:content.length,total:content.length,url:'https://example.invalid/'+name,sourceUrl:'https://example.invalid/'+name,headers:{}};manager.downloads.push(download);fs.writeFileSync(path.join(folder,name),content,{flag:'wx'});return download;};
   t.after(async()=>{
-    cleanupGate?.resolve();storageGate?.resolve();instances.updater.state.phase='idle';await manager.stop();await services.beforeQuit();
+    cleanupGate?.resolve();storageGate?.resolve();instances.updater.state.phase='idle';instances.updater.state.installApproved=false;await manager.stop();await services.beforeQuit();
     const relative=path.relative(base,root);assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));assert.equal(fs.realpathSync(root),root);fs.rmSync(root,{recursive:true,force:true});
   });
   return {root,profile,folder,manager,calls,handlers,completion,app,appEvents,win,instances,services,verifier,chooser,clipboard,checked,add,featureSettings:module.featureSettings};
@@ -76,7 +77,7 @@ test('Cleanup preview waits for active work and cancellation leaves bytes intact
   assert.equal(result.items.length,1);assert.match(result.warnings.join(' '),/Cancelling leaves them paused/);assert.equal(f.manager.quiescing.size,0);assert.equal(fs.readFileSync(path.join(f.folder,download.name),'utf8'),'fixture archive');
 });
 test('Restart for update is refused while downloads, scans, verification or completion are active',t=>{
-  const f=fixture(t),download=f.add();f.instances.updater.state.phase='ready';
+  const f=fixture(t),download=f.add();Object.assign(f.instances.updater.state,{phase:'ready',installApproved:true});
   for(const status of ['queued','downloading']){download.status=status;assert.throws(()=>f.handlers.get('installUpdate')(),/Pause active work/);}
   download.status='completed';for(const status of ['queued','scanning']){download.scan={status};assert.throws(()=>f.handlers.get('installUpdate')(),/Pause active work/);}
   delete download.scan;download.status='paused';f.verifier.phase='running';assert.throws(()=>f.handlers.get('installUpdate')(),/Pause active work/);f.verifier.phase='idle';
@@ -84,7 +85,7 @@ test('Restart for update is refused while downloads, scans, verification or comp
   assert.deepEqual(f.handlers.get('installUpdate')(),{restarting:true});assert.equal(f.calls.quit,1);assert.equal(f.calls.prepare.length,0,'replacement preparation is deferred until shutdown');
 });
 test('Restart for update is refused during pending deletion and normal exit waits for cleanup',async t=>{
-  const gate=deferred(),f=fixture(t,{cleanupGate:gate}),download=f.add();f.instances.updater.state.phase='ready';
+  const gate=deferred(),f=fixture(t,{cleanupGate:gate}),download=f.add();Object.assign(f.instances.updater.state,{phase:'ready',installApproved:true});
   const preview=await f.handlers.get('previewDownloadRemoval')({ids:[download.id]});const removal=f.handlers.get('removeDownloads')({ids:[download.id],mode:'files',token:preview.token});
   await until(()=>f.calls.events.includes('cleanup:pending'));
   try{
@@ -99,13 +100,13 @@ test('Restart for update is refused during pending deletion and normal exit wait
   }finally{gate.resolve();await removal;}
 });
 test('Update preparation is deferred to exit and launches only the supplied helper without a shell',async t=>{
-  const f=fixture(t);f.instances.updater.state.phase='ready';f.handlers.get('installUpdate')();assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);
+  const f=fixture(t);Object.assign(f.instances.updater.state,{phase:'ready',installApproved:true});f.handlers.get('installUpdate')();assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);
   await f.services.beforeQuit();assert.deepEqual(f.calls.prepare,[{restart:true}]);assert.equal(f.calls.spawn.length,1);
   const spawned=f.calls.spawn[0];assert.equal(spawned.helper,path.join(f.root,'fixture-helper.exe'));assert.deepEqual(spawned.args,[path.join(f.root,'fixture-job.json')]);assert.equal(spawned.options.windowsHide,true);assert.equal(spawned.options.detached,true);assert.notEqual(spawned.options.shell,true);
 });
 
 test('Exit waits for interrupted updater cleanup before preparing a verified update',async t=>{
-  const f=fixture(t),gate=deferred();f.instances.updater.state.phase='ready';
+  const f=fixture(t),gate=deferred();Object.assign(f.instances.updater.state,{phase:'ready',installApproved:true});
   f.instances.updater.dispose=()=>gate.promise;
   let finished=false;const quitting=f.services.beforeQuit().then(()=>{finished=true;});
   try{await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);}
@@ -113,6 +114,38 @@ test('Exit waits for interrupted updater cleanup before preparing a verified upd
   assert.equal(f.calls.prepare.length,1);assert.equal(f.calls.spawn.length,1);
 });
 
+test('Updates download only through the explicit download request and install only after approval',async t=>{
+  const f=fixture(t);
+  await f.handlers.get('downloadUpdate')();assert.deepEqual(f.calls.events.filter(event=>event.startsWith('update:')),['update:download']);
+  f.instances.updater.state.phase='ready';
+  for(const approval of [undefined,false,'true'])assert.throws(()=>{f.instances.updater.state.installApproved=approval;f.handlers.get('installUpdate')();},/Choose Download and install/);
+  assert.equal(f.calls.quit,0);
+  await f.services.beforeQuit();assert.equal(f.calls.prepare.length,0,'an unapproved ready state is never prepared');assert.equal(f.calls.spawn.length,0);
+  assert.deepEqual(f.calls.events.filter(event=>event==='update:cleanup'),[],'leftover cleanup is scheduled only for supported packaged builds');
+});
+test('Packaged Windows builds clean update leftovers after start and again later, and stop on exit',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const supported=()=>{
+    const platform=Object.getOwnPropertyDescriptor(process,'platform'),portable=process.env.PORTABLE_EXECUTABLE_FILE;
+    Object.defineProperty(process,'platform',{...platform,value:'win32'});process.env.PORTABLE_EXECUTABLE_FILE='C:\\Portable\\Ravenshelf.exe';
+    try{return fixture(t,{packaged:true});}
+    finally{Object.defineProperty(process,'platform',platform);if(portable===undefined)delete process.env.PORTABLE_EXECUTABLE_FILE;else process.env.PORTABLE_EXECUTABLE_FILE=portable;}
+  };
+  const cleanups=f=>f.calls.events.filter(event=>event==='update:cleanup').length;
+  const f=supported(),closed=supported();assert.equal(f.instances.updater.options.supported,true);
+  await closed.services.beforeQuit();
+  t.mock.timers.tick(9999);assert.equal(cleanups(f),0);t.mock.timers.tick(1);assert.equal(cleanups(f),1);
+  t.mock.timers.tick(20*60*1000-10000);assert.equal(cleanups(f),2);
+  t.mock.timers.tick(60*60*1000);assert.equal(cleanups(f),2,'only two passes are scheduled');
+  assert.equal(cleanups(closed),0,'closing Ravenshelf cancels scheduled cleanup');
+});
+test('Available updates are announced once per version without downloading',async t=>{
+  const shown=[];class FakeNotification{static isSupported(){return true;}constructor(options){this.options=options;}on(){}show(){shown.push(this.options);}}
+  const f=fixture(t,{settings:{notificationsEnabled:true},Notification:FakeNotification});
+  f.instances.updater.options.onAvailable('0.4.2');f.instances.updater.options.onAvailable('0.4.2');f.instances.updater.options.onAvailable('0.4.3');
+  assert.deepEqual(shown.map(item=>item.title),['Ravenshelf update available','Ravenshelf update available']);assert.match(shown[0].body,/Version 0\.4\.2 is available\. Open Settings to review and install it\./);
+  assert.equal(f.calls.events.includes('update:download'),false);
+});
 test('Storage IPC coalesces repeated checks and refuses scans after shutdown',async t=>{
   const f=fixture(t);f.add();fs.writeFileSync(path.join(f.root,'outside-queue.rar'),'separate archive');
   const first=f.handlers.get('getStorageSummary')(),second=f.handlers.get('getStorageSummary')();
@@ -156,6 +189,6 @@ test('All new feature IPC handlers retain main-frame and exact app-origin author
   const trusted={sender:f.win.webContents,senderFrame:f.win.webContents.mainFrame};
   assert.equal((await handlers.get('atlas:getUpdateState')(trusted)).phase,'idle');
   const attacks=[{sender:{},senderFrame:f.win.webContents.mainFrame},{sender:f.win.webContents,senderFrame:{url:'atlas://app/index.html'}},{sender:f.win.webContents,senderFrame:null}];
-  for(const name of ['getUpdateState','installUpdate','removeDownloads','verifyFiles','getGameMetadata','importClipboardLinks'])for(const event of attacks)await assert.rejects(handlers.get('atlas:'+name)(event,{}),/Invalid app request/);
+  for(const name of ['getUpdateState','checkForUpdates','downloadUpdate','installUpdate','removeDownloads','verifyFiles','getGameMetadata','importClipboardLinks'])for(const event of attacks)await assert.rejects(handlers.get('atlas:'+name)(event,{}),/Invalid app request/);
   f.win.webContents.mainFrame.url='https://fuckingfast.co/';await assert.rejects(handlers.get('atlas:getUpdateState')(trusted),/Invalid app request/);assert.equal(f.calls.quit,0);assert.equal(f.verifier.starts.length,0);assert.equal(f.calls.getGame.length,0);
 });

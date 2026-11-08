@@ -94,6 +94,36 @@ test('update restart waits for an idle queue and completed verification',()=>{
   f.run("verificationState={phase:'completed'};renderUpdater()");assert.equal(f.get('#install-app-update').disabled,false);assert.match(f.get('#update-status').textContent,/installs when you close/);
 });
 
+test('a found update offers Download and install, and release notes only for the exact release page',()=>{
+  const f=fixture({checkForUpdates(){},downloadUpdate(){},installUpdate(){},openExternal(){}});
+  const page='https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.2';
+  f.context.page=page;f.run("state.updater={phase:'available',availableVersion:'0.4.2',releaseUrl:page,message:'Ravenshelf 0.4.2 is available. Nothing is downloaded until you choose Download and install.'};renderUpdater()");
+  assert.equal(f.get('#download-app-update').hidden,false);assert.equal(f.get('#download-app-update').disabled,false);assert.equal(f.get('#app-update-notes').hidden,false);assert.equal(f.get('#install-app-update').hidden,true);assert.equal(f.get('#check-app-updates').disabled,false);
+  assert.equal(f.get('#update-status').textContent,'Ravenshelf 0.4.2 is available. Nothing is downloaded until you choose Download and install.','the version is not repeated');
+  for(const url of ['https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.2/../../evil','https://github.com/other/ravenshelf/releases/tag/v0.4.2','http://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.2','javascript:alert(1)',''])
+    {f.context.url=url;f.run("state.updater={...state.updater,releaseUrl:url};renderUpdater()");assert.equal(f.get('#app-update-notes').hidden,true,url);}
+  f.run("state.updater={phase:'verifying',availableVersion:'0.4.2',releaseUrl:page};renderUpdater()");
+  assert.equal(f.get('#download-app-update').hidden,true);assert.equal(f.get('#check-app-updates').disabled,true);assert.equal(f.get('#app-update-notes').hidden,false);assert.match(f.get('#update-status').textContent,/signed build record.*Version 0\.4\.2\./);
+  for(const phase of ['idle','checking','current','error','unavailable']){f.context.phase=phase;f.run("state.updater={phase,releaseUrl:page};renderUpdater()");assert.equal(f.get('#download-app-update').hidden,true,phase);assert.equal(f.get('#app-update-notes').hidden,!['available','verifying','downloading','ready'].includes(phase),phase);}
+  const old=fixture({checkForUpdates(){}});old.run("state.updater={phase:'available',availableVersion:'0.4.2'};renderUpdater()");assert.equal(old.get('#download-app-update').disabled,true,'an older preload without the action cannot offer it');
+});
+
+test('Download and install and What’s new call only their own actions',async()=>{
+  const calls=[],toasts=[];const page='https://github.com/khattabhunter/ravenshelf/releases/tag/v0.4.2';
+  const f=fixture({downloadUpdate:async()=>{calls.push('download');return {phase:'ready',availableVersion:'0.4.2',installApproved:true,releaseUrl:page,message:'Update verified. It installs when you close Ravenshelf, or choose Restart now.'};},openExternal:async url=>{calls.push(url);},installUpdate:async()=>{calls.push('install');},checkForUpdates:async()=>{calls.push('check');}});
+  f.run('applyState=()=>{};renderFeatureSettings=()=>{};renderDownloadSelection=()=>{};wireFeatureEvents()');f.context.toasts=toasts;f.run('toast=(message,error)=>toasts.push([message,error])');
+  f.context.page=page;f.run("state.updater={phase:'available',availableVersion:'0.4.2',releaseUrl:page};renderUpdater()");
+  await f.get('#app-update-notes').emit('click');await flush();assert.deepEqual(calls,[page]);
+  await f.get('#download-app-update').emit('click');await flush();assert.deepEqual(calls,[page,'download']);
+  assert.equal(f.get('#install-app-update').hidden,false);assert.match(f.get('#update-status').textContent,/installs when you close Ravenshelf/);
+  f.run("state.updater={...state.updater,releaseUrl:'https://evil.example/'}");await f.get('#app-update-notes').emit('click');await flush();assert.deepEqual(calls,[page,'download'],'an unexpected address is never opened');
+  const failing=fixture({downloadUpdate:async()=>{throw new Error("Error invoking remote method 'atlas:downloadUpdate': Error: The update could not be downloaded. Your current app is unchanged.");}});
+  failing.run('applyState=()=>{};renderFeatureSettings=()=>{};renderDownloadSelection=()=>{};wireFeatureEvents()');failing.context.toasts=toasts;failing.run('toast=(message,error)=>toasts.push([message,error])');
+  failing.run("state.updater={phase:'available',availableVersion:'0.4.2'};renderUpdater()");await failing.get('#download-app-update').emit('click');await flush();
+  // Arrays built inside the renderer context have that context's prototypes.
+  assert.equal(JSON.stringify(toasts),JSON.stringify([['The update could not be downloaded. Your current app is unchanged.',true]]));assert.equal(failing.get('#download-app-update').disabled,false,'the button is usable again after a failure');
+});
+
 test('the updater fraction is shown on the progress bar percentage scale',()=>{
   const f=fixture();f.run("state.updater={phase:'downloading',progress:0.42};renderUpdater()");
   assert.equal(f.get('#update-progress').hidden,false);assert.equal(f.get('#update-progress').value,42);
