@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 — Delete finished browser downloads
+
+- **Delete files** now works for finished browser downloads of any file type, such as a program or a picture. In 0.5.0, cleanup accepted only archive names and refused these with "These files changed or could not be checked safely". The exception applies only to downloads taken over from a browser and saved in Ravenshelf's own **Browser downloads** folder; in game folders, cleanup still deletes only the downloaded archives.
+- **Check space** now counts browser downloads instead of reporting them as files that could not be checked safely.
+
+See [the release notes](docs/RELEASE-0.5.1.md).
+
 ## 0.5.0 — Browser extension: downloads checked first, dangerous sites blocked
 
 - New Ravenshelf extension for Chrome, Edge, Brave and Firefox, set up from **Settings → Browser extension** and off until you connect it. Downloads you start in the browser go to Ravenshelf, which checks each one before anything is saved and then waits for your choice. If Ravenshelf is closed, the browser downloads as usual. Private windows are never captured. Includes a right-click **Download with Ravenshelf** option and a toolbar button.

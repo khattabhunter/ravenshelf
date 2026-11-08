@@ -125,7 +125,7 @@ Keep `.atlas-part` files and `.atlas-segments-*` support folders alongside their
 Use a card's remove button, select several files, or choose **Clean up completed** in Downloads. **Select visible** affects the current filter; the selected count can include entries selected under another filter. Review the listed files and estimated size before proceeding.
 
 - **Remove from list** is always the initial choice. It stops selected transfers and removes their queue entries while keeping their files.
-- **Delete files** permanently removes the selected managed download files and their queue entries. It requires a fresh confirmation checkbox every time. It does not uninstall games or clear an entire download folder.
+- **Delete files** permanently removes the selected managed download files and their queue entries. It requires a fresh confirmation checkbox every time. It does not uninstall games or clear an entire download folder. In game folders it deletes only downloaded archives; downloads taken over from your browser can be any file type and are deleted from the **Browser downloads** folder.
 
 Opening the preview pauses selected active downloads. Cancelling leaves them paused; resume them explicitly in Downloads. Changed, linked, shared or inaccessible files can be refused. If only some files can be removed, the dialog reports the failures and requires another preview before retrying.
 

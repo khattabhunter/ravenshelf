@@ -10,6 +10,7 @@ const {BrowserBridge}=require('./browser-bridge.cjs');
 const browserSetup=require('./browser-setup.cjs');
 const {safeURL}=require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
+const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
 
 const EXTENSION_BROWSERS=Object.freeze(['chromium','firefox']);
 
@@ -30,7 +31,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   try{threatLists.load();}catch{}
   try{virusTotal.load();}catch{}
   const bridge=new BrowserBridge({hostDir,threatLists,virusTotal,resolveProvider,appVersion:version,platform,
-    queueDownload:entry=>{assertQueueAvailable();return manager.add({links:[entry],gameTitle:'Browser downloads'});},
+    queueDownload:entry=>{assertQueueAvailable();return manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
     openExternal:url=>shell.openExternal(safeURL(url).href),
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});
   bridge.on('change',()=>publish());
