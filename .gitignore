@@ -11,6 +11,8 @@ node_modules/
 *.iso
 /src/updater-build.json
 /src/.updater-build-*/
+/src/browser-host-build.json
+/src/.browser-host-build-*/
 
 # Personal configuration, credentials and local application state
 .env

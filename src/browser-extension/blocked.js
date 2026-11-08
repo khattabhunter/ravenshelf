@@ -1,0 +1,54 @@
+'use strict';
+// Only the extension opens this page (it is not reachable from websites), and
+// everything shown comes from its address as plain text.
+const api = typeof browser !== 'undefined' ? browser : chrome;
+const P = globalThis.RavenshelfPolicy;
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.hash.slice(1));
+const clean = (value, max) => String(value || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, max);
+const reason = clean(params.get('reason'), 20);
+const host = clean(params.get('host'), 253);
+const from = clean(params.get('from'), 253);
+const blockedUrl = clean(params.get('url'), 8192);
+const back = clean(params.get('back'), 8192);
+const committed = params.get('committed') === '1';
+const TEXT = {
+  redirect: ['Ravenshelf stopped a redirect', `${from || 'A file-host page'} tried to send you to another site instead of your download.`, 'File hosts use redirects like this for ads and fake download pages. If you meant to visit this site, type its address yourself.'],
+  malware: ['Dangerous site blocked', 'This site is on a list of sites that spread malware.', 'List: URLhaus, through malware-filter.'],
+  phishing: ['Phishing site blocked', 'This site is on a list of phishing sites, which try to steal passwords and payment details.', 'List: malware-filter phishing list.'],
+  threats: ['Dangerous site blocked', 'This site is on a list of malware, scam and phishing sites.', 'List: HaGeZi Threat Intelligence Feeds.'],
+  popups: ['Pop-up ad network blocked', 'This site belongs to a pop-up ad network known for malicious ads and fake downloads.', 'List: HaGeZi Pop-Up Ads.']
+};
+const [title, lead, detail] = TEXT[reason] || ['Ravenshelf blocked this page', 'Ravenshelf stopped this page to keep you safe.', ''];
+document.title = `${title} · Ravenshelf`;
+$('title').textContent = title;
+$('lead').textContent = lead;
+$('host').textContent = host;
+$('host').hidden = !host;
+$('detail').textContent = detail;
+$('detail').hidden = !detail;
+
+function send(message) { try { return Promise.resolve(api.runtime.sendMessage(message)).catch(() => null); } catch (error) { return Promise.resolve(null); } }
+// Back to the file-host page the redirect started from.
+if (reason === 'redirect' && /^https:\/\//i.test(back) && P.protectedRoot(P.hostOf(back))) {
+  const button = $('return');
+  button.textContent = `Back to ${P.hostOf(back)}`;
+  button.hidden = false;
+  button.addEventListener('click', () => { location.replace(back); });
+}
+// The blocked address leaves an entry right behind this page (an error entry
+// if it never loaded, the page itself if it loaded and was then stopped), so
+// there is somewhere to go back to only with at least one entry before that.
+if (history.length > 2) {
+  const button = $('back');
+  button.hidden = false;
+  button.addEventListener('click', async () => {
+    if (committed) { history.go(-2); return; }
+    const reply = await send({ cmd: 'back', url: blockedUrl });
+    if (!reply || !reply.ok) history.back();
+  });
+}
+$('close').addEventListener('click', async () => {
+  const reply = await send({ cmd: 'closeTab' });
+  if (!reply || !reply.ok) window.close();
+});

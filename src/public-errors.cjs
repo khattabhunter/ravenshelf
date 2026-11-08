@@ -136,8 +136,23 @@ const MESSAGES=new Map([
   'FileKeeper did not return a direct file link. Continue in your browser.',
   'DataNodes requires its browser download steps. Open the host and import the final direct file URL.',
   'Import this paste to expand its file links first.',
-  'Choose up to 20 game folders.'
+  'Choose up to 20 game folders.',
+  'Choose Chrome, Edge, Brave or Firefox.',
+  'Confirm that you understand the warning before continuing.',
+  'Enter a VirusTotal API key: 64 letters and numbers from your VirusTotal account.',
+  'Ravenshelf blocked this download, so it cannot be downloaded from here.',
+  'Ravenshelf cannot download this link. You can let your browser download it instead.',
+  'The browser connector is available on Windows only.',
+  'This browser download is no longer available.',
+  'This link is not available, so your browser cannot download it either.',
+  'Wait for Ravenshelf to finish checking this link.',
+  'Windows protected storage is unavailable, so the VirusTotal key was not saved.',
+  'Turn on Connect the browser extension first.',
+  'Ravenshelf could not open the extension folder.'
 ].map(message=>[message,message]));
+// The connector check failing means this copy of the app was altered or damaged.
+const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';
+MESSAGES.set('The bundled browser connector changed.',CONNECTOR_CHANGED);MESSAGES.set(CONNECTOR_CHANGED,CONNECTOR_CHANGED);
 const ACTIONS=new Map([
   ['previewDownloadRemoval','The download files could not be checked. Make a new cleanup preview.'],
   ['removeDownloads','The selected downloads could not be removed. Review the list and try again.'],
@@ -159,7 +174,14 @@ const ACTIONS=new Map([
   ['download','The file could not be downloaded. Check the link, connection and download folder, then retry.'],
   ['getInstalledGames','Installed games could not be checked. Check access to your game folders and try again.'],
   ['scanInstalledGames','Installed games could not be checked. Check access to your game folders and try again.'],
-  ['addGameFolder','The game folder could not be added. Check access to it and try again.']
+  ['addGameFolder','The game folder could not be added. Check access to it and try again.'],
+  ['setBrowserIntegration','Ravenshelf could not connect the browser extension. Try again; if it keeps failing, restart Ravenshelf.'],
+  ['openBrowserExtensionFolder','The extension folder could not be prepared. Check that your Ravenshelf profile folder is writable, then try again.'],
+  ['browserCaptureAction','This browser download could not be handled. Check it again or dismiss it.'],
+  ['updateThreatLists','The protection lists could not be updated. The previous lists are still used.'],
+  ['setVirusTotalKey','The VirusTotal key could not be saved.'],
+  ['clearVirusTotalKey','The VirusTotal key could not be removed. Try again.'],
+  ['saveVirusTotalSettings','The VirusTotal preference could not be saved. Try again.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],

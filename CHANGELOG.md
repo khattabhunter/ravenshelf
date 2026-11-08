@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 — Browser extension: downloads checked first, dangerous sites blocked
+
+- New Ravenshelf extension for Chrome, Edge, Brave and Firefox, set up from **Settings → Browser extension** and off until you connect it. Downloads you start in the browser go to Ravenshelf, which checks each one before anything is saved and then waits for your choice. If Ravenshelf is closed, the browser downloads as usual. Private windows are never captured. Includes a right-click **Download with Ravenshelf** option and a toolbar button.
+- Checks before downloading, without opening the page or sending browser cookies: redirects are followed one hop at a time, only the first 4 KB is read, and the file name is compared with the file's real type. Disguised programs (such as `invoice.pdf.exe`), programs over unencrypted HTTP and links through listed sites are blocked; other programs, scripts and disk images need an explicit confirmation. FuckingFast, FileKeeper and DataNodes links use Ravenshelf's own host support.
+- Site blocking in the browser: four public lists (URLhaus and phishing-filter via malware-filter, HaGeZi Threat Intelligence Feeds mini and HaGeZi Pop-Up Ads, about 261,000 entries) are downloaded whole by Ravenshelf, checked on this PC and turned into the browser's own blocking rules, refreshed every 12 hours. A blocked page explains why, with **Go back** and **Close tab**. Blocking keeps working while Ravenshelf is closed.
+- File-host guard: FuckingFast and FileKeeper pages can no longer send the tab to another site or open pop-ups elsewhere. A redirect puts the download page back, pop-ups (including blank ones the page fills with ads) are closed, and an ad frame that takes over the tab is undone. Each block is announced once.
+- Optional VirusTotal checks with your own free API key: up to three sites behind each browser download, and the SHA-256 fingerprint of each finished browser download. Only site names and fingerprints are sent; the key is sealed with Windows protected storage. Results appear in the review and on the download's card.
+- Files taken over from a browser keep Windows' internet-zone mark (Mark of the Web), as a browser download would.
+- The browser reaches Ravenshelf through a small compiled connector, checked against its build record before use and registered for the current Windows user only. It relays one message per request over a local pipe protected by a random per-session token, and Ravenshelf accepts only its own extension.
+
+See [the release notes](docs/RELEASE-0.5.0.md).
+
 ## 0.4.2 — Updates ask first and check the signed build record
 
 - Automatic update checks only find and announce a new version. Nothing is downloaded or installed until you choose **Download and install**; **What’s new** opens the exact release page. An install on close or with **Restart now** requires that approval.

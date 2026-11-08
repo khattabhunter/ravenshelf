@@ -17,8 +17,10 @@ const {CompletionAction}=require('./completion-action.cjs');
 const {CatalogRefresh}=require('./catalog-refresh.cjs');
 const {publicErrorMessage,publicError,ERROR_RESPONSE_HEADERS}=require('./public-errors.cjs');
 const {createFeatureServices,featureSettings}=require('./feature-services.cjs');
+const {createBrowserIntegration}=require('./browser-integration.cjs');
+const {markFromInternet}=require('./motw.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
-let win,manager,completion,catalogRefresh,installedCache,scanPromise,features;
+let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration;
 const checked=new Map(),hostWindows=new Set(),mediaWindows=new Set();
 // Resolve only when a link is checked, after Electron and the profile are ready.
 const fastFetch=createFastSessionFetch({getSession:root=>session.fromPartition('persist:atlas-host-'+root)});
@@ -52,7 +54,7 @@ function handle(name,fn){ipcMain.handle('atlas:'+name,async(event,value)=>{
   try{return await fn(value);}catch(error){throw publicError(error,name);}
 });}
 let updateSequence=0;
-function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,...features?.snapshot(),updateSequence:++updateSequence};}
+function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,...features?.snapshot(),browser:browserIntegration?.snapshot()||null,updateSequence:++updateSequence};}
 function publishState(){if(win&&!win.isDestroyed())win.webContents.send('atlas:state',appState());}
 function publishProgress(downloads){if(win&&!win.isDestroyed())win.webContents.send('atlas:progress',{updateSequence:++updateSequence,downloads});}
 function compactGame(value){
@@ -154,7 +156,9 @@ app.whenReady().then(async()=>{
     await session.defaultSession.clearCache();
     atomicJSON(rendererCacheFile,{version:appVersion});
   }
-  manager=new DownloadManager({stateFile:path.join(app.getPath('userData'),'library.json'),downloadDir:defaultDownloadDir(),resolveLink:resolveAppLink,vault:createHeaderVault(safeStorage),scanFile:createDefenderScanner()});
+  manager=new DownloadManager({stateFile:path.join(app.getPath('userData'),'library.json'),downloadDir:defaultDownloadDir(),resolveLink:resolveAppLink,vault:createHeaderVault(safeStorage),scanFile:createDefenderScanner(),
+    // Files taken over from a browser keep its internet-zone mark, so Windows treats them the same way.
+    markFile:markFromInternet,onCompleted:download=>browserIntegration?.afterDownload(download)});
   installedCache=loadJSON(path.join(app.getPath('userData'),'installed-games.json'),{games:[],scannedAt:null,warnings:[],locations:[]});
   completion=new CompletionAction({getDownloads:()=>manager.downloads,onChange:publishState,onExecute:async(mode,{ids})=>{
     if(isTest)throw new Error('System completion actions are disabled in this isolated test session.');
@@ -171,6 +175,7 @@ app.whenReady().then(async()=>{
   win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Ravenshelf',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
   app.setAppUserModelId?.('local.atlas.repacklibrary');
   features=createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register:handle,publish:publishState,providers,checked,isTest:Boolean(isTest)});
+  browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,isTest:Boolean(isTest)});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
@@ -276,5 +281,5 @@ app.on('before-quit',event=>{
   catalogRefresh?.stop();
   for(const browser of hostWindows)browser.destroy();
   for(const browser of mediaWindows)browser.destroy();
-  manager.stop().then(()=>features?.beforeQuit()).catch(()=>console.error('Ravenshelf could not finish the pending update. The current app was kept.')).finally(()=>app.quit());
+  manager.stop().then(()=>browserIntegration?.beforeQuit()).then(()=>features?.beforeQuit()).catch(()=>console.error('Ravenshelf could not finish the pending update. The current app was kept.')).finally(()=>app.quit());
 });

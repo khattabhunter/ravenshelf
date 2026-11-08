@@ -30,8 +30,8 @@ function atomicJSON(file,data) {
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null}) {
-    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile;
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null}) {
+    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted;
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
     const stored=loadJSON(stateFile,{});
@@ -168,6 +168,8 @@ class DownloadManager extends EventEmitter {
       while(fs.existsSync(path.join(folder,name))||fs.existsSync(path.join(folder,name+'.atlas-part'))||conflicts(name)) name=`${stem} (${i++})${ext}`;
       const requestHeaders={...link.headers};if(link.referer)requestHeaders.Referer=safeURL(link.referer).href;
       const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};
+      // A download taken over from a browser keeps the browser's internet-zone mark.
+      if(link.origin==='browser'){d.origin='browser';d.markOfTheWeb=link.markOfTheWeb===true;}
       this.downloads.push(d);added.push(d.id);
     }
     this.save();this.changed();this.pump();return {added:added.length,ids:added};
@@ -263,8 +265,12 @@ class DownloadManager extends EventEmitter {
       if(file===partial)await fs.promises.unlink(partial);
       else await fs.promises.unlink(partial).catch(error=>{if(error.code!=='ENOENT')throw error;});
       await removeWorkspace(workspace).catch(()=>{d.connectionNote='Download complete. Some temporary files could not be removed.';});
+      if(d.markOfTheWeb&&this.markFile){
+        try{await this.markFile(final);}catch{d.connectionNote='Download complete. Windows’ downloaded-from-the-internet mark could not be added to this file.';}
+      }
       d.total=d.received;d.status='completed';d.completedAt=new Date().toISOString();
       if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
+      try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
     };
     const parallel=async()=>{
       if(partialFile){await partialFile.handle.close();partialFile=null;handle=null;}
@@ -373,6 +379,12 @@ class DownloadManager extends EventEmitter {
         }else{d.status='error';d.error=publicErrorMessage(err,'download');}
       }
     }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);try{await responseBody?.cancel();}catch{}if(handle)await handle.close();d.activeConnections=0;}
+  }
+  // Stores a reputation lookup result shown on the download's card.
+  setReputation(id,reputation){
+    const d=this.downloads.find(x=>x.id===id);if(!d)return false;
+    if(reputation===null)delete d.reputation;else d.reputation=reputation;
+    this.save();this.changed();return true;
   }
   queueScan(d){
     // A transfer can finish publishing while a removal request is stopping it.

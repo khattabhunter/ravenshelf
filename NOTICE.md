@@ -17,6 +17,16 @@ Ravenshelf's original implementation is distributed under the [MIT License](LICE
 
 The lockfile records direct and transitive dependencies. Their licenses remain in their package distributions; Ravenshelf's MIT license does not replace those terms.
 
+## Protection lists (downloaded at run time)
+
+When the browser extension is connected, Ravenshelf downloads these lists for use on the user's PC. They are not bundled with or redistributed by Ravenshelf; **Settings → Browser extension** names each source and license.
+
+- [URLhaus](https://urlhaus.abuse.ch/) data (CC0) through [malware-filter's urlhaus-filter](https://gitlab.com/malware-filter/urlhaus-filter) (CC0 and MIT). That project is not endorsed by abuse.ch.
+- [malware-filter's phishing-filter](https://gitlab.com/malware-filter/phishing-filter): its lists are licensed CC BY-SA 4.0 and built from sources including OpenPhish, PhishTank and IPThreat under their own terms.
+- [HaGeZi DNS blocklists](https://github.com/hagezi/dns-blocklists): Threat Intelligence Feeds (mini) and Pop-Up Ads, licensed GPL-3.0.
+
+[VirusTotal](https://www.virustotal.com/) is optional and used only with the user's own API key; VirusTotal's terms apply to that key. Ravenshelf is not affiliated with VirusTotal, abuse.ch, malware-filter, HaGeZi, or the makers of the supported browsers.
+
 The encrypted-paste reader implements the [PrivateBin](https://github.com/PrivateBin/PrivateBin) version 2 message format using Node.js crypto and zlib. PrivateBin's application code is not bundled as part of that implementation.
 
 ## Project references
