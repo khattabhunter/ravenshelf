@@ -26,7 +26,12 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
   notifier.observe(manager.downloads);
   const verifier=createIntegrityVerifier({onChange:()=>publish()});
   const inbox=new ClipboardInbox({readText:()=>clipboard.readText(),onChange:()=>publish()});
-  const updater=new AppUpdater({currentVersion:app.getVersion(),profileDir:app.getPath('userData'),executable:process.env.PORTABLE_EXECUTABLE_FILE||'',bandwidthLimiter:manager.bandwidthLimiter,supported:Boolean(app.isPackaged&&process.platform==='win32'&&process.env.PORTABLE_EXECUTABLE_FILE&&!isTest),onChange:()=>publish(),onReady:version=>notifier.update(version)});
+  const updatesSupported=Boolean(app.isPackaged&&process.platform==='win32'&&process.env.PORTABLE_EXECUTABLE_FILE&&!isTest);
+  const updater=new AppUpdater({currentVersion:app.getVersion(),profileDir:app.getPath('userData'),executable:process.env.PORTABLE_EXECUTABLE_FILE||'',bandwidthLimiter:manager.bandwidthLimiter,supported:updatesSupported,onChange:()=>publish(),onAvailable:version=>notifier.available(version),onReady:version=>notifier.update(version)});
+  // Remove leftovers from earlier updates shortly after start and once more
+  // after any helper launched by the previous session has certainly finished.
+  // This runs whether or not automatic update checks are enabled.
+  const cleanupTimers=updatesSupported?[10000,20*60*1000].map(delay=>{const timer=setTimeout(()=>{updater.cleanupLeftovers().catch(()=>{});},delay);timer.unref?.();return timer;}):[];
   let restartOnExit=false,closing=false,storageTask=null,storageController=null;
   const operations=new Set();
   function track(operation){
@@ -41,7 +46,8 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
   };
   register('getUpdateState',()=>updater.snapshot());
   register('checkForUpdates',()=>updater.check());
-  register('installUpdate',()=>{assertIdle();if(updater.snapshot().phase!=='ready')throw new Error('Check for and download an update first.');restartOnExit=true;app.quit();return {restarting:true};});
+  register('downloadUpdate',()=>updater.download());
+  register('installUpdate',()=>{assertIdle();const update=updater.snapshot();if(update.phase!=='ready'||update.installApproved!==true)throw new Error('Choose Download and install, and wait for the update to be verified first.');restartOnExit=true;app.quit();return {restarting:true};});
   register('getGameMetadata',async value=>{
     if(!value||typeof value.url!=='string')return metadata({});
     let game;try{game=await providers.getGame(value.url);}catch{return {source:null,requirements:{minimum:'',recommended:''},reviews:null,genres:[],message:'Game details could not be loaded. Try again later.'};}
@@ -102,11 +108,14 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
     validateBatch:(links,allowIncomplete)=>{const result=analyzeArchiveSet(links);if(result.errors.length&&allowIncomplete!==true)throw new Error('Archive parts are missing or inconsistent. Review the link set before downloading.');return result;},
     async beforeQuit(){
       closing=true;
+      for(const timer of cleanupTimers)clearTimeout(timer);
       storageController?.abort();
       const pending=Promise.allSettled([...operations,...(storageTask?[storageTask]:[])]);
       inbox.dispose();verifier.cancel();await updater.dispose();
       await pending;
-      if(updater.snapshot().phase!=='ready')return;
+      // Install only an update the user chose to download and that verified.
+      const update=updater.snapshot();
+      if(update.phase!=='ready'||update.installApproved!==true)return;
       const prepared=await updater.prepareInstall({restart:restartOnExit});if(!prepared)return;
       await new Promise((resolve,reject)=>{const child=spawn(prepared.helper,[prepared.job],{detached:true,windowsHide:true,stdio:'ignore'});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
     }

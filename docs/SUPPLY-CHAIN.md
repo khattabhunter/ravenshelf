@@ -2,7 +2,7 @@
 
 Ravenshelf checks source identity, dependencies and release artifacts separately. A verified commit identifies a signing route; a checksum detects changed bytes; a build attestation ties an artifact to a workflow. None is a malware verdict or a Windows publisher signature.
 
-These source checks apply prospectively. Existing unsigned commits and published releases remain in history. Do not rewrite old commits, move release tags or replace release files to make earlier history appear signed. This maintenance policy leaves the installed app at **0.4.1**; it does not require a new release or installation and does not change file-host downloads or the automatic updater's checksum checks.
+These source checks apply prospectively. Existing unsigned commits and published releases remain in history. Do not rewrite old commits, move release tags or replace release files to make earlier history appear signed. Releases from 0.4.2 also publish the signed build record that the in-app updater checks; see [the in-app update record](#the-in-app-update-record).
 
 ## Verified source before building
 
@@ -26,19 +26,31 @@ Protect the main branch with required verified commit signatures, blocked force 
 
 ## Dependabot and action pins
 
-Dependabot checks npm dependencies and GitHub Actions every Monday at 06:00, Asia/Baghdad time. Minor/patch version updates are grouped separately for npm and actions; major updates stay in separate PRs. npm minor/patch security updates have their own group. Dependabot signs its own commits by default, including when repository signing is optional. Its signature identifies the bot's change, not the safety of the updated dependency. See [Dependabot security updates](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-security-updates).
+Dependabot checks npm dependencies and GitHub Actions every Monday at 03:00 UTC. Minor/patch version updates are grouped separately for npm and actions; major updates stay in separate PRs. npm minor/patch security updates have their own group. Dependabot signs its own commits by default, including when repository signing is optional. Its signature identifies the bot's change, not the safety of the updated dependency. See [Dependabot security updates](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-security-updates).
 
 Keep full 40-character commit pins on action references and retain the same-line version comments. Update repeated references consistently, including CodeQL's initialization and analysis actions. Dependabot can update those pins and comments; confirm that each new SHA belongs to the intended upstream repository. Review major-version changes and release notes explicitly. This policy does not enable automatic merging. See GitHub's [secure action-use guidance](https://docs.github.com/en/actions/reference/security/secure-use).
 
 Dependency PRs still need the Windows tests, locked-dependency audit and applicable CodeQL checks. Test, preview and release-build jobs also run `npm audit signatures` to verify registry signatures and available package provenance; this does not mean every package has a publisher provenance attestation. See npm's [registry-signature verification guide](https://docs.npmjs.com/verifying-registry-signatures/). Changes to Electron, packaging or update tooling also need an isolated Windows build/runtime check before release. Do not bypass a failed signature or test check because a PR was opened by Dependabot. The version-update schedule does not by itself enable repository-level security alerts or security-update PRs; those are separate GitHub settings.
 
-Run `npm run verify:supply-chain` after installing the locked dependencies to check configuration consistency locally. It checks dependency versions and lockfile integrity records, Dependabot groups, action pins, permissions and required build/attestation steps. It is a configuration regression check, not a cryptographic verification or a replacement for review. The helper packages `@electron/asar`, `@electron/fuses` and `js-yaml` are explicit development dependencies at versions already present in the lockfile; the app's runtime dependencies are unchanged.
+Run `npm run verify:supply-chain` after installing the locked dependencies to check configuration consistency locally. It checks dependency versions and lockfile integrity records, Dependabot groups, action pins, permissions and required build/attestation steps. It is a configuration regression check, not a cryptographic verification or a replacement for review. The helper packages `@electron/asar`, `@electron/fuses` and `js-yaml` are explicit development dependencies. From 0.4.2 the app also depends at exact versions on `@sigstore/verify`, `@sigstore/bundle`, `@sigstore/tuf` and `@sigstore/protobuf-specs` to verify update records.
 
 ## Separate building, attesting and publishing
 
 The preview and release builders run with read-only repository permission. Each uploads the tested executable and checksum file under a name unique to that workflow run and attempt. A separate job receives the OIDC and attestation-writing permissions, downloads that artifact and attests it. That job does not check out repository code, install dependencies or run build scripts.
 
 Before publication, the release job cryptographically verifies the downloaded artifact's attestation against this repository, the exact release workflow and both the reviewed source and workflow commit. Self-hosted runner attestations are rejected. The preview workflow performs the same verification with its own workflow identity, so the chain can be tested without publishing another app version. The signing job's limited role does not make a malicious build harmless; source review, dependency checks and artifact verification still matter.
+
+## The in-app update record
+
+From 0.4.2, each release also carries `Ravenshelf-<version>-Windows.exe.sigstore.json`: the Sigstore bundle of GitHub's build-provenance attestation for that executable. A separate **Check the build record with the in-app updater** job, with only read permissions, prepares it:
+
+1. GitHub CLI verifies the attestation with the same restrictions as the release job, and `scripts/verify-attestation.cjs --export` saves the bundle it verified. No dependency code runs while that step holds its read-only token.
+2. `scripts/verify-update-record.cjs` checks the saved bundle with `src/release-attestation.cjs`, the verifier installed copies use, against both Sigstore's current TUF-signed trusted root and the root bundled with the app, then repeats the check inside the Electron runtime the app ships with, whose BoringSSL behaves differently from Node's OpenSSL. A record that installed copies would refuse stops the release. If Sigstore's TUF service is unreachable, the job warns and relies on the bundled root.
+3. The publishing job receives the record's bytes and SHA-256, checks that it is intact and names this executable and checksum, and uploads it beside the executable before the release is published.
+
+Installed copies from 0.4.2 verify this record before downloading an update. They pin the certificate to `https://github.com/khattabhunter/ravenshelf/.github/workflows/publish-release.yml@refs/heads/main`, the issuer `https://token.actions.githubusercontent.com`, a GitHub-hosted runner, and the repository and owner IDs `1448364041` and `76850671`. A release without exactly one valid record is not offered.
+
+Keep these properties when changing the release process. Renaming the workflow file, publishing from another branch, transferring or renaming the repository (which changes its URL), or deleting and re-creating it all produce records that existing installed copies refuse; users would then need to update manually once. Bumping `actions/attest-build-provenance` or the Sigstore packages must keep producing and accepting a verifiable bundle; the release-gate job checks this before every publication.
 
 ## Optional local GPG setup for this repository
 
@@ -102,4 +114,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Artifact provenance verification failed.' }
 
 For an Actions preview artifact, use `.github/workflows/build-windows.yml` as the helper's workflow argument, or the corresponding fully qualified `--signer-workflow` in the manual CLI command. Keep the preview run's exact commit for both digest checks. The helper also checks that the local file remains unchanged and requires a complete verified result from the CLI.
 
-This manual provenance check does not run the executable. The app's automatic updater verifies the expected GitHub repository, release asset, size and SHA-256 but does not perform this attestation check. Neither source signatures nor attestations provide Windows Authenticode signing; the portable executable remains unsigned.
+This manual provenance check does not run the executable. From 0.4.2, the in-app updater also verifies the release's signed build record before downloading it, as described above; versions 0.4.1 and earlier check only the expected GitHub repository, release asset, size and SHA-256. Neither source signatures nor attestations provide Windows Authenticode signing; the portable executable remains unsigned.

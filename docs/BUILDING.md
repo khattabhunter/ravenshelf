@@ -59,7 +59,7 @@ The repository's **Build Windows preview** GitHub Actions workflow can also prod
 
 Hosted preview and release builds require the exact source commit to pass [source-integrity.yml](../.github/workflows/source-integrity.yml) before building. A separate job attests the tested artifact without checking out source or installing dependencies; the builder has read-only repository permission. Preview runs then verify the artifact's exact source/workflow provenance, allowing end-to-end checks without a new public release. This prospective policy preserves existing unsigned history; local source builds remain available for development. See [source and release verification](SUPPLY-CHAIN.md) for accepted signing routes, Dependabot handling and optional repository-only GPG setup. Private signing keys are never required in CI.
 
-These repository and CI changes leave the installed app version at 0.4.1. They do not require a replacement executable or alter runtime download/update behavior.
+From 0.4.2, release runs also check the exported build record with the in-app updater's verifier before publishing it beside the executable; see [the in-app update record](SUPPLY-CHAIN.md#the-in-app-update-record).
 
 Workflow artifacts are build outputs. For a release download link, a maintainer can publish the reviewed files or use the release workflow below.
 
@@ -74,6 +74,8 @@ The automated suite covers catalogue parsing/refresh, link checks, network restr
 Version 0.4.0 adds fixture coverage for shared bandwidth, schedule boundaries, host cooldowns, archive-set checks, guarded cleanup, checksum workers, update assets and the native helper, metadata, clipboard recognition, notices and the new renderer controls. Use a separate test profile and synthetic files for deletion or checksum smoke tests. Test update replacement only with a disposable fixture executable and profile; a passing unit suite does not establish that a packaged update has been installed successfully.
 
 Version 0.4.1 extends checks for missing file sizes, bounded storage discovery, missing queue files, fractional speed limits and unsaved form edits during background updates. See the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for the maintenance review and isolated runtime coverage.
+
+Version 0.4.2 adds tests for approval-gated updates, the build-record verifier (including GitHub's real 0.4.1 record checked offline, plus tampered and mismatched variants), the release gate scripts and leftover cleanup with real temporary folders, links and read-only files. The verifier is also tested inside Electron's runtime, whose BoringSSL differs from Node's OpenSSL. Those tests are skipped until the development Electron binary is installed with `node node_modules/electron/install.js` (it checks the download against the checksums in the locked `electron` package); the **Test** workflow installs it and requires them.
 
 Passing tests establish the exercised cases, not that every host response, Windows setup or third-party file is safe. Keep live checks separate and bounded; do not make the normal test command depend on file-host availability or personal download links.
 
@@ -93,12 +95,14 @@ Passing tests establish the exercised cases, not that every host response, Windo
 | `src/installed-games.cjs`, `src/installed-scan.ps1` | Read-only installation and version discovery. |
 | `src/completion-action.cjs`, `src/completion-policy.cjs` | Queue/scan completion checks and cancellable finish actions. |
 | `src/feature-services.cjs` | Validated integration for update, cleanup, metadata, clipboard, notifications and verification operations. |
-| `src/app-updater.cjs`, `src/updater-helper.cs` | GitHub release verification/staging and native portable replacement after app exit. |
+| `src/app-updater.cjs`, `src/updater-helper.cs` | GitHub release checks, approval-gated staging, leftover cleanup and native portable replacement after app exit. |
+| `src/release-attestation.cjs` | Sigstore build-record verification for updates, pinned to the release workflow identity. |
 | `src/bandwidth-limiter.cjs`, `src/download-schedule.cjs`, `src/host-backoff.cjs` | Shared transfer budget, local-time windows and host cooldowns. |
 | `src/download-cleanup.cjs`, `src/archive-set-validation.cjs` | Reviewed managed-file cleanup and multipart filename/size checks. |
 | `src/integrity-verifier.cjs`, `src/integrity-worker.cjs` | Cancellable local manifest verification in a separate worker. |
 | `scripts/build-updater.cjs` | Compiles the native helper using the Windows .NET Framework compiler. |
 | `scripts/verify-package.cjs`, `scripts/verify-fuses.cjs` | Packaged helper/source/build-record checks and Electron fuse verification. |
+| `scripts/verify-attestation.cjs`, `scripts/verify-update-record.cjs` | Release attestation verification and export, and the release gate that checks the exported record with the in-app verifier. |
 | `test/` | Automated tests and synthetic test data. |
 
 ## Preparing a release
@@ -115,9 +119,9 @@ Passing tests establish the exercised cases, not that every host response, Windo
 
 6. Confirm that the exact source commit is signed and verified on GitHub, then create a matching release tag and attach the reviewed executable and checksum file. Publish source through Git, not a copy of the app's local profile or build cache. Keep existing unsigned history and published tags unchanged.
 
-Alternatively, after reviewing and merging the release changes into `main`, wait for the latest main-branch push runs of **Test**, **CodeQL** and **Source integrity** to succeed on that exact commit. A maintainer can then select **Publish Windows prerelease** (`.github/workflows/publish-release.yml`) in the repository's **Actions** tab and choose **Run workflow** with branch `main`. No other inputs are required. The workflow checks source signatures and those completed runs before installing dependencies, testing and building on Windows with Node.js 24. After a separate job attests the tested artifact, the publication job verifies that attestation against the repository, expected workflow and exact source/workflow commits before publishing. It uses release notes from `docs/RELEASE-<version>.md` and creates a prerelease tagged `v<package version>` with the executable and `SHA256SUMS.txt`; GitHub supplies source archives for the tag. An existing tag or release, including a draft, is refused. Check that the entire workflow succeeds and inspect the release assets before sharing the download link.
+Alternatively, after reviewing and merging the release changes into `main`, wait for the latest main-branch push runs of **Test**, **CodeQL** and **Source integrity** to succeed on that exact commit. A maintainer can then select **Publish Windows prerelease** (`.github/workflows/publish-release.yml`) in the repository's **Actions** tab and choose **Run workflow** with branch `main`. No other inputs are required. The workflow checks source signatures and those completed runs before installing dependencies, testing and building on Windows with Node.js 24. After a separate job attests the tested artifact, a read-only job exports the verified build record and checks it with the in-app updater's verifier. The publication job then verifies the attestation against the repository, expected workflow and exact source/workflow commits before publishing. It uses release notes from `docs/RELEASE-<version>.md` and creates a prerelease tagged `v<package version>` with the executable, `SHA256SUMS.txt` and `Ravenshelf-<version>-Windows.exe.sigstore.json`; GitHub supplies source archives for the tag. An existing tag or release, including a draft, is refused. Check that the entire workflow succeeds and inspect the release assets before sharing the download link.
 
-Published builds include a GitHub build-provenance attestation. Follow the [restricted verification command](SUPPLY-CHAIN.md#verify-the-published-executables-build-origin) to check the repository, expected release workflow, exact reviewed source commit and GitHub-hosted runner. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.1 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
+Published builds include a GitHub build-provenance attestation. Follow the [restricted verification command](SUPPLY-CHAIN.md#verify-the-published-executables-build-origin) to check the repository, expected release workflow, exact reviewed source commit and GitHub-hosted runner. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.2 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
 
 CodeQL also analyzes the C# helper using an explicit native-helper compilation job, alongside JavaScript and workflow analysis. Review the alert lists as well as workflow completion; a finished scan is not itself a finding-free result.
 

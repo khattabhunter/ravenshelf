@@ -1011,13 +1011,17 @@ async function confirmDownloadRemoval(){
   catch(error){removalPreview=null;$('#removal-error').textContent=errorText(error)+' Check the files again before retrying.';$('#removal-error').hidden=false;}
   finally{removalBusy=false;$('#removal-options').disabled=false;$('#removal-confirm-files').disabled=false;$('#removal-refresh').disabled=false;$$('[data-close="removal-dialog"]').forEach(node=>{node.disabled=false;});syncRemovalChoice();renderDownloadSelection();}
 }
+// Release notes open only for an exact Ravenshelf release page.
+const RELEASE_PAGE=/^https:\/\/github\.com\/khattabhunter\/ravenshelf\/releases\/tag\/v\d+\.\d+\.\d+$/;
 function renderUpdater(){
   const update=state.updater||{},phase=update.phase||'idle';$('#update-version').textContent=`v${update.currentVersion||state.version}`;
-  const messages={idle:'Check for a new Ravenshelf release.',checking:'Checking for updates…',current:'You have the latest checked version.',available:'A new version is available. Preparing the download…',downloading:'Downloading and verifying the update…',ready:'Ready — installs when you close Ravenshelf.',error:'The update could not be prepared. You can check again.',unavailable:'Automatic updates are not available in this build.'};
-  $('#update-status').textContent=update.message||messages[phase]||'Update status unavailable.';
-  if(update.availableVersion)$('#update-status').textContent+=` Version ${update.availableVersion}.`;
+  const messages={idle:'Check GitHub for a newer Ravenshelf release.',checking:'Checking for updates…',current:'You have the latest checked version.',available:'A new version is available. Nothing is downloaded until you choose Download and install.',verifying:'Checking GitHub’s checksum and signed build record…',downloading:'Downloading and verifying the update…',ready:'Ready — installs when you close Ravenshelf.',error:'The update could not be checked or verified. You can check again.',unavailable:'Automatic updates are not available in this build.'};
+  const status=String(update.message||messages[phase]||'Update status unavailable.');
+  $('#update-status').textContent=update.availableVersion&&!status.includes(String(update.availableVersion))?`${status} Version ${update.availableVersion}.`:status;
   const progress=$('#update-progress');progress.hidden=phase!=='downloading';const percent=Number(update.progress?.percent??Number(update.progress)*100);if(Number.isFinite(percent))progress.value=Math.max(0,Math.min(100,percent));else progress.removeAttribute('value');
-  $('#check-app-updates').disabled=typeof api?.checkForUpdates!=='function'||['checking','downloading','unavailable'].includes(phase);
+  $('#check-app-updates').disabled=typeof api?.checkForUpdates!=='function'||['checking','verifying','downloading','unavailable'].includes(phase);
+  const download=$('#download-app-update');download.hidden=phase!=='available';download.disabled=typeof api?.downloadUpdate!=='function';
+  $('#app-update-notes').hidden=!['available','verifying','downloading','ready'].includes(phase)||typeof api?.openExternal!=='function'||!RELEASE_PAGE.test(String(update.releaseUrl||''));
   const install=$('#install-app-update');install.hidden=phase!=='ready';install.disabled=typeof api?.installUpdate!=='function'||state.downloads.some(item=>['downloading','queued'].includes(item.status)||['queued','scanning'].includes(item.scan?.status))||['running','verifying','starting','checking'].includes(verificationState.phase)||state.completionAction?.mode!=='none';
 }
 function renderScheduleStatus(){const schedule=state.downloadSchedule,enabled=state.settings.downloadSchedule?.enabled;const node=$('#download-schedule-status');if(!enabled){node.textContent='';return;}let text=schedule?.active?'Download schedule: allowed now.':'Download schedule: waiting for the next allowed period.';if(schedule?.nextChangeAt){const date=new Date(schedule.nextChangeAt);if(Number.isFinite(date.getTime()))text+=` Next change: ${date.toLocaleString()}.`;}node.textContent=text;}
@@ -1071,6 +1075,8 @@ function wireFeatureEvents(){
   $('#schedule-form').addEventListener('submit',event=>{event.preventDefault();try{saveFeatureSetting({downloadSchedule:scheduleFromForm()},$('button[type="submit"]',$('#schedule-form')));}catch(error){toast(errorText(error),true);}});
   for(const [id,key]of [['notifications-enabled','notificationsEnabled'],['clipboard-watch-enabled','clipboardWatchEnabled'],['adaptive-theme-enabled','adaptiveThemeEnabled'],['auto-update-enabled','autoUpdateEnabled']])$('#'+id).addEventListener('change',event=>saveFeatureSetting({[key]:event.target.checked},event.target));
   $('#check-app-updates').addEventListener('click',async()=>{const button=$('#check-app-updates');button.disabled=true;try{const update=await api.checkForUpdates();if(update?.phase)state.updater=update;else if(update?.updater)state.updater=update.updater;}catch(error){state.updater={...state.updater,phase:'error',message:errorText(error)};}finally{renderUpdater();}});
+  $('#download-app-update').addEventListener('click',async()=>{const button=$('#download-app-update');button.disabled=true;try{const update=await api.downloadUpdate();if(update?.phase)state.updater=update;}catch(error){toast(errorText(error),true);}finally{renderUpdater();}});
+  $('#app-update-notes').addEventListener('click',()=>{const url=String(state.updater?.releaseUrl||'');if(RELEASE_PAGE.test(url))attempt(()=>api.openExternal(url));});
   $('#install-app-update').addEventListener('click',async()=>{const button=$('#install-app-update');button.disabled=true;try{await api.installUpdate();}catch(error){toast(errorText(error),true);renderUpdater();}});
   const openClipboard=()=>{showDialog($('#clipboard-dialog'));refreshClipboard();};$('#open-clipboard').addEventListener('click',openClipboard);$('#refresh-clipboard').addEventListener('click',refreshClipboard);
   const tray=button('Copied links','text-button',null,openClipboard);tray.id='clipboard-tray-button';tray.hidden=true;$('.top-actions').prepend(tray);

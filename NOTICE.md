@@ -11,6 +11,8 @@ Ravenshelf's original implementation is distributed under the [MIT License](LICE
 - [Electron](https://github.com/electron/electron) is MIT-licensed and includes Chromium, Node.js and additional components with their own notices. Preserve the license and third-party notice files included in its distribution.
 - [Cheerio](https://github.com/cheeriojs/cheerio) is MIT-licensed.
 - [Undici](https://github.com/nodejs/undici) is MIT-licensed.
+- [sigstore-js](https://github.com/sigstore/sigstore-js) packages `@sigstore/verify`, `@sigstore/bundle`, `@sigstore/tuf` and `@sigstore/core`, and [`@sigstore/protobuf-specs`](https://github.com/sigstore/protobuf-specs), are Apache-2.0-licensed. They verify update build records; `@sigstore/tuf` includes Sigstore's public TUF root and trusted-root metadata.
+- [tuf-js](https://github.com/theupdateframework/tuf-js) (`tuf-js`, `@tufjs/models`, `@tufjs/canonical-json`) is MIT-licensed. Its dependencies `minimatch` and `@isaacs/nonrecursive-glob-match` are BlueOak-1.0.0-licensed; `@gar/promise-retry`, `debug`, `ms`, `brace-expansion` and `balanced-match` are MIT-licensed.
 - [electron-builder](https://github.com/electron-userland/electron-builder) is a build-time dependency with its own license and bundled-tool notices.
 
 The lockfile records direct and transitive dependencies. Their licenses remain in their package distributions; Ravenshelf's MIT license does not replace those terms.
