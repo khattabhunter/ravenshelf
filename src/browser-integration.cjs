@@ -10,8 +10,10 @@ const {BrowserBridge}=require('./browser-bridge.cjs');
 const browserSetup=require('./browser-setup.cjs');
 const {safeURL}=require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
+const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
 
 const EXTENSION_BROWSERS=Object.freeze(['chromium','firefox']);
+const FOLDER_NOT_UPDATED='The extension folder could not be updated, so your browser keeps the previous version. Restart Ravenshelf to try again.';
 
 function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
   manager.settings={browserIntegrationEnabled:false,...manager.settings};
@@ -30,7 +32,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   try{threatLists.load();}catch{}
   try{virusTotal.load();}catch{}
   const bridge=new BrowserBridge({hostDir,threatLists,virusTotal,resolveProvider,appVersion:version,platform,
-    queueDownload:entry=>{assertQueueAvailable();return manager.add({links:[entry],gameTitle:'Browser downloads'});},
+    queueDownload:entry=>{assertQueueAvailable();return manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
     openExternal:url=>shell.openExternal(safeURL(url).href),
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});
   bridge.on('change',()=>publish());
@@ -51,11 +53,16 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
     try{
       if(!supported)throw new Error('The browser connector is available on Windows only.');
       if(registers)await setup.registerNativeHost({hostDir});
-      await exportFolders();
+      // After an app update, a folder that cannot be replaced right now (for
+      // example, open in another program) must not stop the connection: the
+      // previous extension files keep working. Without any folder, it is fatal.
+      let folderProblem='';
+      try{await exportFolders();}
+      catch(error){readFolders();if(!Object.values(folderVersions).some(Boolean))throw error;folderProblem=FOLDER_NOT_UPDATED;}
       await bridge.start();
       // Fetch the lists straight away the first time; later starts wait a little.
       threatLists.start({initialDelayMs:threatLists.total?15000:1000});
-      phase='on';
+      phase='on';problem=folderProblem;
     }catch(error){
       await bridge.stop().catch(()=>{});threatLists.stop();
       phase='error';problem=publicErrorMessage(error,'setBrowserIntegration');

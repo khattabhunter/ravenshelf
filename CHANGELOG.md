@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1 — Delete finished browser downloads, retry dropped connections
+
+- **Delete files** now works for finished browser downloads of any file type, such as a program or a picture. In 0.5.0, cleanup accepted only archive names and refused these with "These files changed or could not be checked safely". The exception applies only to downloads taken over from a browser and saved in Ravenshelf's own **Browser downloads** folder; in game folders, cleanup still deletes only the downloaded archives.
+- **Check space** now counts browser downloads instead of reporting them as files that could not be checked safely.
+- A dropped or timed-out connection is retried automatically, up to twice in a row (after 15 and then 30 seconds); a retry that received more data resets the count. Network failures now name the problem (timed out, interrupted, host unreachable or refused) instead of a general message.
+- Choosing **Download** for a browser download that is already in the queue (finished, failed or paused) now says **Already in Downloads**. In 0.5.0 it reported **Added** although nothing was queued.
+- Removing downloads no longer shows "Queue cleanup cancelled the completion action" when no finish action was set.
+- After an update, if the browser-extension folder can't be replaced (for example, because another program has it open), the connection still starts with the previous extension files, and **Settings → Browser extension** says so. It is retried on the next start.
+
+See [the release notes](docs/RELEASE-0.5.1.md).
+
 ## 0.5.0 — Browser extension: downloads checked first, dangerous sites blocked
 
 - New Ravenshelf extension for Chrome, Edge, Brave and Firefox, set up from **Settings → Browser extension** and off until you connect it. Downloads you start in the browser go to Ravenshelf, which checks each one before anything is saved and then waits for your choice. If Ravenshelf is closed, the browser downloads as usual. Private windows are never captured. Includes a right-click **Download with Ravenshelf** option and a toolbar button.

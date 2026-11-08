@@ -3,7 +3,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {createDownloadCleanup,TTL_MS}=require('../src/download-cleanup.cjs');
+const {createDownloadCleanup,TTL_MS,BROWSER_FOLDER}=require('../src/download-cleanup.cjs');
 const {workspaceFor}=require('../src/parallel-download.cjs');
 const base=path.resolve(__dirname,'.cleanup-fixtures');fs.mkdirSync(base,{recursive:true});
 function within(root,target){const relative=path.relative(root,path.resolve(target));assert.ok(relative&&relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative));}
@@ -56,6 +56,29 @@ test('Unknown workspace files, junction ancestors, active jobs, and nonarchive n
   const downloads=[a,job(alias,{id:'link'}),job(folder,{id:'running',name:'active.rar',status:'downloading'}),job(folder,{id:'exe',name:'setup.exe'}),job(folder,{id:'traversal',name:'../escape.rar'})];
   const cleanup=createDownloadCleanup({getDownloads:()=>downloads}),ids=downloads.map(item=>item.id),preview=await cleanup.preview(ids);assert.equal(preview.items.length,0);
   const result=await cleanup.deletePreview({ids,token:preview.token});assert.equal(result.failed.length,ids.length);assert.equal(fs.readFileSync(path.join(workspace,'do-not-delete.txt'),'utf8'),'keep');
+});
+test('Browser downloads of any file type can be deleted, but only from Ravenshelf’s Browser downloads folder',async t=>{
+  const {root,folder}=fixture(t),browser=path.join(root,BROWSER_FOLDER);fs.mkdirSync(browser);
+  const program=job(browser,{id:'program',name:'7z2606-x64.exe',origin:'browser',status:'completed',scan:{status:'clean'}});
+  const photo=job(browser,{id:'photo',name:'tigris-river.jpg',origin:'browser',status:'error'});
+  const inGameFolder=job(folder,{id:'in-game-folder',name:'installer.exe',origin:'browser',status:'completed'});
+  const notFromBrowser=job(browser,{id:'not-from-browser',name:'tool.exe',status:'completed'});
+  fs.writeFileSync(path.join(browser,program.name),'program');fs.writeFileSync(path.join(browser,photo.name+'.atlas-part'),'jp');
+  fs.writeFileSync(path.join(folder,inGameFolder.name),'keep');fs.writeFileSync(path.join(browser,notFromBrowser.name),'keep');fs.writeFileSync(path.join(browser,'untracked.pdf'),'keep');
+  const downloads=[program,photo,inGameFolder,notFromBrowser],cleanup=createDownloadCleanup({getDownloads:()=>downloads,getDownloadDir:()=>root});
+  const summary=await cleanup.summary();
+  assert.equal(summary.completedBytes,7);assert.equal(summary.partialBytes,2);
+  assert.deepEqual(summary.items.filter(item=>item.unavailable).map(item=>item.id),['in-game-folder','not-from-browser']);
+  const ids=downloads.map(item=>item.id),preview=await cleanup.preview(ids);
+  assert.deepEqual(preview.items.map(item=>item.id).sort(),['photo','program']);assert.equal(preview.totalBytes,9);assert.equal(preview.warnings.length,2);
+  const result=await cleanup.deletePreview({ids,token:preview.token});
+  assert.deepEqual(result.removedIds,['photo','program']);assert.equal(result.failed.length,2);assert.equal(result.bytesFreed,9);
+  assert.equal(fs.existsSync(path.join(browser,program.name)),false);assert.equal(fs.existsSync(path.join(browser,photo.name+'.atlas-part')),false);
+  for(const kept of [path.join(folder,inGameFolder.name),path.join(browser,notFromBrowser.name),path.join(browser,'untracked.pdf')])assert.equal(fs.readFileSync(kept,'utf8'),'keep');
+});
+test('Browser downloads are queued into the folder that cleanup recognises',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','src','browser-integration.cjs'),'utf8');
+  assert.match(source,/gameTitle:BROWSER_FOLDER\b/);assert.equal(BROWSER_FOLDER,'Browser downloads');
 });
 test('Summary uses existing file sizes, deduplicates shared paths, and separates partial storage',async t=>{
   const {folder}=fixture(t),a=job(folder),b={...a,id:'two'};fs.writeFileSync(path.join(folder,a.name),'12345');fs.writeFileSync(path.join(folder,a.name+'.atlas-part'),'123');

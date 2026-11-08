@@ -41,9 +41,17 @@ async function verifyFile(file){
   if(!file.stat){if(current)bad();return;}
   if(!current||!regular(current,false)||!same(file.stat,current)||current.size!==file.stat.size||current.mtimeNs!==file.stat.mtimeNs||current.ctimeNs!==file.stat.ctimeNs)bad();
 }
+// Downloads taken over from a browser can be any file type. Ravenshelf saves
+// them only in its own Browser downloads folder, where nothing is installed,
+// so only there may a non-archive name be cleaned up. Game folders keep the
+// archive-only rule because installed game files can sit beside the archives.
+const BROWSER_FOLDER='Browser downloads';
+function browserFile(download,folder){return download.origin==='browser'&&pathKey(path.basename(folder))===pathKey(BROWSER_FOLDER);}
 function selection(download){
-  if(!download||typeof download.id!=='string'||!download.id||download.id.length>200||!filename(download.name)||!ARCHIVE.test(download.name))bad();
-  const folder=local(download.folder),final=path.join(folder,download.name),partial=final+'.atlas-part',workspace=workspaceFor(partial,download.id);
+  if(!download||typeof download.id!=='string'||!download.id||download.id.length>200||!filename(download.name))bad();
+  const folder=local(download.folder);
+  if(!ARCHIVE.test(download.name)&&!browserFile(download,folder))bad();
+  const final=path.join(folder,download.name),partial=final+'.atlas-part',workspace=workspaceFor(partial,download.id);
   if(!within(folder,final)||!within(folder,partial)||!within(folder,workspace)||path.dirname(workspace)!==folder)bad();
   return {id:download.id,name:download.name,folder,final,partial,workspace};
 }
@@ -179,4 +187,4 @@ function createDownloadCleanup({getDownloads,getDownloadDir,now=Date.now,scanLim
   }
   return {preview,deletePreview,summary};
 }
-module.exports={createDownloadCleanup,TTL_MS};
+module.exports={createDownloadCleanup,TTL_MS,BROWSER_FOLDER};

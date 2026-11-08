@@ -211,7 +211,7 @@ class BrowserBridge extends EventEmitter{
     const now=this.now();
     for(const [id,capture] of this.captures){
       const age=now-capture.createdAt;
-      if((capture.status!=='checking'&&age>CAPTURE_TTL_MS)||(['queued','sent-to-browser'].includes(capture.status)&&age>FINISHED_TTL_MS))this.captures.delete(id);
+      if((capture.status!=='checking'&&age>CAPTURE_TTL_MS)||(['queued','sent-to-browser','duplicate'].includes(capture.status)&&age>FINISHED_TTL_MS))this.captures.delete(id);
     }
   }
   async action({id,action,acknowledgeRisk}={}){
@@ -230,8 +230,14 @@ class BrowserBridge extends EventEmitter{
     if(action==='download'){
       if(capture.status!=='ready'||!capture.entry)throw new Error('Ravenshelf cannot download this link. You can let your browser download it instead.');
       const result=await this.queueDownload({...capture.entry,origin:'browser',markOfTheWeb:true});
-      capture.status='queued';capture.entry=null;capture.createdAt=this.now();this.emit('change');
-      return {...this.snapshot(),added:Number.isInteger(result?.added)?result.added:1};
+      const added=Number.isInteger(result?.added)?result.added:1;
+      capture.entry=null;capture.createdAt=this.now();
+      // The queue skips a link it already holds (finished, failed or paused),
+      // so say so instead of reporting a download that will never start.
+      if(added)capture.status='queued';
+      else{capture.status='duplicate';capture.message='This file is already in your Downloads list. Use Retry there, or remove the old entry and download it again.';}
+      this.emit('change');
+      return {...this.snapshot(),added};
     }
     if(!['manual','ready'].includes(capture.status))throw new Error('This link is not available, so your browser cannot download it either.');
     this.allowOnce(capture.request.url,capture.request.finalUrl);

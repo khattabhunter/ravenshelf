@@ -570,7 +570,9 @@ function updateDownloadProgress(node, item) {
     else if (count) connectionText = `${count} active ${count === 1 ? 'connection' : 'connections'}`;
     else connectionText = item.connectionMode === 'parallel' ? 'Preparing multiple connections…' : 'Preparing download…';
   }
-  if (item.connectionNote && ['downloading', 'paused', 'error'].includes(item.status)) connectionText += `${connectionText ? ' · ' : ''}${item.connectionNote}`;
+  // A queued download waiting to retry (busy host or dropped connection) says why it is waiting.
+  const waitingToRetry = item.status === 'queued' && Number(item.retryAt) > Date.now();
+  if (item.connectionNote && (['downloading', 'paused', 'error'].includes(item.status) || waitingToRetry)) connectionText += `${connectionText ? ' · ' : ''}${item.connectionNote}`;
   connections.textContent = connectionText;
   connections.hidden = !connectionText;
 }
@@ -1228,7 +1230,7 @@ function virusTotalLine(report, className) {
 }
 function captureStateLabel(item) {
   if (item.status === 'ready') return item.verdict?.level === 'warning' ? 'Needs your OK' : 'Ready';
-  return { checking: 'Checking', manual: 'Needs your browser', unavailable: 'Unavailable', blocked: 'Blocked', queued: 'Added', 'sent-to-browser': 'Sent to browser' }[item.status] || 'Waiting';
+  return { checking: 'Checking', manual: 'Needs your browser', unavailable: 'Unavailable', blocked: 'Blocked', queued: 'Added', duplicate: 'Already in Downloads', 'sent-to-browser': 'Sent to browser' }[item.status] || 'Waiting';
 }
 function captureCard(item) {
   const card = el('article', `capture-item ${item.status || ''}`);
@@ -1262,7 +1264,7 @@ function captureCard(item) {
       try {
         const result = await api.browserCaptureAction({ id: item.id, action, acknowledgeRisk: acknowledgedCaptures.has(item.id) });
         if (Array.isArray(result?.captures)) { browserState = { ...browserState, bridge: result }; capturesShown = ''; afterBrowserState(); }
-        if (action === 'download') toast('Added to your downloads.');
+        if (action === 'download') toast(result?.added === 0 ? 'This file is already in your Downloads list.' : 'Added to your downloads.');
         if (action === 'browser') toast('Opened in your browser. This one downloads there without going through Ravenshelf again.');
       } catch (error) { toast(errorText(error), true); node.disabled = false; }
     });
@@ -1301,6 +1303,7 @@ function renderBrowserSettings() {
     text = `Connected: the extension in ${BROWSER_NAMES[contact.browser] || 'your browser'} (version ${contact.extensionVersion}) was last in touch ${timeAgo(contact.at)}.`;
     if (contact.extensionVersion !== b.appVersion) { text += ' It is out of date: on your browser’s extensions page, choose Reload for Ravenshelf.'; tone = 'warn'; }
   } else text = 'On. Load the extension in your browser with the steps below.';
+  if (b.phase === 'on' && b.problem) { text = `${text} ${b.problem}`; tone = 'warn'; }
   const status = $('#browser-status');
   status.textContent = text; status.className = `small-text browser-status ${tone}`.trim();
   $('#browser-setup').hidden = !enabled;

@@ -93,3 +93,16 @@ test('download-facing errors keep fixed integrity guidance and numeric HTTP stat
   const providerMessage=publicErrorMessage(privateError(),'checkLinks');
   assert.equal(publicErrorMessage(new Error(providerMessage),'download'),providerMessage,'already safe provider guidance survives another error boundary');
 });
+
+test('network failures wrapped as "fetch failed" get a clear fixed message without private details',()=>{
+  const wrapped=cause=>Object.assign(new TypeError('fetch failed'),{cause});
+  const coded=(code,message=privateMessage)=>Object.assign(new Error(message),{code});
+  assert.equal(publicErrorMessage(wrapped(coded('ECONNRESET')),'download'),'The connection was interrupted. Please try again.');
+  assert.equal(publicErrorMessage(wrapped(coded('UND_ERR_CONNECT_TIMEOUT')),'download'),'The connection timed out. Check your connection and try again.');
+  assert.equal(publicErrorMessage(wrapped(wrapped(coded('EAI_AGAIN'))),'download'),'The host could not be reached. Check your connection and try again.');
+  assert.equal(publicErrorMessage(wrapped(new Error('Private network destination blocked.')),'download'),'Private network destination blocked.');
+  const unknown=publicErrorMessage(wrapped(privateError()),'download');
+  assert.equal(unknown,'The file could not be downloaded. Check the link, connection and download folder, then retry.');containsNoPrivateData(unknown);
+  const loop={message:'fetch failed'};loop.cause=loop;
+  assert.equal(publicErrorMessage(loop,'download'),'The file could not be downloaded. Check the link, connection and download folder, then retry.');
+});

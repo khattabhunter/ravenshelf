@@ -192,7 +192,18 @@ const SYSTEM_MESSAGES=new Map([
   ['ETIMEDOUT','The connection timed out. Check your connection and try again.'],
   ['ECONNRESET','The connection was interrupted. Please try again.'],
   ['ENOTFOUND','The host could not be reached. Check your connection and try again.'],
-  ['ERR_INVALID_URL','Invalid web address.']
+  ['ERR_INVALID_URL','Invalid web address.'],
+  // Codes that the network library reports for the same failures.
+  ['EAI_AGAIN','The host could not be reached. Check your connection and try again.'],
+  ['ENETUNREACH','The host could not be reached. Check your connection and try again.'],
+  ['EHOSTUNREACH','The host could not be reached. Check your connection and try again.'],
+  ['ECONNREFUSED','The host refused the connection. Try again later.'],
+  ['EPIPE','The connection was interrupted. Please try again.'],
+  ['ECONNABORTED','The connection was interrupted. Please try again.'],
+  ['UND_ERR_SOCKET','The connection was interrupted. Please try again.'],
+  ['UND_ERR_CONNECT_TIMEOUT','The connection timed out. Check your connection and try again.'],
+  ['UND_ERR_HEADERS_TIMEOUT','The connection timed out. Check your connection and try again.'],
+  ['UND_ERR_BODY_TIMEOUT','The connection timed out. Check your connection and try again.']
 ]);
 // A sanitized provider failure can later become a download or IPC failure.
 // Keep fixed public guidance stable when it crosses a second boundary.
@@ -213,7 +224,12 @@ function publicErrorMessage(error,action){
       const http=/^(?:Catalog source unavailable \(HTTP (\d{3})\)\.|Catalog unavailable \(HTTP (\d{3})\)\. Try again later\.|Game page unavailable \(HTTP (\d{3})\)\.|Paste returned HTTP (\d{3})\.)$/.exec(message);
       if(http)return `The source returned HTTP ${http.slice(1).find(Boolean)}. Please try again or choose another source.`;
     }
-    const system=SYSTEM_MESSAGES.get(error?.code);if(system)return system;
+    // A failed request arrives as "fetch failed" with the real reason as its
+    // cause. Only fixed public messages and known codes are used from causes.
+    for(let cause=error,depth=0;cause&&depth<4;cause=cause.cause,depth++){
+      if(depth&&typeof cause.message==='string'){const known=MESSAGES.get(cause.message);if(known)return known;}
+      const system=SYSTEM_MESSAGES.get(cause.code);if(system)return system;
+    }
   }catch{ /* An unexpected error object must not break the public error boundary. */ }
   return ACTIONS.get(action)||'Ravenshelf could not complete this action. Please try again.';
 }
