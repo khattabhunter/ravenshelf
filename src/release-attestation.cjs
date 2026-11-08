@@ -100,7 +100,7 @@ async function loadTrustedRoot({cachePath,signal,timeoutMs=REFRESH_TIMEOUT_MS,re
 function withOpenSSLDefaultDigest(run){
   const original=nodeCrypto.verify;
   nodeCrypto.verify=function(algorithm,data,key,signature,callback){
-    if(algorithm==null&&key instanceof nodeCrypto.KeyObject&&['ec','rsa'].includes(key.asymmetricKeyType))algorithm='sha256';
+    if(algorithm==null&&(key instanceof nodeCrypto.KeyObject)&&['ec','rsa'].includes(key.asymmetricKeyType))algorithm='sha256';
     return original.call(this,algorithm,data,key,signature,callback);
   };
   try{return run();}finally{nodeCrypto.verify=original;}

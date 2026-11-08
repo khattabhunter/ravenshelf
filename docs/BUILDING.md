@@ -75,7 +75,7 @@ Version 0.4.0 adds fixture coverage for shared bandwidth, schedule boundaries, h
 
 Version 0.4.1 extends checks for missing file sizes, bounded storage discovery, missing queue files, fractional speed limits and unsaved form edits during background updates. See the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for the maintenance review and isolated runtime coverage.
 
-Version 0.4.2 adds tests for approval-gated updates, the build-record verifier (including GitHub's real 0.4.1 record checked offline, plus tampered and mismatched variants), the release gate scripts and leftover cleanup with real temporary folders, links and read-only files. When `npm ci` has installed the development Electron binary, the verifier is also tested inside Electron's runtime, whose BoringSSL differs from Node's OpenSSL.
+Version 0.4.2 adds tests for approval-gated updates, the build-record verifier (including GitHub's real 0.4.1 record checked offline, plus tampered and mismatched variants), the release gate scripts and leftover cleanup with real temporary folders, links and read-only files. The verifier is also tested inside Electron's runtime, whose BoringSSL differs from Node's OpenSSL. Those tests are skipped until the development Electron binary is installed with `node node_modules/electron/install.js` (it checks the download against the checksums in the locked `electron` package); the **Test** workflow installs it and requires them.
 
 Passing tests establish the exercised cases, not that every host response, Windows setup or third-party file is safe. Keep live checks separate and bounded; do not make the normal test command depend on file-host availability or personal download links.
 

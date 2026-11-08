@@ -119,7 +119,7 @@ test('the bundled Sigstore trusted root contains the services that sign GitHub a
 function simulateBoringSSL(t){
   const original=crypto.verify;let refused=0;
   const strict=function(algorithm,data,key,signature,callback){
-    if(algorithm==null&&key instanceof crypto.KeyObject&&key.asymmetricKeyType!=='ed25519'&&key.asymmetricKeyType!=='ed448'){refused++;throw Object.assign(new Error('No default digest.'),{code:'ERR_OSSL_EVP_NO_DEFAULT_DIGEST'});}
+    if(algorithm==null&&(key instanceof crypto.KeyObject)&&key.asymmetricKeyType!=='ed25519'&&key.asymmetricKeyType!=='ed448'){refused++;throw Object.assign(new Error('No default digest.'),{code:'ERR_OSSL_EVP_NO_DEFAULT_DIGEST'});}
     return original.call(this,algorithm,data,key,signature,callback);
   };
   crypto.verify=strict;t.after(()=>{crypto.verify=original;});
@@ -145,8 +145,9 @@ function electronBinary(){
   if(process.env.RAVENSHELF_TEST_ELECTRON)return process.env.RAVENSHELF_TEST_ELECTRON;
   try{const folder=path.join(__dirname,'..','node_modules','electron'),name=fs.readFileSync(path.join(folder,'path.txt'),'utf8').trim(),binary=path.join(folder,'dist',name);return fs.existsSync(binary)?binary:null;}catch{return null;}
 }
-const ELECTRON=electronBinary();
-test('the packaged runtime (Electron with BoringSSL) accepts genuine records, rejects changed ones and verifies TUF signatures',{skip:ELECTRON?false:'The development Electron binary is not installed.'},async()=>{
+const ELECTRON=electronBinary(),REQUIRE_ELECTRON=process.env.RAVENSHELF_REQUIRE_ELECTRON==='1';
+test('the packaged runtime (Electron with BoringSSL) accepts genuine records, rejects changed ones and verifies TUF signatures',{skip:ELECTRON||REQUIRE_ELECTRON?false:'The development Electron binary is not installed.'},async()=>{
+  assert.ok(ELECTRON,'This run requires the Electron runtime; install it with node node_modules/electron/install.js.');
   const script=`
     const fs=require('fs'),crypto=require('crypto'),{verifyRecord,embeddedTrustedRoot}=require(process.argv[1]);
     const text=fs.readFileSync(process.argv[2],'utf8'),release=JSON.parse(process.argv[3]),root=embeddedTrustedRoot(),results={electron:process.versions.electron||''};

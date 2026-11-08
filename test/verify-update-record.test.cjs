@@ -63,8 +63,9 @@ function installedElectron(){
   if(process.env.RAVENSHELF_TEST_ELECTRON)return process.env.RAVENSHELF_TEST_ELECTRON;
   try{return electronBinary();}catch{return null;}
 }
-const ELECTRON=installedElectron();
-test('the release gate accepts the genuine record inside Electron and rejects another digest there',{skip:ELECTRON?false:'The development Electron binary is not installed.'},async()=>{
+const ELECTRON=installedElectron(),REQUIRE_ELECTRON=process.env.RAVENSHELF_REQUIRE_ELECTRON==='1';
+test('the release gate accepts the genuine record inside Electron and rejects another digest there',{skip:ELECTRON||REQUIRE_ELECTRON?false:'The development Electron binary is not installed.'},async()=>{
+  assert.ok(ELECTRON,'This run requires the Electron runtime; install it with node node_modules/electron/install.js.');
   assert.match(await verifyInElectron({record:FIXTURE,release:{name:'Ravenshelf-0.4.1-Windows.exe',sha256:DIGEST}},{binary:ELECTRON}),/^\d+\.\d+\.\d+$/);
   await assert.rejects(verifyInElectron({record:FIXTURE,release:{name:'Ravenshelf-0.4.1-Windows.exe',sha256:'0'.repeat(64)}},{binary:ELECTRON}),/Electron runtime did not verify/);
 });

@@ -40,7 +40,7 @@ function parseArgs(args){
 function electronBinary(root=path.resolve(__dirname,'..')){
   let binary=null;
   try{const folder=path.join(root,'node_modules','electron');binary=path.join(folder,'dist',fs.readFileSync(path.join(folder,'path.txt'),'utf8').trim());}catch{}
-  if(!binary||!fs.existsSync(binary))throw new Error('The Electron runtime is not installed. Run npm ci with install scripts.');
+  if(!binary||!fs.existsSync(binary))throw new Error('The Electron runtime is not installed. Run node node_modules/electron/install.js first.');
   return binary;
 }
 const ELECTRON_CHECK=`const fs=require('fs'),{verifyRecord,embeddedTrustedRoot,parseRecord}=require(process.argv[1]);

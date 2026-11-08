@@ -31,8 +31,14 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      # Electron's own installer downloads the runtime the app ships with and
+      # checks it against the checksums bundled in the locked electron package.
+      - name: Install the Electron runtime for runtime tests
+        run: node node_modules/electron/install.js
       - name: Run offline tests
         run: npm test
+        env:
+          RAVENSHELF_REQUIRE_ELECTRON: '1'
       - name: Audit locked dependencies
         run: npm audit --audit-level=high
       - name: Verify registry signatures and available provenance
