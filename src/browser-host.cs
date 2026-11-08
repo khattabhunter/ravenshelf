@@ -97,7 +97,10 @@ internal static class RavenshelfBrowserHost
     {
         try
         {
-            string file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "endpoint.json");
+            // endpoint.json sits next to this program; the name is a constant.
+            string folder = AppDomain.CurrentDomain.BaseDirectory;
+            if (!folder.EndsWith("\\")) folder += "\\";
+            string file = folder + "endpoint.json";
             FileInfo info = new FileInfo(file);
             if (!info.Exists || info.Length > MaximumEndpoint) return null;
             Dictionary<string, object> value = ParseObject(File.ReadAllBytes(file));
@@ -157,8 +160,11 @@ internal static class RavenshelfBrowserHost
             WriteFrame(output, StrictUtf8.GetBytes("{\"ok\":false,\"error\":\"" + error + "\"}"));
             output.Flush();
         }
-        // The browser has already gone, so there is no one left to answer.
-        catch (Exception) { }
+        catch (Exception)
+        {
+            // The browser has already gone, so there is no one left to answer.
+            return 0;
+        }
         return 0;
     }
 }
