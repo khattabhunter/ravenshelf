@@ -155,6 +155,55 @@ A match detects agreement with the chosen manifest, useful for finding corruptio
 
 **Desktop notifications** controls generic completion, problem, update-available and update-ready notices. They omit game names, filenames and paths. Windows notification settings can also suppress them. They are not scan or checksum verdicts.
 
+## Browser extension
+
+The Ravenshelf extension sends the downloads you start in Chrome, Edge, Brave or Firefox to Ravenshelf, which checks each one before anything is saved. It also blocks dangerous sites and stops the pop-ups and redirects of file-host pages. It stays off until you connect it.
+
+### Set it up
+
+1. In Ravenshelf, open **Settings → Browser extension** and turn on **Connect the browser extension**. Ravenshelf registers its small connector for your Windows account (no administrator rights) and prepares the extension folders.
+2. **Chrome, Edge or Brave:** choose **Open folder** under Chrome, Edge or Brave. In the browser, open `chrome://extensions` (Edge and Brave accept this address too), turn on **Developer mode**, choose **Load unpacked** and select the folder Ravenshelf opened.
+3. **Firefox:** choose **Open folder** under Firefox. In Firefox, open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on…** and select `manifest.json` in that folder. Firefox removes temporary add-ons when it closes, so repeat this after restarting Firefox.
+
+The status line in Settings shows when the extension last contacted Ravenshelf. After Ravenshelf updates, it tells you if the extension is out of date: choose **Reload** for Ravenshelf on the browser's extensions page.
+
+Turning the switch off removes the connector registration, and the browser then keeps all downloads. To remove the extension itself, use the browser's extensions page.
+
+### What happens when you download
+
+When you start a download, the browser hands it to Ravenshelf and keeps no copy. Ravenshelf opens **Downloads from your browser** and checks the link:
+
+- It follows redirects one hop at a time, and never contacts a site on its protection lists, your home network or an unencrypted address.
+- It reads only the first 4 KB of the file, without the page's scripts or your browser cookies, to compare the name with the file's real type.
+- FuckingFast, FileKeeper and DataNodes links are resolved by Ravenshelf's own host support.
+- With a VirusTotal key, it also looks up the sites involved.
+
+Then you choose. **Download** adds the file to your queue, in the **Browser downloads** folder. **Download in browser instead** lets your browser download it once, for links Ravenshelf can't fetch, such as pages that need your sign-in. **Dismiss** forgets it. Programs, scripts and disk images ask you to confirm the warning first. Disguised programs (such as `invoice.pdf.exe`), programs over unencrypted HTTP and links through listed sites are blocked and can't be downloaded from the review.
+
+If Ravenshelf is closed or doesn't answer, the browser downloads as usual. Unencrypted (HTTP) downloads that are not programs also stay with the browser. Downloads in private windows are never sent to Ravenshelf. Reviews you don't act on expire after an hour.
+
+Right-click a link and choose **Download with Ravenshelf** to send it directly. On a FuckingFast, FileKeeper or DataNodes page, the page's right-click menu and the toolbar button offer **Download this file with Ravenshelf**.
+
+### Blocking in the browser
+
+Ravenshelf downloads four public lists of dangerous sites, about 261,000 entries, and gives them to the browser as its own blocking rules. They refresh every 12 hours, or when you choose **Update lists now**. Opening a listed site, or loading anything from one, is blocked; Ravenshelf's page explains why, with **Go back** and **Close tab**. Blocking keeps working while Ravenshelf is closed, with the lists from the last time it ran. Listed IP addresses are checked by Ravenshelf itself rather than by the browser.
+
+On FuckingFast and FileKeeper pages, the page can't send you to another site. A redirect puts the download page back, pop-ups are closed (including blank ones the page fills with ads), and an ad frame that takes over the tab is undone. Opening a site yourself, by typing its address or from a bookmark, is never blocked by this rule.
+
+The toolbar button shows whether Ravenshelf is connected. It lets you turn each protection off, or pause both for 10 minutes.
+
+### VirusTotal (optional)
+
+Paste your own free VirusTotal API key under **Settings → Browser extension**. Ravenshelf then looks up the sites a browser download comes from (up to three per download), and the SHA-256 fingerprint of each finished browser download. Results appear in the review and on the download's card, with **View report**. If two or more security vendors flag a finished file, Ravenshelf also shows a notice. Only site names and fingerprints are sent, never your files or full web addresses. The key is sealed with Windows protected storage and never shown again. Free keys allow 4 lookups a minute and 500 a day; at the limit, Ravenshelf skips the rest instead of waiting. VirusTotal's terms apply to your key.
+
+### Limits
+
+- The extension handles files the browser downloads. It does not detect or save videos playing on a page.
+- Checks and lists reduce risk; none of them proves a file or site is safe. Keep Windows protections and Microsoft Defender scans on.
+- Sites that need your browser sign-in can only be downloaded with **Download in browser instead**, because Ravenshelf never uses your browser cookies.
+- The extension is loaded in Developer mode (Chrome, Edge, Brave) or as a temporary add-on (Firefox) because it isn't published in the browser stores yet. Chrome may remind you about developer-mode extensions.
+- Malwarebytes and other security apps can't be connected to Ravenshelf. They keep protecting your PC on their own.
+
 ## Microsoft Defender scans
 
 When a file finishes, Ravenshelf asks Microsoft Defender to scan it and shows the result on the download card:
@@ -192,7 +241,7 @@ Paused or failed files keep the action waiting. New files join an armed queue; a
 
 ## Local data and troubleshooting
 
-The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. Download files use the folder selected in **Settings**.
+The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. With the browser extension connected it also holds `browser-host` (the connector and its browser manifests), `browser-extension` (the folders your browsers load), `threat-lists` (the downloaded protection lists) and `virustotal.json` (your sealed VirusTotal key and options). Download files use the folder selected in **Settings**.
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
@@ -218,5 +267,8 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | Automatic close or shutdown is waiting | Check download cards for queued/running scans or results needing review. Resolve the result and scan again, or choose **Keep Ravenshelf open**. |
 | Catalogue update fails | Keep the current results and retry Refresh later. Source changes can require an app update. |
 | The app still shows old behavior after updating | Close all older Ravenshelf windows, then open the new release executable. |
+| The browser extension says it is not connected | In **Settings → Browser extension**, check that **Connect the browser extension** is on and Ravenshelf is open. If it says the extension isn't the one Ravenshelf set up, load the folder from **Open folder** again. |
+| A download went to the browser instead of Ravenshelf | Ravenshelf was closed or didn't answer in time, the download was unencrypted (HTTP), or it came from a private window. Check the toolbar button's status. |
+| A site you need is blocked | Check the address. If you trust it, pause protection for 10 minutes from the toolbar button, or turn off **Block dangerous sites**. |
 
 For a reproducible app problem, see [CONTRIBUTING.md](../CONTRIBUTING.md) before opening an issue.

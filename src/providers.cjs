@@ -413,5 +413,5 @@ async function resolveLink(value,{fastFetch}={}) {
   } catch(error) { return manual(url,publicErrorMessage(error,'checkLinks'),host); }
 }
 
-module.exports={listGames,getGame,expandLinks,resolveLink,parseListing,limitedText};
+module.exports={listGames,getGame,expandLinks,resolveLink,parseListing,limitedText,filenameFromHeaders};
 module.exports._test={parseListing,parseDetail,decryptPaste,decodeBase58,extractUrls,parseFastLink,validUrl,limitedText};

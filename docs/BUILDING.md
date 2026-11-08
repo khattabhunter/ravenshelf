@@ -47,7 +47,7 @@ npm run verify:build
 
 The portable executable is written to `dist/Ravenshelf-<version>-Windows.exe`. An unpacked app is also available in `dist/win-unpacked/` for inspection. Close any app running from the output directory before rebuilding it.
 
-The `pretest` and `predist` hooks run `scripts/build-updater.cjs`. On Windows it compiles `src/updater-helper.cs` with the system .NET Framework compiler into `src/ravenshelf-updater.exe`, which is packaged with the app. On other platforms the helper build is skipped; that does not produce a supported Windows release. To diagnose the helper build separately, run `node scripts/build-updater.cjs`. See Microsoft's [C# compiler options for .NET Framework](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/#net-framework-projects).
+The `pretest` and `predist` hooks run `scripts/build-updater.cjs` and `scripts/build-browser-host.cjs`. The second compiles `src/browser-host.cs` the same way into `src/ravenshelf-browser-host.exe`, the browser extension's connector, with its own build record. On Windows it compiles `src/updater-helper.cs` with the system .NET Framework compiler into `src/ravenshelf-updater.exe`, which is packaged with the app. On other platforms the helper build is skipped; that does not produce a supported Windows release. To diagnose the helper build separately, run `node scripts/build-updater.cjs`. See Microsoft's [C# compiler options for .NET Framework](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/#net-framework-projects).
 
 The helper is a compiled Windows program with no PowerShell update dependency. Do not weaken execution policy or Windows security settings to build or run it. The generated executable is a build output, not source to commit.
 
@@ -77,6 +77,8 @@ Version 0.4.1 extends checks for missing file sizes, bounded storage discovery, 
 
 Version 0.4.2 adds tests for approval-gated updates, the build-record verifier (including GitHub's real 0.4.1 record checked offline, plus tampered and mismatched variants), the release gate scripts and leftover cleanup with real temporary folders, links and read-only files. The verifier is also tested inside Electron's runtime, whose BoringSSL differs from Node's OpenSSL. Those tests are skipped until the development Electron binary is installed with `node node_modules/electron/install.js` (it checks the download against the checksums in the locked `electron` package); the **Test** workflow installs it and requires them.
 
+Version 0.5.0 adds tests for the extension's decisions and its background script (run against simulated Chrome and Firefox APIs), the protocol and bridge, the connector on Windows, protection lists, download checks, VirusTotal, the internet-zone mark and the new settings and review screens.
+
 Passing tests establish the exercised cases, not that every host response, Windows setup or third-party file is safe. Keep live checks separate and bounded; do not make the normal test command depend on file-host availability or personal download links.
 
 ## Project layout
@@ -100,7 +102,10 @@ Passing tests establish the exercised cases, not that every host response, Windo
 | `src/bandwidth-limiter.cjs`, `src/download-schedule.cjs`, `src/host-backoff.cjs` | Shared transfer budget, local-time windows and host cooldowns. |
 | `src/download-cleanup.cjs`, `src/archive-set-validation.cjs` | Reviewed managed-file cleanup and multipart filename/size checks. |
 | `src/integrity-verifier.cjs`, `src/integrity-worker.cjs` | Cancellable local manifest verification in a separate worker. |
-| `scripts/build-updater.cjs` | Compiles the native helper using the Windows .NET Framework compiler. |
+| `src/browser-extension/` | Browser extension sources; Ravenshelf writes them, with a manifest for each browser, into the profile when the user connects the extension. |
+| `src/browser-*.cjs`, `src/browser-host.cs` | Extension protocol, bridge, setup and connector. |
+| `src/threat-lists.cjs`, `src/link-safety.cjs`, `src/virustotal.cjs`, `src/motw.cjs` | Protection lists, download checks, optional VirusTotal lookups and the internet-zone mark. |
+| `scripts/build-updater.cjs`, `scripts/build-browser-host.cjs` | Compile the native update helper and browser connector using the Windows .NET Framework compiler. |
 | `scripts/verify-package.cjs`, `scripts/verify-fuses.cjs` | Packaged helper/source/build-record checks and Electron fuse verification. |
 | `scripts/verify-attestation.cjs`, `scripts/verify-update-record.cjs` | Release attestation verification and export, and the release gate that checks the exported record with the in-app verifier. |
 | `test/` | Automated tests and synthetic test data. |

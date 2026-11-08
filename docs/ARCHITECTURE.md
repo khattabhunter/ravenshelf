@@ -32,6 +32,12 @@ Ravenshelf 0.4.0 is a Windows Electron application. The interface uses HTML, CSS
 | `src/app-updater.cjs`, `src/updater-helper.cs` | Restricted GitHub release selection, approval-gated and hash-checked staging, profile backups, leftover cleanup and native portable replacement. |
 | `src/release-attestation.cjs` | Verifies a release's Sigstore build record against the pinned release-workflow identity, with a TUF-refreshed trusted root and a bundled fallback. |
 | `src/game-metadata.cjs`, `src/clipboard-inbox.cjs`, `src/notifications.cjs` | Public Steam details, opt-in local copied-link recognition and local desktop notices. |
+| `src/browser-extension/` | The Chrome/Edge/Brave/Firefox extension: download capture, declarative blocking rules, the file-host guard, the toolbar popup and the warning page. `policy.js` holds its pure decisions. |
+| `src/browser-host.cs` | Native-messaging connector: relays one extension message to the app over a token-protected named pipe. |
+| `src/browser-protocol.cjs`, `src/browser-bridge.cjs` | The app side of the extension: framing, origin and token checks, request validation, quick decisions and the review queue. |
+| `src/browser-setup.cjs`, `src/browser-integration.cjs` | Extension folders, per-user connector registration and the Settings operations. |
+| `src/threat-lists.cjs`, `src/link-safety.cjs` | Public protection lists (download, validation, lookup, browser rules) and link and file checks before downloading. |
+| `src/virustotal.cjs`, `src/motw.cjs` | Optional VirusTotal lookups (domains and file fingerprints) and the internet-zone mark on taken-over files. |
 
 ```mermaid
 flowchart LR
@@ -56,6 +62,24 @@ Protected host windows use host-specific sessions and do not load the applicatio
 The FuckingFast session adapter reads only supported root landing-page and matching form endpoints. It validates redirects, caps request lifetime and shares that host's verification session. It does not execute remote page scripts. Direct-file probes and file transfers continue through the Node transport. Chromium root-host DNS preflight is distinct from the Node transport's socket-level address validation; neither is a content-malware verdict.
 
 The packaged executable switches off Electron's `RunAsNode`, `NODE_OPTIONS`, `--inspect` and `file://` privilege fuses, loads application code only from `app.asar`, and encrypts the Chromium cookie store. Version 0.3.1 also enables `EnableEmbeddedAsarIntegrityValidation` alongside `OnlyLoadAppFromAsar`. `npm run verify:build` inspects the actual packaged fuse values rather than relying only on build configuration. These restrictions reduce execution and archive-tampering paths; they do not authenticate the unsigned executable or prevent replacement of the whole application. Public releases use GitHub-hosted runners and build-provenance attestations.
+
+## Browser extension
+
+```mermaid
+flowchart LR
+  Ext[Browser extension] -->|native messaging| Host[Connector exe]
+  Host -->|named pipe + session token| BridgeApp[Bridge in main process]
+  BridgeApp --> Checks[Link safety, lists, VirusTotal]
+  BridgeApp --> Review[Review in renderer]
+  Review -->|Download| Queue2[Download manager]
+  Lists[Protection lists] -->|rules on request| Ext
+```
+
+The extension never fetches anything itself. For each browser download it asks the app, through the connector, for a quick answer: **take** (the browser cancels and erases its copy), **block**, or **browser** (the browser keeps it: the app is closed, the link is unencrypted, or the user allowed it once). Chrome holds the download in `onDeterminingFilename`; Firefox has no such hook, so the extension pauses the new download while it asks. Taken downloads are inspected in the background (two at a time) and wait in the review until the user decides.
+
+The connector is started by the browser per message. It reads `endpoint.json` beside it for the current pipe and token, sends a header frame `{v, token, origin}` and the request, and returns the app's reply (at most 1 MB). The app rejects any connection without the token or from an origin other than Ravenshelf's pinned extensions.
+
+The extension also asks for the protection lists' browser rules: domains only, chunked under the native-messaging reply limit (IDs 1–999), plus a redirect rule (ID 1000) that blocks main-frame navigations started by FuckingFast and FileKeeper pages toward other domains, and an allow rule (ID 1001) used while protection is off or paused. Pop-ups from those pages are closed through navigation events, and a navigation that gets past the rule (an ad frame taking over the tab, or a server redirect) is undone when it commits.
 
 ## Download lifecycle
 

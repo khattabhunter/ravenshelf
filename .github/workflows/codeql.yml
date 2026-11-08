@@ -63,8 +63,11 @@ jobs:
           languages: csharp
           build-mode: manual
           queries: security-and-quality
-      - name: Compile the native updater
-        run: node scripts/build-updater.cjs
+      # The job keeps its name; it covers both native helpers.
+      - name: Compile the native updater and browser connector
+        run: |
+          node scripts/build-updater.cjs
+          node scripts/build-browser-host.cjs
       - name: Analyze updater
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:

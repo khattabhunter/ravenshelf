@@ -586,6 +586,7 @@ function updateDownloadCard(node, item) {
   const scan = $('.download-scan', node), scanInfo = scanText(item);
   scan.hidden = !scanInfo; scan.className = `download-scan ${scanInfo?.tone || ''}`;
   if (scanInfo) scan.replaceChildren(icon(scanInfo.glyph), el('span', '', scanInfo.text)); else scan.replaceChildren();
+  const reputation = $('.download-reputation', node); if (reputation) renderDownloadReputation(reputation, item);
   const scanBusy = ['queued', 'scanning'].includes(item.scan?.status);
   const controls = $('.download-actions', node), scanKey = item.status === 'completed' ? String(scanBusy) : '';
   if (controls.dataset.status !== item.status || (controls.dataset.scan || '') !== scanKey) {
@@ -625,7 +626,7 @@ function makeDownloadCard(item) {
   const information = el('div', 'download-information');
   const progress = el('div', 'download-progress'); progress.setAttribute('role', 'progressbar'); progress.setAttribute('aria-valuemin', '0'); progress.setAttribute('aria-valuemax', '100'); progress.append(el('div', 'download-progress-fill'));
   const bottom = el('div', 'download-bottom'); bottom.append(el('span', 'download-status'), el('span', 'download-transfer'));
-  information.append(el('h3', 'download-name'), el('div', 'download-game'), progress, bottom, el('p', 'download-connections'), el('p', 'download-scan'), el('p', 'download-error'));
+  information.append(el('h3', 'download-name'), el('div', 'download-game'), progress, bottom, el('p', 'download-connections'), el('p', 'download-scan'), el('p', 'download-reputation'), el('p', 'download-error'));
   card.append(file, information, el('div', 'download-actions')); updateDownloadCard(card, item); return card;
 }
 function renderDownloads() {
@@ -659,6 +660,7 @@ function renderSettings() {
   if (document.activeElement !== $('#connections-per-file')) $('#connections-per-file').value = String(state.settings.connectionsPerFile || 4);
   if (document.activeElement !== $('#defender-scan')) $('#defender-scan').value = state.settings.defenderScan === false ? 'off' : 'on';
   if(featureUIAvailable())renderFeatureSettings();
+  if(browserFeatureAvailable())renderBrowserSettings();
 }
 function renderCatalogSections() {
   const container=$('#catalog-sections');container.replaceChildren();
@@ -838,6 +840,7 @@ function applyState(next) {
   if(next.clipboardInbox)clipboardInbox=next.clipboardInbox;
   if(next.verification)verificationState=next.verification;
   if(next.catalogRefresh)receiveCatalogCheck(next.catalogRefresh);
+  if(next.browser!==undefined)browserState=next.browser;
   $('#version').textContent = `v${state.version}`;
   updateBadges();
   renderCompletionAction();
@@ -854,6 +857,7 @@ function applyState(next) {
     if($('#clipboard-dialog').open)renderClipboard();if($('#verification-dialog').open)renderVerification();
     if(state.settings.adaptiveThemeEnabled===false)setAccent();
   }
+  if(browserFeatureAvailable())afterBrowserState();
 }
 function applyProgress(next) {
   // A delta cannot create a queue, revive a completed file or overwrite a newer
@@ -1159,6 +1163,204 @@ function wireEvents() {
     }
   });
   if(featureUIAvailable())wireFeatureEvents();
+  if(browserFeatureAvailable())wireBrowserEvents();
+}
+// ---- browser extension: setup, reviews of browser downloads, VirusTotal ----
+let browserState = null, browserBusy = false, capturesPrimed = false, capturesShown = '';
+const seenCaptures = new Set(), acknowledgedCaptures = new Set();
+const BROWSER_NAMES = { chromium: 'Chrome, Edge or Brave', firefox: 'Firefox' };
+const PENDING_CAPTURES = ['checking', 'ready', 'manual'];
+const VIRUSTOTAL_REPORT = /^https:\/\/www\.virustotal\.com\/gui\/(?:file|domain)\/[A-Za-z0-9._-]+$/;
+function browserFeatureAvailable() { return typeof api?.setBrowserIntegration === 'function'; }
+function timeAgo(value) {
+  const time = typeof value === 'number' ? value : Date.parse(value);
+  if (!Number.isFinite(time)) return '';
+  const minutes = Math.round((Date.now() - time) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+}
+function hostOfAddress(value) { try { return new URL(value).hostname; } catch { return ''; } }
+function captureList() { return Array.isArray(browserState?.bridge?.captures) ? browserState.bridge.captures : []; }
+function renderBrowserBadge() {
+  const control = $('#browser-captures-button'); if (!control) return;
+  const captures = captureList(), pending = captures.filter(item => PENDING_CAPTURES.includes(item.status)).length;
+  control.hidden = !captures.length;
+  $('#browser-captures-count').textContent = pending ? String(pending) : '';
+  $('#browser-captures-count').hidden = !pending;
+  control.setAttribute('aria-label', pending ? `Browser downloads: ${pending} waiting for you` : 'Browser downloads');
+}
+// Called after every state update: opens the review when a new browser
+// download arrives (unless another window is open) and keeps it current.
+function afterBrowserState() {
+  renderBrowserBadge();
+  if (currentView === 'settings') renderBrowserSettings();
+  const dialog = $('#browser-dialog'), captures = captureList();
+  const arrived = captures.some(item => PENDING_CAPTURES.includes(item.status) && !seenCaptures.has(item.id));
+  for (const item of captures) seenCaptures.add(item.id);
+  if (arrived && capturesPrimed && !$$('dialog').some(other => other.open)) showDialog(dialog);
+  capturesPrimed = true;
+  if (dialog.open) renderBrowserCaptures();
+}
+// Plain wording for one VirusTotal result; null when there is nothing to say.
+function virusTotalSummary(report) {
+  if (!report || typeof report !== 'object') return null;
+  const subject = String(report.subject || (report.kind === 'file' ? 'this file' : 'this site'));
+  const total = ['malicious', 'suspicious', 'harmless', 'undetected'].reduce((sum, key) => sum + (Number(report[key]) || 0), 0);
+  const link = VIRUSTOTAL_REPORT.test(String(report.link || '')) ? String(report.link) : '';
+  if (report.status === 'ok') {
+    if (report.malicious >= 2) return { text: `VirusTotal: ${report.malicious} of ${total} security vendors flag ${subject} as malicious.`, tone: 'threat', link };
+    if (report.malicious === 1) return { text: `VirusTotal: 1 of ${total} vendors flags ${subject}. A single detection is often a false alarm.`, tone: '', link };
+    return { text: `VirusTotal: no vendor flags ${subject} (${total} checked).`, tone: '', link };
+  }
+  if (report.status === 'not-found') return { text: `VirusTotal has no report for ${subject}.`, tone: '', link };
+  if (report.status === 'skipped' && report.reason === 'limit') return { text: 'VirusTotal’s free limit was reached, so the rest was not checked. Try again later.', tone: '', link: '' };
+  return null;
+}
+function appendVirusTotal(node, info) {
+  node.append(el('span', '', info.text));
+  if (info.link) node.append(button('View report', 'text-button', 'external', () => attempt(() => api.openExternal(info.link))));
+}
+function virusTotalLine(report, className) {
+  const info = virusTotalSummary(report); if (!info) return null;
+  const line = el('p', `${className} ${info.tone}`.trim()); appendVirusTotal(line, info); return line;
+}
+function captureStateLabel(item) {
+  if (item.status === 'ready') return item.verdict?.level === 'warning' ? 'Needs your OK' : 'Ready';
+  return { checking: 'Checking', manual: 'Needs your browser', unavailable: 'Unavailable', blocked: 'Blocked', queued: 'Added', 'sent-to-browser': 'Sent to browser' }[item.status] || 'Waiting';
+}
+function captureCard(item) {
+  const card = el('article', `capture-item ${item.status || ''}`);
+  const head = el('div', 'capture-head'), title = el('div', 'capture-title'), host = hostOfAddress(item.address);
+  title.append(el('h3', '', item.name || 'Download'));
+  title.append(el('p', 'small-text', [formatBytes(item.size, ''), host, item.pageHost && item.pageHost !== host ? `from ${item.pageHost}` : '', BROWSER_NAMES[item.browser] ? `in ${BROWSER_NAMES[item.browser]}` : ''].filter(Boolean).join(' · ')));
+  const warning = item.verdict?.level === 'warning';
+  head.append(title, el('span', `capture-state ${warning && item.status === 'ready' ? 'warning' : item.status || ''}`, captureStateLabel(item)));
+  card.append(head);
+  if (item.status === 'checking') { const busy = el('p', 'busy-line'); busy.append(el('span', 'spinner'), el('span', '', 'Checking the link without opening the page…')); card.append(busy); }
+  if (item.message) card.append(el('p', 'capture-message', item.message));
+  const reasons = (item.verdict?.reasons || []).filter(reason => reason && reason.message);
+  if (reasons.length) { const list = el('ul', 'capture-reasons'); for (const reason of reasons) list.append(el('li', ['blocked', 'warning'].includes(reason.level) ? reason.level : 'info', reason.message)); card.append(list); }
+  if (Array.isArray(item.chain) && item.chain.length > 1) card.append(el('p', 'small-text', `Redirects: ${item.chain.map(hop => hop.host + (hop.listed ? ' (on a protection list)' : '')).join(' → ')}`));
+  for (const report of item.virusTotal || []) { const line = virusTotalLine(report, 'virustotal-line'); if (line) card.append(line); }
+  const decidable = ['ready', 'manual'].includes(item.status);
+  if (warning && decidable) {
+    const label = el('label', 'check-label'), confirm = el('input');
+    confirm.type = 'checkbox'; confirm.checked = acknowledgedCaptures.has(item.id);
+    confirm.addEventListener('change', () => {
+      if (confirm.checked) acknowledgedCaptures.add(item.id); else acknowledgedCaptures.delete(item.id);
+      $$('[data-needs-ack]', card).forEach(node => { node.disabled = !confirm.checked; });
+    });
+    label.append(confirm, el('span', '', 'I understand the warning and want to continue'));
+    card.append(label);
+  }
+  const actions = el('div', 'inline-fields capture-actions');
+  const act = (action, text, className, glyph, needsAck) => {
+    const node = button(text, className, glyph, async () => {
+      node.disabled = true;
+      try {
+        const result = await api.browserCaptureAction({ id: item.id, action, acknowledgeRisk: acknowledgedCaptures.has(item.id) });
+        if (Array.isArray(result?.captures)) { browserState = { ...browserState, bridge: result }; capturesShown = ''; afterBrowserState(); }
+        if (action === 'download') toast('Added to your downloads.');
+        if (action === 'browser') toast('Opened in your browser. This one downloads there without going through Ravenshelf again.');
+      } catch (error) { toast(errorText(error), true); node.disabled = false; }
+    });
+    if (needsAck) { node.dataset.needsAck = '1'; node.disabled = !acknowledgedCaptures.has(item.id); }
+    return node;
+  };
+  if (item.status === 'ready') actions.append(act('download', warning ? 'Download anyway' : 'Download', 'button primary compact', 'download', warning));
+  if (decidable) actions.append(act('browser', 'Download in browser instead', 'button secondary compact', 'external', warning));
+  if (['ready', 'manual', 'unavailable'].includes(item.status)) actions.append(act('recheck', 'Check again', 'text-button', 'refresh', false));
+  actions.append(act('dismiss', 'Dismiss', 'text-button', 'close', false));
+  card.append(actions);
+  return card;
+}
+function renderBrowserCaptures() {
+  const captures = captureList(), key = JSON.stringify(captures);
+  if (key === capturesShown) return;
+  capturesShown = key;
+  const container = $('#browser-captures');
+  if (!captures.length) { const empty = el('div', 'empty-state'); emptyState(empty, 'Nothing waiting', 'Downloads you start in your browser appear here, checked before anything is saved.', 'shield'); container.replaceChildren(empty); return; }
+  container.replaceChildren(...captures.map(captureCard));
+}
+function renderBrowserSettings() {
+  const card = $('#browser-card'); if (!card) return;
+  card.hidden = !browserFeatureAvailable() || !browserState;
+  if (card.hidden) return;
+  const b = browserState, enabled = b.enabled === true, toggle = $('#browser-enabled');
+  if (document.activeElement !== toggle || !browserBusy) toggle.checked = enabled || b.phase === 'starting';
+  toggle.disabled = !b.supported || b.phase === 'starting' || browserBusy;
+  let text = '', tone = '';
+  const contact = b.bridge?.contact;
+  if (!b.supported) text = 'The browser extension works with Ravenshelf on Windows.';
+  else if (b.phase === 'starting') text = 'Connecting…';
+  else if (b.phase === 'error' && b.problem) { text = b.problem; tone = 'error'; }
+  else if (!enabled) text = 'Off. Downloads in your browser are not sent to Ravenshelf.';
+  else if (contact) {
+    text = `Connected: the extension in ${BROWSER_NAMES[contact.browser] || 'your browser'} (version ${contact.extensionVersion}) was last in touch ${timeAgo(contact.at)}.`;
+    if (contact.extensionVersion !== b.appVersion) { text += ' It is out of date: on your browser’s extensions page, choose Reload for Ravenshelf.'; tone = 'warn'; }
+  } else text = 'On. Load the extension in your browser with the steps below.';
+  const status = $('#browser-status');
+  status.textContent = text; status.className = `small-text browser-status ${tone}`.trim();
+  $('#browser-setup').hidden = !enabled;
+  for (const browser of ['chromium', 'firefox']) $(`#open-${browser}-folder`).disabled = browserBusy;
+  const lists = b.threatLists || {}, sources = Array.isArray(lists.sources) ? lists.sources : [];
+  const failed = sources.filter(source => source.error).length, loaded = sources.filter(source => source.count).length;
+  $('#threat-status').textContent = lists.updating ? 'Updating the lists…'
+    : lists.total ? `${Number(lists.total).toLocaleString('en')} dangerous sites from ${loaded} ${loaded === 1 ? 'list' : 'lists'}${lists.updatedAt ? `, updated ${timeAgo(lists.updatedAt)}` : ''}.${failed ? ` ${failed === 1 ? 'One list' : `${failed} lists`} could not be updated; the previous copy is still used.` : ''}`
+    : 'The lists download a few seconds after you connect. Site blocking starts once they arrive.';
+  $('#update-threat-lists').disabled = !enabled || lists.updating || browserBusy;
+  $('#threat-sources').replaceChildren(...sources.map(source => el('li', '', `${String(source.label || '').replace(/^./, c => c.toUpperCase())}: ${Number(source.count || 0).toLocaleString('en')} entries · ${source.source} (${source.license})`)));
+  const vt = b.virusTotal || {};
+  $('#vt-status').textContent = !vt.protectedStorage ? 'Windows protected storage is unavailable on this account, so a key cannot be saved.'
+    : vt.problem ? vt.problem
+    : vt.configured ? `Key saved and sealed with Windows protected storage. ${vt.usage?.day || 0} of ${vt.usage?.perDay || 500} lookups used today.`
+    : 'No key saved. You can create a free key in your VirusTotal account.';
+  $('#vt-clear').hidden = !vt.configured && !vt.problem;
+  for (const [id, key] of [['vt-domains', 'domainChecks'], ['vt-files', 'fileChecks']]) { const node = $('#' + id); node.checked = vt[key] !== false; node.disabled = !vt.configured || browserBusy; }
+}
+function renderDownloadReputation(node, item) {
+  const report = item.reputation?.virusTotal;
+  node.replaceChildren();
+  node.hidden = item.origin !== 'browser' && !report;
+  if (node.hidden) return;
+  if (item.origin === 'browser') node.append(el('span', 'origin-chip', 'From your browser'));
+  const info = report ? virusTotalSummary({ ...report, kind: 'file', subject: 'this file' }) : null;
+  if (info) appendVirusTotal(node, info);
+  node.className = `download-reputation ${info?.tone || ''}`.trim();
+}
+async function browserTask(work, success) {
+  browserBusy = true; renderBrowserSettings();
+  try {
+    const result = await work();
+    if (result && typeof result === 'object' && 'phase' in result) { browserState = result; afterBrowserState(); }
+    if (success) toast(success);
+    return result;
+  } catch (error) {
+    toast(errorText(error), true);
+    try { applyState(await api.getState()); } catch {}
+    return undefined;
+  } finally { browserBusy = false; renderBrowserSettings(); }
+}
+function wireBrowserEvents() {
+  $('#browser-captures-button').addEventListener('click', () => { capturesShown = ''; showDialog($('#browser-dialog')); renderBrowserCaptures(); });
+  $('#browser-enabled').addEventListener('change', event => {
+    const enabled = event.target.checked;
+    browserTask(() => api.setBrowserIntegration(enabled), enabled ? 'The browser extension can connect now. Load it with the steps below.' : 'The browser extension is disconnected.');
+  });
+  for (const browser of ['chromium', 'firefox']) $(`#open-${browser}-folder`).addEventListener('click', () => browserTask(() => api.openBrowserExtensionFolder(browser)));
+  $('#copy-chromium-page').addEventListener('click', () => attempt(() => api.copyText('chrome://extensions'), 'Copied. Paste it into your browser’s address bar.'));
+  $('#copy-firefox-page').addEventListener('click', () => attempt(() => api.copyText('about:debugging#/runtime/this-firefox'), 'Copied. Paste it into Firefox’s address bar.'));
+  $('#update-threat-lists').addEventListener('click', () => browserTask(() => api.updateThreatLists(), 'Protection lists checked.'));
+  $('#vt-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const input = $('#vt-key'), key = input.value.trim();
+    if (!key) { toast('Paste your VirusTotal API key first.', true); return; }
+    browserTask(async () => { const result = await api.setVirusTotalKey(key); input.value = ''; return result; }, 'VirusTotal key saved.');
+  });
+  $('#vt-clear').addEventListener('click', () => browserTask(() => api.clearVirusTotalKey(), 'VirusTotal key removed.'));
+  for (const [id, key] of [['vt-domains', 'domainChecks'], ['vt-files', 'fileChecks']]) $('#' + id).addEventListener('change', event => browserTask(() => api.saveVirusTotalSettings({ [key]: event.target.checked }), 'Preference saved.'));
 }
 async function start() {
   hydrateIcons(); wireEvents();

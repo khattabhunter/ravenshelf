@@ -11,3 +11,13 @@ test('packaged updater verification rejects changed code, payload, compiler and 
     const changed=fixture();change(changed);assert.throws(()=>verifyUpdater(changed));
   }
 });
+test('packaged browser connector verification rejects changed code, payload, compiler and build flags',()=>{
+  const {verifyBrowserHost,NATIVE_HELPERS}=require('../scripts/verify-package.cjs');
+  const source=Buffer.from('fixture connector source'),helper=Buffer.from('MZ fixture connector'),buildScript=Buffer.from('fixture connector build');
+  const manifest={schemaVersion:1,source:{name:'browser-host.cs',sha256:hash(source)},buildScriptSha256:hash(buildScript),output:{name:'ravenshelf-browser-host.exe',size:helper.length,sha256:hash(helper)},compiler:{name:'csc.exe',relativePath:'Microsoft.NET/Framework64/v4.0.30319/csc.exe',sha256:'b'.repeat(64)},options:[...NATIVE_HELPERS.browserHost.options]};
+  const fixture=()=>({source,helper,buildScript,manifest:structuredClone(manifest)});
+  assert.doesNotThrow(()=>verifyBrowserHost(fixture()));
+  for(const change of [f=>f.source=Buffer.from('changed'),f=>f.helper=Buffer.from('MZ changed'),f=>f.helper=Buffer.from('XX not a program'),f=>f.buildScript=Buffer.from('changed build'),f=>f.manifest.output.name='ravenshelf-updater.exe',f=>f.manifest.source.name='updater-helper.cs',f=>f.manifest.compiler.relativePath='C:/tools/csc.exe',f=>f.manifest.options.push('/unsafe'),f=>f.manifest.options=NATIVE_HELPERS.updater.options]){
+    const changed=fixture();change(changed);assert.throws(()=>verifyBrowserHost(changed));
+  }
+});

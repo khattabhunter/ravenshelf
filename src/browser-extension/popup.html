@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ravenshelf</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body class="popup">
+<header class="top">
+  <img src="icons/icon-32.png" alt="" width="28" height="28">
+  <div><h1>Ravenshelf</h1><p id="version" class="muted"></p></div>
+</header>
+<section id="status" class="status muted-tone" role="status" aria-live="polite">
+  <span class="dot" aria-hidden="true"></span>
+  <div><strong id="statusTitle">Checking…</strong><p id="statusText" class="muted"></p></div>
+</section>
+<div class="options">
+  <label class="toggle"><input type="checkbox" id="capture"><span><strong>Send downloads to Ravenshelf</strong><small>Ravenshelf checks each file and asks before saving it.</small></span></label>
+  <label class="toggle"><input type="checkbox" id="protection"><span><strong>Block dangerous sites</strong><small id="listInfo">Malware, phishing and scam lists from Ravenshelf.</small></span></label>
+  <label class="toggle"><input type="checkbox" id="guard"><span><strong>Stop file-host pop-ups and redirects</strong><small>FuckingFast and FileKeeper pages can open only their own files.</small></span></label>
+</div>
+<p id="pauseInfo" class="note" hidden></p>
+<div class="actions"><button id="pause" type="button">Pause protection for 10 minutes</button></div>
+<div id="sendRow" class="actions" hidden><button id="sendPage" type="button" class="primary">Download this file with Ravenshelf</button></div>
+<p id="message" class="message" role="alert" hidden></p>
+<footer class="muted">Private windows are never captured. This extension talks only to Ravenshelf on this PC.</footer>
+<script src="policy.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
