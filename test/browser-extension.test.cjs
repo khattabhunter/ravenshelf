@@ -246,7 +246,14 @@ test('file-host pop-ups are closed and redirects return you to the download page
   const last=new URL(b.of('navigate').at(-1)[2]);
   assert.equal(last.pathname,'/blocked.html');
   const params=new URLSearchParams(last.hash.slice(1));
-  assert.equal(params.get('reason'),'redirect');assert.equal(params.get('from'),'fuckingfast.co');assert.equal(params.get('back'),'https://fuckingfast.co/abc#Game.part1.rar');
+  assert.equal(params.get('reason'),'redirect');assert.equal(params.get('from'),'fuckingfast.co');assert.equal(params.get('back'),'1');
+  assert.ok(!last.hash.includes('fuckingfast.co%2Fabc'),'the page to return to is kept by the extension, not passed to the warning page');
+  const navigations=b.of('navigate').length;
+  assert.deepEqual(await b.message({cmd:'return'},last.href,{id:7}),{ok:true});
+  assert.deepEqual(b.of('navigate').at(-1),['navigate',7,'https://fuckingfast.co/abc#Game.part1.rar']);
+  assert.deepEqual(await b.message({cmd:'return'},last.href,{id:7}),{ok:false},'it can be used once');
+  assert.deepEqual(await b.message({cmd:'return'},last.href,{id:12}),{ok:false},'other tabs have nothing to return to');
+  assert.equal(b.of('navigate').length,navigations+1);
   // Pages on other sites, and errors from other extensions, are left alone.
   const count=b.of('navigate').length;
   nav.onCommitted.emit({tabId:11,frameId:0,url:'https://news.example/',transitionType:'typed',transitionQualifiers:[]});await tick();

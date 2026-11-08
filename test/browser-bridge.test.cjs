@@ -12,7 +12,6 @@ const {BrowserBridge,MAX_PENDING,isProvider,baseName}=require('../src/browser-br
 
 const CHROME=`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`,FIREFOX=`firefox:${protocol.FIREFOX_EXTENSION_ID}`;
 const temp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-bridge-'));
-const flush=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(predicate,label='condition'){const end=Date.now()+3000;while(!predicate()){if(Date.now()>end)throw new Error('Timed out waiting for '+label);await new Promise(resolve=>setTimeout(resolve,5));}}
 
 // ---------- protocol ----------

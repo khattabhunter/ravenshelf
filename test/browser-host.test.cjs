@@ -17,6 +17,8 @@ const skip=process.platform!=='win32'?'the connector is a Windows program':!fs.e
 const CHROME=`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`;
 const stage=()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-host-'));fs.copyFileSync(EXE,path.join(dir,'ravenshelf-browser-host.exe'));return dir;};
 const frame=value=>protocol.encodeFrame(value);
+// Builds a frame without the protocol's size limit, to test the connector's own.
+const rawFrame=value=>{const body=Buffer.from(JSON.stringify(value),'utf8'),head=Buffer.alloc(4);head.writeUInt32LE(body.length,0);return Buffer.concat([head,body]);};
 function run(dir,input,args=[CHROME,'--parent-window=0']){
   return new Promise((resolve,reject)=>{
     const started=Date.now();
@@ -27,6 +29,9 @@ function run(dir,input,args=[CHROME,'--parent-window=0']){
       const length=data.length>=4?data.readUInt32LE(0):-1;
       resolve({code,ms:Date.now()-started,reply:length>0&&data.length===length+4?JSON.parse(data.subarray(4).toString('utf8')):null,raw:data});
     });
+    // The connector stops reading as soon as it rejects a message, so the rest of
+    // a malformed input can meet a closed pipe; that is expected, not a failure.
+    child.stdin.on('error',()=>{});
     child.stdin.end(input);
   });
 }
@@ -89,7 +94,7 @@ test('a missing, stale or tampered endpoint is treated as not running',{skip},as
 });
 
 test('oversized, invalid or missing replies from the pipe are not passed to the browser',{skip},async()=>{
-  for(const [handler,label] of [[socket=>socket.end(frame({blob:'x'.repeat(1000001)})),'oversized'],[socket=>{const b=Buffer.alloc(4);b.writeUInt32LE(5,0);socket.end(Buffer.concat([b,Buffer.from('[1,2]')]));},'array'],[socket=>socket.end(),'closed']]){
+  for(const [handler,label] of [[socket=>socket.end(rawFrame({blob:'x'.repeat(1000001)})),'oversized'],[socket=>{const b=Buffer.alloc(4);b.writeUInt32LE(5,0);socket.end(Buffer.concat([b,Buffer.from('[1,2]')]));},'array'],[socket=>socket.end(),'closed']]){
     const dir=stage();const fake=await server(dir,handler);
     try{assert.deepEqual((await run(dir,frame({v:1,type:'threats'}))).reply,{ok:false,error:'failed'},label);}
     finally{await fake.close();}

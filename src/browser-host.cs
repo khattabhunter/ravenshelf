@@ -157,6 +157,7 @@ internal static class RavenshelfBrowserHost
             WriteFrame(output, StrictUtf8.GetBytes("{\"ok\":false,\"error\":\"" + error + "\"}"));
             output.Flush();
         }
+        // The browser has already gone, so there is no one left to answer.
         catch (Exception) { }
         return 0;
     }

@@ -205,14 +205,17 @@ const starts = new Map();
 const handled = new Map();
 const restoredAt = new Map();
 const goingBack = new Map();
+// The file-host page to return to from Ravenshelf's warning page, per tab.
+const returnTo = new Map();
 const closing = new Set();
 let restored = null;
 function restore() {
   if (!restored) restored = (async () => {
     try {
-      const saved = await api.storage.session.get(['tabInfo', 'watched']);
+      const saved = await api.storage.session.get(['tabInfo', 'watched', 'returnTo']);
       for (const [tab, info] of Object.entries(saved.tabInfo || {})) if (!tabInfo.has(Number(tab))) tabInfo.set(Number(tab), info);
       for (const [tab, watch] of Object.entries(saved.watched || {})) if (!watched.has(Number(tab))) watched.set(Number(tab), watch);
+      for (const [tab, url] of Object.entries(saved.returnTo || {})) if (!returnTo.has(Number(tab))) returnTo.set(Number(tab), url);
     } catch (error) {}
   })();
   return restored;
@@ -222,7 +225,7 @@ function persist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     while (tabInfo.size > 300) tabInfo.delete(tabInfo.keys().next().value);
-    quiet(() => api.storage.session.set({ tabInfo: Object.fromEntries(tabInfo), watched: Object.fromEntries(watched) }));
+    quiet(() => api.storage.session.set({ tabInfo: Object.fromEntries(tabInfo), watched: Object.fromEntries(watched), returnTo: Object.fromEntries(returnTo) }));
   }, 100);
 }
 async function guardActive() { const current = await settings(); return current.guard !== false && !(current.pausedUntil > Date.now()); }
@@ -255,7 +258,9 @@ async function stopRedirect(tabId, targetUrl, from, committed) {
     await quiet(() => api.tabs.update(tabId, { url: from.url }));
     return;
   }
-  await showBlocked(tabId, { reason: 'redirect', host: targetHost, from: from.host || '', back: from.url || '', url: targetUrl, committed: committed ? '1' : '' });
+  const canReturn = Boolean(from.url && P.protectedRoot(P.hostOf(from.url)));
+  if (canReturn) { returnTo.set(tabId, from.url); persist(); }
+  await showBlocked(tabId, { reason: 'redirect', host: targetHost, from: from.host || '', back: canReturn ? '1' : '', url: targetUrl, committed: committed ? '1' : '' });
 }
 async function recentMatches(details) {
   try {
@@ -346,6 +351,7 @@ api.webNavigation.onCommitted.addListener(details => {
     }
     // A page actually loaded, so a later block in this tab is a new event.
     handled.delete(tabId);
+    if (returnTo.delete(tabId)) persist();
     tabInfo.set(tabId, { host, url: P.protectedRoot(host) ? details.url : '' });
     persist();
   }).catch(() => {});
@@ -375,7 +381,7 @@ api.webNavigation.onErrorOccurred.addListener(details => {
 api.tabs.onRemoved.addListener(tabId => {
   restore().then(() => {
     closing.delete(tabId); starts.delete(tabId); handled.delete(tabId); restoredAt.delete(tabId); goingBack.delete(tabId);
-    if (tabInfo.delete(tabId) | watched.delete(tabId)) persist();
+    if (tabInfo.delete(tabId) | watched.delete(tabId) | returnTo.delete(tabId)) persist();
   }).catch(() => {});
 });
 
@@ -424,6 +430,16 @@ async function handleMessage(message, sender) {
     return { ok: true };
   }
   if (command === 'closeTab' && tabId >= 0) { await quiet(() => api.tabs.remove(tabId)); return { ok: true }; }
+  // Back to the file-host page the extension recorded for this tab; the warning
+  // page cannot choose the address.
+  if (command === 'return' && tabId >= 0) {
+    await restore();
+    const url = returnTo.get(tabId);
+    if (!url || !/^https:\/\//i.test(url) || !P.protectedRoot(P.hostOf(url))) return { ok: false };
+    returnTo.delete(tabId); persist();
+    await quiet(() => api.tabs.update(tabId, { url }));
+    return { ok: true };
+  }
   return { ok: false };
 }
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {

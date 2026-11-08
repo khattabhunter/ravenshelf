@@ -23,6 +23,7 @@ test('file signatures are recognized from the first bytes only',()=>{
   assert.equal(sniffBytes(Buffer.from('#!/bin/sh\n')),'script');
   assert.equal(sniffBytes(Buffer.from('plain text')),'unknown');
   assert.equal(sniffBytes(Buffer.alloc(0)),'unknown');
+  for(const page of ['<HTML><BODY>x','  <!DOCTYPE HTML>','<?xml version="1.0"?><SCRIPT src=x></SCRIPT>','<Meta charset=utf-8>'])assert.equal(sniffBytes(Buffer.from(page)),'html',page);
 });
 
 test('deceptive file names are blocked and risky types need confirmation',()=>{

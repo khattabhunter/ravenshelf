@@ -29,7 +29,7 @@ function sniffBytes(bytes){
   if(b.length>=5&&b.subarray(0,5).toString('latin1')==='%PDF-')return 'pdf';
   if(b.length>=8&&b.readUInt32BE(0)===0xd0cf11e0&&b.readUInt32BE(4)===0xa1b11ae1)return 'office-legacy';
   const text=b.subarray(0,512).toString('latin1').replace(/^﻿|^\xef\xbb\xbf/,'').trimStart().toLowerCase();
-  if(text.startsWith('<!doctype html')||text.startsWith('<html')||(text.startsWith('<')&&/<(?:head|body|script|meta)[\s>]/.test(text)))return 'html';
+  if(text.startsWith('<!doctype html')||text.startsWith('<html')||(text.startsWith('<')&&/<(?:head|body|script|meta)[\s>]/i.test(text)))return 'html';
   if(text.startsWith('#!'))return 'script';
   return 'unknown';
 }

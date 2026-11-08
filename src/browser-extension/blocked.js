@@ -2,7 +2,6 @@
 // Only the extension opens this page (it is not reachable from websites), and
 // everything shown comes from its address as plain text.
 const api = typeof browser !== 'undefined' ? browser : chrome;
-const P = globalThis.RavenshelfPolicy;
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.hash.slice(1));
 const clean = (value, max) => String(value || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, max);
@@ -10,7 +9,6 @@ const reason = clean(params.get('reason'), 20);
 const host = clean(params.get('host'), 253);
 const from = clean(params.get('from'), 253);
 const blockedUrl = clean(params.get('url'), 8192);
-const back = clean(params.get('back'), 8192);
 const committed = params.get('committed') === '1';
 const TEXT = {
   redirect: ['Ravenshelf stopped a redirect', `${from || 'A file-host page'} tried to send you to another site instead of your download.`, 'File hosts use redirects like this for ads and fake download pages. If you meant to visit this site, type its address yourself.'],
@@ -29,12 +27,17 @@ $('detail').textContent = detail;
 $('detail').hidden = !detail;
 
 function send(message) { try { return Promise.resolve(api.runtime.sendMessage(message)).catch(() => null); } catch (error) { return Promise.resolve(null); } }
-// Back to the file-host page the redirect started from.
-if (reason === 'redirect' && /^https:\/\//i.test(back) && P.protectedRoot(P.hostOf(back))) {
+// Back to the file-host page the redirect started from. The extension keeps
+// that address; this page only asks for it to be opened again.
+if (reason === 'redirect' && params.get('back') === '1' && from) {
   const button = $('return');
-  button.textContent = `Back to ${P.hostOf(back)}`;
+  button.textContent = `Back to ${from}`;
   button.hidden = false;
-  button.addEventListener('click', () => { location.replace(back); });
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    const reply = await send({ cmd: 'return' });
+    if (!reply || !reply.ok) button.textContent = 'That page is no longer available';
+  });
 }
 // The blocked address leaves an entry right behind this page (an error entry
 // if it never loaded, the page itself if it loaded and was then stopped), so
