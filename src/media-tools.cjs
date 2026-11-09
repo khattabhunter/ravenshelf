@@ -48,10 +48,14 @@ const SET_NAME=/^tools-[a-f0-9]{16}$/,STAGING_NAME=/^\.staging-[0-9a-f]{8}-[0-9a
 const MARKER='installed.json',STALL_MS=60000,SPACE_MARGIN=64*1024*1024,MAX_CENTRAL_DIRECTORY=16*1024*1024;
 // Downloads arrive in 2 MB parts over up to 8 connections, as in Ravenshelf's
 // own downloads: on some connections a single link to GitHub's file servers
-// stays at a few KB/s. A part with no data for 20 seconds is asked for again;
-// near the end, a part still running after 6 seconds gets one extra connection
-// and the first copy to arrive is kept. The whole file is checked afterwards.
+// stays at a few KB/s while others reach MB/s. A connection that runs under
+// 256 KB/s and at a quarter of the speed of the best one is dropped after
+// 4 seconds and its part asked for again on a fresh connection (up to 4
+// times per part). A part with no data for 20 seconds is retried; near the
+// end, a part still running after 6 seconds gets one extra connection and the
+// first copy to arrive is kept. The whole file is checked afterwards.
 const PART_SIZE=2*1024*1024,CONNECTIONS=8,PART_STALL_MS=20000,RACE_AFTER_MS=6000,PART_TRIES=6,RETRY_DELAY_MS=500;
+const SLOW_AFTER_MS=4000,SLOW_RATE=256*1024,SLOW_RESTARTS=4;
 const ROLES=['ytDlp','deno','ffmpeg','ffprobe'];
 
 const setName=tools=>'tools-'+crypto.createHash('sha256').update(JSON.stringify(tools)).digest('hex').slice(0,16);
@@ -155,7 +159,7 @@ async function toolFetch(url,{fetcher,signal,headers={}}){
     if(current.protocol!=='https:'||current.username||current.password||current.port)throw new Error(MESSAGES.failed);
     const allowed=(redirects===0&&current.href===url&&current.hostname==='github.com')||(redirects>0&&CDN.has(current.hostname));
     if(!allowed)throw new Error(MESSAGES.failed);
-    const response=await fetcher(current.href,{redirect:'manual',timeoutMs:0,signal,headers:{Accept:'application/octet-stream','Accept-Encoding':'identity',...headers}});
+    const response=await fetcher(current.href,{redirect:'manual',timeoutMs:0,http1:true,signal,headers:{Accept:'application/octet-stream','Accept-Encoding':'identity',...headers}});
     if(![301,302,303,307,308].includes(response.status))return response;
     const location=response.headers.get('location');await response.body?.cancel();
     if(!location)throw new Error(MESSAGES.failed);
@@ -205,9 +209,10 @@ async function renameDirectory(from,to,{attempts=6,delayMs=250}={}){
 
 class MediaTools{
   constructor({root,fetcher=safeFetch,bandwidthLimiter=null,onChange=()=>{},onReady=()=>{},platform=process.platform,tools=TOOLS,stallMs=STALL_MS,
-    partSize=PART_SIZE,connections=CONNECTIONS,partStallMs=PART_STALL_MS,raceAfterMs=RACE_AFTER_MS,partTries=PART_TRIES,retryDelayMs=RETRY_DELAY_MS}={}){
+    partSize=PART_SIZE,connections=CONNECTIONS,partStallMs=PART_STALL_MS,raceAfterMs=RACE_AFTER_MS,partTries=PART_TRIES,retryDelayMs=RETRY_DELAY_MS,
+    slowAfterMs=SLOW_AFTER_MS,slowRate=SLOW_RATE,slowRestarts=SLOW_RESTARTS}={}){
     if(typeof root!=='string'||!path.isAbsolute(root))throw new Error(MESSAGES.unsupported);
-    Object.assign(this,{root,fetcher,bandwidthLimiter,onChange,onReady,platform,tools,stallMs,partSize,connections,partStallMs,raceAfterMs,partTries,retryDelayMs});
+    Object.assign(this,{root,fetcher,bandwidthLimiter,onChange,onReady,platform,tools,stallMs,partSize,connections,partStallMs,raceAfterMs,partTries,retryDelayMs,slowAfterMs,slowRate,slowRestarts});
     this.files=allFiles(tools);this.setId=setName(tools);this.dir=path.join(root,this.setId);
     this.cache=path.join(root,'cache');this.temp=path.join(root,'tmp');
     this.state={phase:'missing',progress:0,message:''};
@@ -386,7 +391,7 @@ class MediaTools{
     const parts=[];
     for(let start=0;start<tool.size;start+=this.partSize){
       const end=Math.min(tool.size,start+this.partSize)-1;
-      parts.push({start,end,length:end-start+1,done:false,writing:false,raced:false,tries:0,attempts:new Set(),received:0,startedAt:0});
+      parts.push({start,end,length:end-start+1,done:false,writing:false,raced:false,tries:0,restarts:0,attempts:new Set(),received:0,startedAt:0});
     }
     const pending=parts.slice(1);
     let reported=0,lastActivity=Date.now(),closed=false,timer=null;
@@ -398,7 +403,7 @@ class MediaTools{
       const finish=error=>{
         if(closed)return;
         closed=true;clearInterval(timer);signal.removeEventListener('abort',onAbort);
-        for(const part of parts)for(const attempt of part.attempts)attempt.abort();
+        for(const part of parts)for(const attempt of part.attempts)attempt.controller.abort();
         if(error)reject(error);else resolve();
       };
       const onAbort=()=>finish(signal.reason instanceof Error?signal.reason:new Error(MESSAGES.cancelled));
@@ -418,38 +423,58 @@ class MediaTools{
           begin(part);
         }
       };
+      // Drops connections far slower than the best one; their parts start
+      // again at once on another connection. If every connection is slow,
+      // nothing is dropped.
+      const dropSlow=()=>{
+        const now=Date.now(),rate=attempt=>attempt.received/Math.max(0.001,(now-attempt.startedAt)/1000);
+        let best=0;for(const part of parts)for(const attempt of part.attempts)if(now-attempt.startedAt>=this.slowAfterMs/4)best=Math.max(best,rate(attempt));
+        for(const part of parts){
+          if(part.done||part.writing||part.attempts.size!==1||part.restarts>=this.slowRestarts)continue;
+          const [attempt]=part.attempts,speed=rate(attempt);
+          if(now-attempt.startedAt<this.slowAfterMs||speed>=this.slowRate||speed*4>=best||part.length-attempt.received<=speed*2)continue;
+          part.restarts++;attempt.slow=true;attempt.controller.abort();
+        }
+      };
       const begin=(part,given=null)=>{
-        const controller=new AbortController();
-        if(!part.attempts.size)part.startedAt=Date.now();
-        part.attempts.add(controller);
+        const attempt={controller:new AbortController(),startedAt:Date.now(),received:0,slow:false};
+        if(!part.attempts.size)part.startedAt=attempt.startedAt;
+        part.attempts.add(attempt);
         (async()=>{
           let failure=null;
           try{
             let response=given;
             if(!response){
-              const answer=await this.openPart(tool,part.start,part.end,controller.signal);
+              const answer=await this.openPart(tool,part.start,part.end,attempt.controller.signal);
               if(answer.whole){await answer.response.body?.cancel().catch(()=>{});throw new Error(MESSAGES.failed);}
               response=answer.response;
             }
-            const data=await this.readPart(response,part.length,controller.signal,received=>{lastActivity=Date.now();if(received>part.received)part.received=received;report();});
+            const data=await this.readPart(response,part.length,attempt.controller.signal,received=>{
+              lastActivity=Date.now();attempt.received=received;
+              if(received>part.received)part.received=received;
+              report();
+            });
             if(closed||part.done||part.writing)return;
             part.writing=true;
             await writeAt(opened.handle,data,part.start);
             part.done=true;part.writing=false;lastActivity=Date.now();
-            for(const other of part.attempts)if(other!==controller)other.abort();
+            for(const other of part.attempts)if(other!==attempt)other.controller.abort();
             report();
           }catch(error){failure=error;}
-          part.attempts.delete(controller);
+          part.attempts.delete(attempt);
           if(closed)return;
           // A failed write is a disk problem, not a network one.
           if(part.writing&&!part.done){finish(failure||new Error(MESSAGES.failed));return;}
-          if(failure&&!part.done&&!controller.signal.aborted){
-            if(!failure.retry){finish(new Error(MESSAGES.failed));return;}
-            if(!part.attempts.size){
-              part.tries++;part.received=0;
-              if(part.tries>=this.partTries){finish(new Error(MESSAGES.failed));return;}
-              const again=setTimeout(()=>{if(!closed){pending.unshift(part);fill();}},Math.min(5000,this.retryDelayMs*part.tries));
-              again.unref?.();
+          if(failure&&!part.done){
+            if(attempt.slow){if(!part.attempts.size){part.received=0;pending.unshift(part);}}
+            else if(!attempt.controller.signal.aborted){
+              if(!failure.retry){finish(new Error(MESSAGES.failed));return;}
+              if(!part.attempts.size){
+                part.tries++;part.received=0;
+                if(part.tries>=this.partTries){finish(new Error(MESSAGES.failed));return;}
+                const again=setTimeout(()=>{if(!closed){pending.unshift(part);fill();}},Math.min(5000,this.retryDelayMs*part.tries));
+                again.unref?.();
+              }
             }
           }
           fill();
@@ -457,7 +482,10 @@ class MediaTools{
       };
       signal.addEventListener('abort',onAbort,{once:true});
       if(signal.aborted){onAbort();return;}
-      timer=setInterval(()=>{if(Date.now()-lastActivity>this.stallMs)finish(new Error(MESSAGES.failed));else fill();},Math.min(1000,this.stallMs));
+      timer=setInterval(()=>{
+        if(Date.now()-lastActivity>this.stallMs){finish(new Error(MESSAGES.failed));return;}
+        dropSlow();fill();
+      },Math.min(1000,this.stallMs,this.slowAfterMs));
       timer.unref?.();
       begin(parts[0],firstResponse);
       fill();

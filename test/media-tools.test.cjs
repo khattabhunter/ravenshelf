@@ -347,3 +347,33 @@ test('cancelling while parts are downloading stops every connection',async t=>{
   assert.equal(open,0,'all of them were stopped');
   assert.deepEqual(fs.readdirSync(dir),[]);
 });
+
+test('a connection far slower than the others is dropped and its part starts again on another one',async t=>{
+  const dir=await root(t),{tools:list,bodies,files}=fixtureTools(),deno=list[1];
+  const timed=({start,end,body,slice},step,every)=>new Response(new ReadableStream({async start(controller){
+    for(let offset=0;offset<slice.length;offset+=step){await new Promise(resolve=>setTimeout(resolve,every));controller.enqueue(new Uint8Array(slice.subarray(offset,offset+step)));}
+    controller.close();
+  }}),{status:206,headers:{'content-length':String(slice.length),'content-range':`bytes ${start}-${end}/${body.length}`}});
+  const {fetcher,attempts}=githubFetcher(bodies,{ranges:true,part:context=>{
+    if(context.original!==deno.url)return null;
+    if(context.start===4096&&context.attempt===1)return timed(context,1,25);
+    return timed(context,512,5);
+  }});
+  const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,...quick,slowAfterMs:40,slowRate:1e12});
+  tools.install();await settled(tools);
+  assert.equal(tools.snapshot().phase,'ready',tools.snapshot().message);
+  assert.equal(attempts.get(deno.url+'@4096'),2,'the slow part started again once');
+  assert.deepEqual(fs.readFileSync(path.join(dir,setName(list),'deno.exe')),files['deno.exe']);
+});
+
+test('when every connection is slow, none is dropped',async t=>{
+  const dir=await root(t),{tools:list,bodies}=fixtureTools(),deno=list[1];
+  const {fetcher,attempts}=githubFetcher(bodies,{ranges:true,part:({original,start,end,body,slice})=>original!==deno.url?null:new Response(new ReadableStream({async start(controller){
+    for(let offset=0;offset<slice.length;offset+=256){await new Promise(resolve=>setTimeout(resolve,4));controller.enqueue(new Uint8Array(slice.subarray(offset,offset+256)));}
+    controller.close();
+  }}),{status:206,headers:{'content-length':String(slice.length),'content-range':`bytes ${start}-${end}/${body.length}`}})});
+  const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,...quick,slowAfterMs:20,slowRate:1e12});
+  tools.install();await settled(tools);
+  assert.equal(tools.snapshot().phase,'ready',tools.snapshot().message);
+  assert.ok([...attempts].filter(([key])=>key.startsWith(deno.url+'@')).every(([,count])=>count===1),'every part was asked for once');
+});
