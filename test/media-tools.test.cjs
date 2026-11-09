@@ -47,8 +47,10 @@ function fixtureTools(){
   return {tools,bodies,files:{'yt-dlp.exe':ytDlp,'deno.exe':deno,'ffmpeg.exe':ffmpeg,'ffprobe.exe':ffprobe}};
 }
 // GitHub answers the release address with a redirect to its download host.
-function githubFetcher(bodies,{redirect=url=>'https://release-assets.githubusercontent.com/asset/'+encodeURIComponent(url),override=null}={}){
-  const calls=[];
+// With ranges, the download host answers Range requests with 206 parts, as
+// GitHub's does; part() can replace any answer, keyed by file, start and try.
+function githubFetcher(bodies,{redirect=url=>'https://release-assets.githubusercontent.com/asset/'+encodeURIComponent(url),override=null,ranges=false,part=null}={}){
+  const calls=[],attempts=new Map();
   const fetcher=async(url,options)=>{
     calls.push({url,options});
     assert.equal(options.redirect,'manual');assert.equal(options.headers['Accept-Encoding'],'identity');
@@ -57,9 +59,24 @@ function githubFetcher(bodies,{redirect=url=>'https://release-assets.githubuserc
     const original=decodeURIComponent(address.pathname.split('/').pop());
     if(override){const response=override(original);if(response)return response;}
     const body=bodies.get(original);
-    return body?new Response(body,{status:200,headers:{'content-length':String(body.length)}}):new Response('missing',{status:404});
+    if(!body)return new Response('missing',{status:404});
+    const range=/^bytes=(\d+)-(\d+)$/.exec(options.headers.Range||'');
+    if(ranges&&range){
+      const start=Number(range[1]),end=Number(range[2]),key=`${original}@${start}`,attempt=(attempts.get(key)||0)+1;attempts.set(key,attempt);
+      const slice=body.subarray(start,end+1);
+      if(part){const response=part({original,start,end,attempt,signal:options.signal,body,slice});if(response)return response;}
+      return new Response(slice,{status:206,headers:{'content-length':String(slice.length),'content-range':`bytes ${start}-${end}/${body.length}`}});
+    }
+    return new Response(body,{status:200,headers:{'content-length':String(body.length)}});
   };
-  return {calls,fetcher};
+  return {calls,fetcher,attempts};
+}
+// A part that sends its first byte, then nothing until the request is aborted.
+function hangingPart({start,end,body,signal},onAbort=()=>{}){
+  return new Response(new ReadableStream({start(controller){
+    controller.enqueue(new Uint8Array(body.subarray(start,start+1)));
+    signal.addEventListener('abort',()=>{onAbort();try{controller.error(signal.reason);}catch{}},{once:true});
+  }}),{status:206,headers:{'content-length':String(end-start+1),'content-range':`bytes ${start}-${end}/${body.length}`}});
 }
 async function root(t){
   const base=path.resolve(os.tmpdir()),dir=await fs.promises.mkdtemp(path.join(base,'ravenshelf-tools-'));
@@ -246,4 +263,87 @@ test('a folder that antivirus holds for a moment is renamed on a later try; othe
   fs.promises.rename=async()=>{calls++;const error=new Error('gone');error.code='ENOENT';throw error;};
   await assert.rejects(renameDirectory('a','b',{delayMs:1}),{code:'ENOENT'});
   assert.equal(calls,1);
+});
+
+const quick={partSize:4096,connections:3,partStallMs:5000,raceAfterMs:60000,retryDelayMs:1};
+test('large downloads arrive in parts over several connections and are put together exactly',async t=>{
+  const dir=await root(t),{tools:list,bodies,files}=fixtureTools();
+  let active=0,most=0;
+  const {calls,fetcher}=githubFetcher(bodies,{ranges:true,part:({start,end,body,slice})=>{
+    active++;most=Math.max(most,active);
+    return new Response(new ReadableStream({async start(controller){await new Promise(resolve=>setTimeout(resolve,5));controller.enqueue(new Uint8Array(slice));controller.close();active--;}}),
+      {status:206,headers:{'content-length':String(slice.length),'content-range':`bytes ${start}-${end}/${body.length}`}});
+  }});
+  let limited=0;const bandwidthLimiter={consume:async bytes=>{limited+=bytes;}};
+  const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,bandwidthLimiter,...quick});
+  tools.install();await settled(tools);
+  assert.equal(tools.snapshot().phase,'ready',tools.snapshot().message);
+  for(const [name,bytes] of Object.entries(files))assert.deepEqual(fs.readFileSync(path.join(dir,setName(list),name)),bytes,name);
+  for(const tool of list){
+    const starts=calls.filter(call=>call.url.includes(encodeURIComponent(tool.url))).map(call=>Number(/^bytes=(\d+)-/.exec(call.options.headers.Range)[1])).sort((a,b)=>a-b);
+    const expected=[];for(let start=0;start<tool.size;start+=quick.partSize)expected.push(start);
+    assert.deepEqual(starts,expected,`${tool.id}: each part is asked for once`);
+  }
+  assert.ok(most>=2&&most<=quick.connections,`parts download side by side, at most ${quick.connections} at once (saw ${most})`);
+  assert.equal(limited,list.reduce((sum,tool)=>sum+tool.size,0),'the shared speed limit sees every byte');
+});
+
+test('a part that fails or stops sending is asked for again',async t=>{
+  const dir=await root(t),{tools:list,bodies,files}=fixtureTools();
+  const {fetcher,attempts}=githubFetcher(bodies,{ranges:true,part:context=>{
+    if(context.original===list[1].url&&context.start===4096&&context.attempt===1)return new Response('busy',{status:503});
+    if(context.original===list[2].url&&context.start===0&&context.attempt===1)return hangingPart(context);
+    return null;
+  }});
+  const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,...quick,partStallMs:60});
+  tools.install();await settled(tools);
+  assert.equal(tools.snapshot().phase,'ready',tools.snapshot().message);
+  assert.equal(attempts.get(list[1].url+'@4096'),2);assert.equal(attempts.get(list[2].url+'@0'),2);
+  assert.deepEqual(fs.readFileSync(path.join(dir,setName(list),'deno.exe')),files['deno.exe']);
+  assert.deepEqual(fs.readFileSync(path.join(dir,setName(list),'ffmpeg.exe')),files['ffmpeg.exe']);
+});
+
+test('near the end, a slow part gets a second connection and the first copy to arrive is kept',async t=>{
+  const dir=await root(t),{tools:list,bodies,files}=fixtureTools();
+  const ff=list[2],last=Math.floor((ff.size-1)/quick.partSize)*quick.partSize;let slowStopped=false;
+  const {fetcher,attempts}=githubFetcher(bodies,{ranges:true,part:context=>
+    context.original===ff.url&&context.start===last&&context.attempt===1?hangingPart(context,()=>{slowStopped=true;}):null});
+  const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,...quick,raceAfterMs:30});
+  tools.install();await settled(tools);
+  assert.equal(tools.snapshot().phase,'ready',tools.snapshot().message);
+  assert.equal(attempts.get(ff.url+'@'+last),2,'one extra connection for the slow part');
+  assert.ok(slowStopped,'the slower copy is stopped');
+  assert.deepEqual(fs.readFileSync(path.join(dir,setName(list),'ffprobe.exe')),files['ffprobe.exe']);
+});
+
+test('parts with the wrong range, a part that keeps failing, or a whole file mid-way install nothing',async t=>{
+  const cases=[
+    {name:'wrong range',part:({original,start,end,body,slice})=>original===list0().url&&start===4096&&new Response(slice,{status:206,headers:{'content-range':`bytes ${start+1}-${end+1}/${body.length}`}})},
+    {name:'wrong total',part:({original,start,end,body,slice})=>original===list0().url&&start===0&&new Response(slice,{status:206,headers:{'content-range':`bytes ${start}-${end}/${body.length+1}`}})},
+    {name:'keeps failing',part:({original,start})=>original===list0().url&&start===8192&&new Response('busy',{status:503})},
+    {name:'whole file mid-way',part:({original,start,body})=>original===list0().url&&start===4096&&new Response(body,{status:200,headers:{'content-length':String(body.length)}})},
+    {name:'too much data',part:({original,start,end,body,slice})=>original===list0().url&&start===4096&&new Response(Buffer.concat([slice,Buffer.from('x')]),{status:206,headers:{'content-range':`bytes ${start}-${end}/${body.length}`}})}
+  ];
+  let current=null;const list0=()=>current[1];
+  for(const {name,part} of cases){
+    const dir=await root(t),fixture=fixtureTools();current=fixture.tools;
+    const {fetcher}=githubFetcher(fixture.bodies,{ranges:true,part});
+    const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:fixture.tools,...quick,partTries:3});
+    tools.install();await settled(tools);
+    assert.equal(tools.snapshot().phase,'error',name);assert.equal(tools.snapshot().message,MESSAGES.failed,name);
+    assert.deepEqual(fs.readdirSync(dir),[],name+': nothing is left');
+  }
+});
+
+test('cancelling while parts are downloading stops every connection',async t=>{
+  const dir=await root(t),{tools:list,bodies}=fixtureTools();let open=0;
+  const {fetcher}=githubFetcher(bodies,{ranges:true,part:context=>{if(context.original!==list[1].url)return null;open++;return hangingPart(context,()=>{open--;});}});
+  const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,...quick});
+  tools.install();
+  await new Promise(resolve=>setTimeout(resolve,50));
+  assert.ok(open>=2,'several parts were open');
+  tools.cancel();await settled(tools);
+  assert.deepEqual({phase:tools.snapshot().phase,message:tools.snapshot().message},{phase:'missing',message:MESSAGES.cancelled});
+  assert.equal(open,0,'all of them were stopped');
+  assert.deepEqual(fs.readdirSync(dir),[]);
 });
