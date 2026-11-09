@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 — Much faster YouTube setup and downloads
+
+- The one-time YouTube setup downloads the helper programs (about 168 MB) in 2 MB parts over up to eight connections, and replaces a connection that is far slower than the others. On a connection where GitHub's download servers had slowed setup to more than an hour, it took about a minute. Each part must be exactly the part requested, and the finished files must still match the sizes and SHA-256 values recorded in Ravenshelf before anything is installed.
+- YouTube audio now comes from YouTube's HLS stream, which downloads in parts like the video. YouTube sometimes slowed the single-file audio to about 150 KB/s, so the audio could take longer than the video: in a trial, a 6-minute 1080p video took 16 seconds instead of 54. **Audio (M4A)** and **Audio (MP3)** use the same stream.
+- HLS parts download eight at a time instead of four (still one at a time under a speed limit).
+- Videos are always saved as MP4, including 4K videos in VP9, which 0.6.0 saved as MKV.
+- File downloads use HTTP/1.1. Over HTTP/2, a site could carry all of a file's connections on a single one, so a download with several connections per file could be no faster than one.
+
+See [the release notes](docs/RELEASE-0.6.1.md).
+
 ## 0.6.0 — YouTube downloads
 
 - New **Ravenshelf button in YouTube's player**, next to subtitles and settings. It follows the player's own size in normal, theater and full-screen views and opens a menu: **Best quality** (up to 4K), **1080p**, **720p**, **480p**, or audio only as **M4A** or **MP3**. A message in the player confirms the choice. The toolbar button can hide it.

@@ -14,7 +14,7 @@ Ravenshelf 0.4.0 is a Windows Electron application. The interface uses HTML, CSS
 | `src/providers.cjs` | Source-page/link expansion, supported paste decryption and file-host resolution. |
 | `src/fast-session.cjs` | Uses an isolated Chromium session for supported FuckingFast page/form requests, without opening a page or evaluating scripts. |
 | `src/ff-policy.cjs` | Supported FuckingFast endpoints, redirect boundaries and selected filename checks. |
-| `src/net.cjs` | HTTPS validation, redirect handling and socket-level public-address checks for Node file requests. |
+| `src/net.cjs` | HTTPS validation, redirect handling and socket-level public-address checks for Node file requests. File transfers use HTTP/1.1 so that each section of a split download has its own connection. |
 | `src/image-loader.cjs` | Bounded raster-image requests through the guarded Node transport, without browser-session credentials. |
 | `src/downloads.cjs` | Persistent queue, file concurrency, pause/resume, URL refresh, transfer state and completed-file publication. |
 | `src/defender-scan.cjs` | Finds Microsoft Defender's `MpCmdRun.exe`, launches a scan asynchronously and conservatively interprets its output without changing Defender settings. The download manager serializes scan jobs. |
@@ -38,7 +38,7 @@ Ravenshelf 0.4.0 is a Windows Electron application. The interface uses HTML, CSS
 | `src/browser-setup.cjs`, `src/browser-integration.cjs` | Extension folders, per-user connector registration and the Settings operations. |
 | `src/threat-lists.cjs`, `src/link-safety.cjs` | Public protection lists (download, validation, lookup, browser rules) and link and file checks before downloading. |
 | `src/virustotal.cjs`, `src/motw.cjs` | Optional VirusTotal lookups (domains and file fingerprints) and the internet-zone mark on taken-over files. |
-| `src/youtube.cjs`, `src/media-tools.cjs`, `src/media-downloads.cjs`, `src/media-integration.cjs` | YouTube downloads: address parsing and quality choices, the pinned and hash-checked helper programs (yt-dlp, Deno, FFmpeg), the yt-dlp runner, and the setup, waiting requests and Settings operations. `src/browser-extension/youtube.js` is the player button. |
+| `src/youtube.cjs`, `src/media-tools.cjs`, `src/media-downloads.cjs`, `src/media-integration.cjs` | YouTube downloads: address parsing and quality choices, the pinned and hash-checked helper programs (yt-dlp, Deno, FFmpeg, downloaded in checked 2 MiB parts over up to eight connections), the yt-dlp runner, and the setup, waiting requests and Settings operations. `src/browser-extension/youtube.js` is the player button. |
 
 ```mermaid
 flowchart LR
