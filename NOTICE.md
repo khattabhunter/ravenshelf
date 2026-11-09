@@ -25,6 +25,16 @@ When the browser extension is connected, Ravenshelf downloads these lists for us
 - [malware-filter's phishing-filter](https://gitlab.com/malware-filter/phishing-filter): its lists are licensed CC BY-SA 4.0 and built from sources including OpenPhish, PhishTank and IPThreat under their own terms.
 - [HaGeZi DNS blocklists](https://github.com/hagezi/dns-blocklists): Threat Intelligence Feeds (mini) and Pop-Up Ads, licensed GPL-3.0.
 
+## YouTube helper programs (downloaded at the user's request)
+
+When the user sets up YouTube downloads, Ravenshelf downloads these programs from their publishers' GitHub releases for use on the user's PC. They are not bundled with or redistributed by Ravenshelf; **Settings → YouTube downloads** names each version, license and source.
+
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp), released into the public domain under the Unlicense. Its Windows executable includes Python and other components under their own licenses.
+- [Deno](https://github.com/denoland/deno), MIT-licensed.
+- [FFmpeg](https://ffmpeg.org/) essentials build by Gyan Doshi, from [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg), licensed GPL-3.0 as built. FFmpeg's source is available from the FFmpeg project.
+
+Ravenshelf is not affiliated with YouTube, Google, the yt-dlp project, Deno Land or the FFmpeg project. YouTube's terms allow downloading only where YouTube offers it or with permission.
+
 [VirusTotal](https://www.virustotal.com/) is optional and used only with the user's own API key; VirusTotal's terms apply to that key. Ravenshelf is not affiliated with VirusTotal, abuse.ch, malware-filter, HaGeZi, or the makers of the supported browsers.
 
 The encrypted-paste reader implements the [PrivateBin](https://github.com/PrivateBin/PrivateBin) version 2 message format using Node.js crypto and zlib. PrivateBin's application code is not bundled as part of that implementation.

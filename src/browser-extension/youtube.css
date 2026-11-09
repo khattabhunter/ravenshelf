@@ -1,0 +1,87 @@
+/* Ravenshelf's player button and menu on YouTube. Everything is scoped to
+   Ravenshelf's own class names; sizes follow YouTube's player, including its
+   larger full-screen controls. */
+.ravenshelf-ytp-button.ravenshelf-hidden { display: none !important; }
+.ravenshelf-ytp-button > svg { pointer-events: none; }
+.ravenshelf-ytp-button:focus-visible { outline: 2px solid #c9b6ff; outline-offset: -4px; border-radius: 12px; }
+/* Older players draw 36-unit icons edge to edge; keep this 24-unit icon the same size as theirs. */
+#movie_player:not(.ytp-delhi-modern) .ravenshelf-ytp-button > svg { box-sizing: border-box; width: 100%; height: 100%; padding: 25%; }
+
+.ravenshelf-yt-menu,
+.ravenshelf-yt-tip,
+.ravenshelf-yt-toast {
+  position: absolute;
+  color: #fff;
+  font-family: "YouTube Noto", Roboto, Arial, Helvetica, sans-serif;
+  text-shadow: none;
+  -webkit-font-smoothing: antialiased;
+}
+.ravenshelf-yt-menu {
+  z-index: 72;
+  box-sizing: border-box;
+  min-width: 248px;
+  max-width: calc(100% - 16px);
+  padding: 8px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 12px;
+  background: rgba(28, 28, 28, .92);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(10px);
+  font-size: 14px;
+  line-height: 20px;
+  user-select: none;
+  animation: ravenshelf-pop .14s ease-out;
+}
+.ravenshelf-yt-menu[hidden], .ravenshelf-yt-tip[hidden] { display: none; }
+.ravenshelf-yt-head { display: flex; align-items: center; gap: 10px; padding: 6px 16px 12px; margin-bottom: 4px; border-bottom: 1px solid rgba(255, 255, 255, .12); font-weight: 500; }
+.ravenshelf-yt-mark {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 22px; height: 22px; border-radius: 7px;
+  background: linear-gradient(135deg, #b9a0ec, #7656d8); color: #fff;
+  font-size: 13px; font-weight: 700; line-height: 1;
+}
+.ravenshelf-yt-section { padding: 8px 16px 4px; color: rgba(255, 255, 255, .62); font-size: 12px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }
+.ravenshelf-yt-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  box-sizing: border-box; width: 100%; min-height: 40px; margin: 0; padding: 8px 16px;
+  border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.ravenshelf-yt-item:hover, .ravenshelf-yt-item:focus-visible { background: rgba(255, 255, 255, .12); outline: none; }
+.ravenshelf-yt-item:active { background: rgba(185, 160, 236, .28); }
+.ravenshelf-yt-label { font-weight: 500; }
+.ravenshelf-yt-hint { color: rgba(255, 255, 255, .62); font-size: 12px; white-space: nowrap; }
+.ravenshelf-yt-foot { margin-top: 4px; padding: 10px 16px 4px; border-top: 1px solid rgba(255, 255, 255, .12); color: rgba(255, 255, 255, .55); font-size: 12px; }
+.ravenshelf-yt-tip {
+  z-index: 73; padding: 6px 10px; border-radius: 8px;
+  background: rgba(28, 28, 28, .9); font-size: 13px; font-weight: 500; line-height: 18px;
+  white-space: nowrap; pointer-events: none;
+}
+.ravenshelf-yt-toast {
+  z-index: 74; top: 16px; left: 50%;
+  display: flex; align-items: center; gap: 10px;
+  box-sizing: border-box; max-width: calc(100% - 32px); padding: 10px 18px;
+  border-radius: 999px; background: rgba(28, 28, 28, .94); box-shadow: 0 6px 24px rgba(0, 0, 0, .4);
+  font-size: 14px; font-weight: 500; line-height: 20px;
+  opacity: 0; transform: translate(-50%, -8px); pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.ravenshelf-yt-toast.ravenshelf-visible { opacity: 1; transform: translate(-50%, 0); }
+.ravenshelf-yt-toast::before { content: ""; flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: #b9a0ec; }
+.ravenshelf-yt-toast.ok::before { background: #7ee2a8; }
+.ravenshelf-yt-toast.warn::before { background: #f3c868; }
+.ravenshelf-yt-toast.error::before { background: #ff8f8f; }
+.ravenshelf-yt-toast.busy::before { animation: ravenshelf-pulse 1s ease-in-out infinite; }
+
+/* Full-screen players use bigger controls; so does Ravenshelf's menu. */
+.ytp-big-mode .ravenshelf-yt-menu { min-width: 300px; font-size: 17px; line-height: 24px; border-radius: 16px; }
+.ytp-big-mode .ravenshelf-yt-item { min-height: 48px; padding: 10px 20px; }
+.ytp-big-mode .ravenshelf-yt-head, .ytp-big-mode .ravenshelf-yt-section, .ytp-big-mode .ravenshelf-yt-foot { padding-left: 20px; padding-right: 20px; }
+.ytp-big-mode .ravenshelf-yt-hint, .ytp-big-mode .ravenshelf-yt-section, .ytp-big-mode .ravenshelf-yt-foot { font-size: 14px; }
+.ytp-big-mode .ravenshelf-yt-tip, .ytp-big-mode .ravenshelf-yt-toast { font-size: 17px; line-height: 24px; }
+
+@keyframes ravenshelf-pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes ravenshelf-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  .ravenshelf-yt-menu, .ravenshelf-yt-toast, .ravenshelf-yt-toast::before { animation: none; transition: none; }
+}

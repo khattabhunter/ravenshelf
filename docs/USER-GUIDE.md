@@ -198,11 +198,39 @@ Paste your own free VirusTotal API key under **Settings → Browser extension**.
 
 ### Limits
 
-- The extension handles files the browser downloads. It does not detect or save videos playing on a page.
+- The extension handles files the browser downloads, and [YouTube videos](#youtube-downloads) you send with its button or menu. It does not save videos from other sites.
 - Checks and lists reduce risk; none of them proves a file or site is safe. Keep Windows protections and Microsoft Defender scans on.
 - Sites that need your browser sign-in can only be downloaded with **Download in browser instead**, because Ravenshelf never uses your browser cookies.
 - The extension is loaded in Developer mode (Chrome, Edge, Brave) or as a temporary add-on (Firefox) because it isn't published in the browser stores yet. Chrome may remind you about developer-mode extensions.
 - Malwarebytes and other security apps can't be connected to Ravenshelf. They keep protecting your PC on their own.
+
+## YouTube downloads
+
+Ravenshelf can download a YouTube video you choose: with the **Ravenshelf button** in YouTube's player, next to subtitles and settings, or by right-clicking a video link or a video page and choosing **Download with Ravenshelf**. On the video itself YouTube shows its own menu first; right-click again for the browser's menu. This needs the [browser extension](#browser-extension) connected. After updating Ravenshelf to 0.6.0, choose **Reload** for Ravenshelf on the browser's extensions page, then reload your YouTube tabs.
+
+### One-time setup
+
+YouTube downloads use three free helper programs: **yt-dlp** downloads the video, **Deno** is a JavaScript runtime yt-dlp needs for YouTube, and **FFmpeg** joins the video and audio. The first time you send a video, Ravenshelf opens **Set up YouTube downloads**; you can also start it from **Settings → YouTube downloads**. Setup downloads about 168 MB once, from each program's official GitHub release at a fixed version, and stores about 310 MB in `%LOCALAPPDATA%\Ravenshelf\media-tools`. Every file must match the size and SHA-256 recorded in Ravenshelf, or nothing is installed. The programs are checked again before their first use each time Ravenshelf starts. The video you sent starts as soon as setup finishes. **Remove helper programs** deletes them again.
+
+### Choosing a quality
+
+The player button opens a menu: **Best quality** (up to 4K), **1080p**, **720p**, **480p**, or audio only as **M4A** (original quality) or **MP3** (plays everywhere). Right-click downloads use the quality chosen in **Settings → YouTube downloads**, 1080p unless you change it. Videos are saved as MP4 when possible and as MKV when the best version doesn't fit MP4 (some 4K videos). Files go to the **YouTube** folder in your download folder, named after the video's title. When YouTube offers the chosen quality as an HLS stream, Ravenshelf uses it and downloads four parts at a time, which is usually much faster: YouTube slows its other video streams to a few hundred KB/s. With a limit in **Settings → Shared download speed**, the parts download one at a time so the limit holds.
+
+The video appears in **Downloads** straight away, with its title once Ravenshelf has read it. You can pause, resume, cancel or remove it like any download, and a paused video continues where it stopped. Finished files keep Windows' internet-zone mark and are scanned by Microsoft Defender when scans are on. The toolbar button's **YouTube download button** switch hides the player button; right-click still works.
+
+### Privacy
+
+Only the video's ID and your quality choice go from the browser to Ravenshelf. yt-dlp then contacts YouTube from your PC, as watching the video does, without your browser cookies or YouTube sign-in, and without configuration files or plugins. Nothing about YouTube videos is sent to VirusTotal.
+
+### Rules and limits
+
+- Only download videos you own, that use a Creative Commons licence, or that you have permission to save. YouTube's terms allow downloading only where YouTube offers it or with permission.
+- Because Ravenshelf doesn't use your sign-in, age-restricted, members-only and private videos can't be downloaded. Live streams and premieres can be downloaded after they end.
+- A link from a playlist downloads only that video.
+- The button hides in small players such as the miniplayer; right-click works there.
+- YouTube changes often. If downloads start failing, update Ravenshelf: each version brings the yt-dlp it was tested with. The helper programs never update themselves.
+- In Firefox, if the button doesn't appear, allow Ravenshelf on www.youtube.com from Firefox's extensions menu.
+- The Chrome Web Store doesn't allow YouTube downloaders, so this extension can't be published there. Loading it from Ravenshelf's folder is not affected.
 
 ## Microsoft Defender scans
 
@@ -241,7 +269,7 @@ Paused or failed files keep the action waiting. New files join an armed queue; a
 
 ## Local data and troubleshooting
 
-The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. With the browser extension connected it also holds `browser-host` (the connector and its browser manifests), `browser-extension` (the folders your browsers load), `threat-lists` (the downloaded protection lists) and `virustotal.json` (your sealed VirusTotal key and options). Download files use the folder selected in **Settings**.
+The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. With the browser extension connected it also holds `browser-host` (the connector and its browser manifests), `browser-extension` (the folders your browsers load), `threat-lists` (the downloaded protection lists) and `virustotal.json` (your sealed VirusTotal key and options). Download files use the folder selected in **Settings**. The YouTube helper programs are kept separately in `%LOCALAPPDATA%\Ravenshelf\media-tools`, with yt-dlp's cache and temporary folders; a temporary folder is removed when its download ends.
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
@@ -270,5 +298,8 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | The browser extension says it is not connected | In **Settings → Browser extension**, check that **Connect the browser extension** is on and Ravenshelf is open. Open Ravenshelf normally, not with **Run as administrator**: Windows stops the browser from reaching an app running as administrator. If it says the extension isn't the one Ravenshelf set up, load the folder from **Open folder** again. |
 | A download went to the browser instead of Ravenshelf | Ravenshelf was closed or didn't answer in time, the download was unencrypted (HTTP), or it came from a private window. Check the toolbar button's status. |
 | A site you need is blocked | Check the address. If you trust it, pause protection for 10 minutes from the toolbar button, or turn off **Block dangerous sites**. |
+| The Ravenshelf button doesn't appear on YouTube | After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the YouTube tab. Check the toolbar button's **YouTube download button** switch. The button hides in small players; right-click still works. |
+| A YouTube video fails | Read the message on its card: private, members-only, age-restricted and region-locked videos can't be downloaded. If many videos fail, update Ravenshelf for a newer yt-dlp. |
+| The YouTube helper programs are damaged | Choose **Set up again** in **Settings → YouTube downloads**. Ravenshelf downloads and checks them again. |
 
 For a reproducible app problem, see [CONTRIBUTING.md](../CONTRIBUTING.md) before opening an issue.

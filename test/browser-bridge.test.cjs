@@ -64,8 +64,11 @@ test('extension manifests request only what the features need',()=>{
   assert.deepEqual(firefox.background,{scripts:['policy.js','background.js']});
   assert.equal(firefox.browser_specific_settings.gecko.id,protocol.FIREFOX_EXTENSION_ID);assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions,{required:['browsingActivity']});
   for(const manifest of [chrome,firefox]){
-    assert.equal(manifest.host_permissions,undefined,'no access to page contents is requested');
-    assert.equal(manifest.content_scripts,undefined);assert.equal(manifest.externally_connectable,undefined);assert.equal(manifest.web_accessible_resources,undefined);
+    assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
+    // The one page script: the download button in YouTube's player, top frame of www.youtube.com only.
+    assert.deepEqual(manifest.content_scripts,[{matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false}]);
+    for(const file of [...manifest.content_scripts[0].js,...manifest.content_scripts[0].css])assert.ok(setup.EXTENSION_FILES.includes(file),file);
+    assert.equal(manifest.externally_connectable,undefined);assert.equal(manifest.web_accessible_resources,undefined);
     assert.ok(!manifest.permissions.some(permission=>/cookies|tabs|history|scripting|webRequest|<all_urls>|\*/.test(permission)),manifest.permissions.join());
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
   }

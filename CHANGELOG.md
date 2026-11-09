@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 — YouTube downloads
+
+- New **Ravenshelf button in YouTube's player**, next to subtitles and settings. It follows the player's own size in normal, theater and full-screen views and opens a menu: **Best quality** (up to 4K), **1080p**, **720p**, **480p**, or audio only as **M4A** or **MP3**. A message in the player confirms the choice. The toolbar button can hide it.
+- **Download with Ravenshelf** on the right-click menu of YouTube video links, thumbnails and video pages (including Shorts), using the quality chosen in **Settings → YouTube downloads** (1080p by default).
+- YouTube videos join the download queue straight away, in a **YouTube** folder, named after the video's title, with progress, pause and resume, cancel, removal with **Delete files**, the internet-zone mark and Microsoft Defender scans. Video is saved as MP4, or MKV when the best version doesn't fit MP4. YouTube's HLS streams are used when they offer the same quality, four parts at a time (one at a time under a speed limit), because YouTube slows its single-file video streams to a few hundred KB/s.
+- One-time setup of three helper programs, started by you: yt-dlp 2026.10.26, Deno 2.9.8 and FFmpeg 8.1.2 (about 168 MB to download, 310 MB on disk, in `%LOCALAPPDATA%\Ravenshelf\media-tools`). Each comes from its publisher's GitHub release at a fixed version; the downloads and every extracted program must match sizes and SHA-256 values recorded in Ravenshelf, and the programs are checked again before their first use in each session. A video sent before setup waits and starts when setup finishes. **Remove helper programs** deletes them.
+- yt-dlp receives only the canonical address of one video, after `--`, with configuration files, plugins, browser cookies and remote components switched off and the checked Deno as its only JavaScript runtime. It runs without a shell, with a minimal environment, a private temporary folder per download and a private working folder next to the file. Its own messages never reach the screen: age-restricted, members-only, private, region-locked, live and copy-protected videos, YouTube's limits and connection problems get plain messages.
+- The extension's only page script runs in YouTube's top frame, builds its controls without HTML injection and acts only on real clicks. The extension accepts the player's request only from that script, and sends only the video's ID and quality to Ravenshelf.
+- Only download videos you own, that use a Creative Commons licence, or that you have permission to save: YouTube's terms allow downloading only where YouTube offers it or with permission. Settings and the setup say so.
+
+See [the release notes](docs/RELEASE-0.6.0.md).
+
 ## 0.5.1 — Delete finished browser downloads, retry dropped connections
 
 - **Delete files** now works for finished browser downloads of any file type, such as a program or a picture. In 0.5.0, cleanup accepted only archive names and refused these with "These files changed or could not be checked safely". The exception applies only to downloads taken over from a browser and saved in Ravenshelf's own **Browser downloads** folder; in game folders, cleanup still deletes only the downloaded archives.
