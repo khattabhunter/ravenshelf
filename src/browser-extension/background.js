@@ -1,7 +1,8 @@
 // Ravenshelf extension background: a service worker in Chrome, Edge and Brave,
 // an event page in Firefox. It hands downloads to the Ravenshelf app on this PC,
 // keeps the browser's own blocking rules in step with Ravenshelf's protection
-// lists, and stops the pop-ups and redirects that file-host pages start.
+// lists, stops the pop-ups and redirects that file-host pages start, and sends
+// the YouTube videos you choose (player button or right-click) to Ravenshelf.
 // It talks only to Ravenshelf on this PC, through the native connector.
 'use strict';
 if (typeof importScripts === 'function' && !globalThis.RavenshelfPolicy) importScripts('policy.js');
@@ -12,7 +13,7 @@ const BROWSER = isFirefox ? 'firefox' : 'chromium';
 const VERSION = api.runtime.getManifest().version;
 const menus = api.contextMenus || api.menus;
 const dnr = api.declarativeNetRequest;
-const DEFAULTS = Object.freeze({ capture: true, protection: true, guard: true, pausedUntil: 0, listVersion: '', listTotal: 0, listSyncedAt: 0, listFirstRule: 0, status: 'unknown', appVersion: '' });
+const DEFAULTS = Object.freeze({ capture: true, protection: true, guard: true, youtube: true, pausedUntil: 0, listVersion: '', listTotal: 0, listSyncedAt: 0, listFirstRule: 0, status: 'unknown', appVersion: '' });
 const PAUSE_MS = 10 * 60 * 1000;
 const SYNC_MINUTES = 60;
 const POPUP_WATCH_MS = 15000;
@@ -130,6 +131,8 @@ async function createMenus() {
   const done = () => { void api.runtime.lastError; };
   menus.create({ id: 'ravenshelf-link', title: 'Download with Ravenshelf', contexts: ['link'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
   menus.create({ id: 'ravenshelf-page', title: 'Download this file with Ravenshelf', contexts: ['page'], documentUrlPatterns: P.SEND_PAGE_PATTERNS.slice() }, done);
+  // On YouTube the video area opens YouTube's own menu first; right-click again for this one.
+  menus.create({ id: 'ravenshelf-youtube', title: 'Download this video with Ravenshelf', contexts: ['page', 'video'], documentUrlPatterns: P.YOUTUBE_PAGE_PATTERNS.slice() }, done);
 }
 async function sendToApp(kind, url, pageUrl, incognito) {
   if (incognito) { notify('private', 'Private window', 'Ravenshelf does not take downloads from private windows.'); return { ok: false, error: 'private' }; }
@@ -140,10 +143,26 @@ async function sendToApp(kind, url, pageUrl, incognito) {
   report(reply, url);
   return reply;
 }
+// A YouTube video: only its canonical address and the quality choice are sent.
+async function sendMedia(url, quality, incognito, announce) {
+  let reply;
+  if (incognito) reply = { ok: false, error: 'private' };
+  else {
+    const address = P.youtubeUrl(P.youtubeVideoId(url));
+    reply = address && P.MEDIA_QUALITIES.includes(quality) ? await ask({ type: 'media', url: address, quality }, 8000) : { ok: false, error: 'invalid' };
+  }
+  // The player button shows its own message; right-click choices get a notification.
+  if (announce) { const text = P.mediaReplyText(reply); notify('youtube', text.title, text.text, 3000); }
+  return reply;
+}
 if (menus) menus.onClicked.addListener((info, tab) => {
+  const incognito = Boolean(tab && tab.incognito);
+  if (info.menuItemId === 'ravenshelf-youtube') { sendMedia(info.pageUrl, 'default', incognito, true).catch(() => {}); return; }
   const link = info.menuItemId === 'ravenshelf-link';
   if (!link && info.menuItemId !== 'ravenshelf-page') return;
-  sendToApp(link ? 'link' : 'page', link ? info.linkUrl : info.pageUrl, info.pageUrl, Boolean(tab && tab.incognito)).catch(() => {});
+  // A link to a YouTube video is downloaded as a video, not as a web page.
+  if (link && P.youtubeVideoId(info.linkUrl)) { sendMedia(info.linkUrl, 'default', incognito, true).catch(() => {}); return; }
+  sendToApp(link ? 'link' : 'page', link ? info.linkUrl : info.pageUrl, info.pageUrl, incognito).catch(() => {});
 });
 
 // ---- blocking rules ----
@@ -390,7 +409,7 @@ async function popupState() {
   const current = await settings();
   return {
     version: VERSION, browser: BROWSER, status: current.status, appVersion: current.appVersion,
-    capture: current.capture, protection: current.protection, guard: current.guard,
+    capture: current.capture, protection: current.protection, guard: current.guard, youtube: current.youtube,
     pausedUntil: current.pausedUntil > Date.now() ? current.pausedUntil : 0, listTotal: current.listTotal, listSyncedAt: current.listSyncedAt
   };
 }
@@ -404,7 +423,7 @@ async function handleMessage(message, sender) {
     return { ok: true, state: await popupState() };
   }
   if (command === 'set') {
-    if (!['capture', 'protection', 'guard'].includes(message.key) || typeof message.value !== 'boolean') return { ok: false };
+    if (!['capture', 'protection', 'guard', 'youtube'].includes(message.key) || typeof message.value !== 'boolean') return { ok: false };
     await api.storage.local.set({ [message.key]: message.value });
     await applyToggles();
     return { ok: true, state: await popupState() };
@@ -442,7 +461,22 @@ async function handleMessage(message, sender) {
   }
   return { ok: false };
 }
+// The player button on YouTube: Ravenshelf's own content script in the top
+// frame of a www.youtube.com page, in a normal window, asking for one video.
+function youtubeSender(sender) {
+  return Boolean(sender) && sender.id === api.runtime.id && Boolean(sender.tab) && sender.frameId === 0 &&
+    typeof sender.url === 'string' && /^https:\/\/www\.youtube\.com\//.test(sender.url);
+}
+async function handleYouTube(message, sender) {
+  if (!message || message.cmd !== 'youtube' || !P.PLAYER_CHOICES.some(choice => choice.id === message.quality)) return { ok: false, error: 'invalid' };
+  const url = P.youtubeVideoId(message.url) ? message.url : sender.url;
+  return sendMedia(url, message.quality, Boolean(sender.tab.incognito), false);
+}
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (youtubeSender(sender) && !trustedSender(sender)) {
+    handleYouTube(message, sender).then(sendResponse, () => sendResponse({ ok: false }));
+    return true;
+  }
   if (!trustedSender(sender)) return false;
   handleMessage(message, sender).then(sendResponse, () => sendResponse({ ok: false }));
   return true;

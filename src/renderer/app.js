@@ -564,6 +564,12 @@ function updateDownloadProgress(node, item) {
   $('.download-transfer', node).textContent = detail;
   const connections = $('.download-connections', node);
   let connectionText = '';
+  if (item.kind === 'media') {
+    // YouTube jobs report what they are doing (details, video, audio, joining) instead of connections.
+    connectionText = ['downloading', 'paused', 'error'].includes(item.status) ? String(item.connectionNote || '') : '';
+    connections.textContent = connectionText; connections.hidden = !connectionText;
+    return;
+  }
   if (item.status === 'downloading') {
     const count = Math.max(0, Math.min(4, Math.floor(Number(item.activeConnections) || 0)));
     if (item.connectionMode === 'checking') connectionText = 'Checking connection support…';
@@ -580,8 +586,8 @@ function updateDownloadCard(node, item) {
   node.className = `download-item ${item.status || ''}`;
   const selection=$('.download-select',node);if(selection)selection.checked=selectedDownloads.has(String(item.id));
   $('.download-name', node).textContent = item.name || item.filename || fileName(item);
-  $('.download-game', node).textContent = item.gameTitle || 'Imported download';
-  $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : 'file'));
+  $('.download-game', node).textContent = item.kind === 'media' ? ['YouTube', MEDIA_QUALITY_LABELS[item.media?.quality]].filter(Boolean).join(' · ') : item.gameTitle || 'Imported download';
+  $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : item.kind === 'media' ? 'video' : 'file'));
   const status = $('.download-status', node); status.textContent = statusLabel(item); status.className = `download-status ${item.status || ''}`;
   updateDownloadProgress(node, item);
   const error = $('.download-error', node); error.textContent = item.error || ''; error.hidden = !item.error;
@@ -663,6 +669,7 @@ function renderSettings() {
   if (document.activeElement !== $('#defender-scan')) $('#defender-scan').value = state.settings.defenderScan === false ? 'off' : 'on';
   if(featureUIAvailable())renderFeatureSettings();
   if(browserFeatureAvailable())renderBrowserSettings();
+  if(mediaFeatureAvailable())renderYouTubeSettings();
 }
 function renderCatalogSections() {
   const container=$('#catalog-sections');container.replaceChildren();
@@ -843,6 +850,7 @@ function applyState(next) {
   if(next.verification)verificationState=next.verification;
   if(next.catalogRefresh)receiveCatalogCheck(next.catalogRefresh);
   if(next.browser!==undefined)browserState=next.browser;
+  if(next.media!==undefined)mediaState=next.media;
   $('#version').textContent = `v${state.version}`;
   updateBadges();
   renderCompletionAction();
@@ -860,6 +868,7 @@ function applyState(next) {
     if(state.settings.adaptiveThemeEnabled===false)setAccent();
   }
   if(browserFeatureAvailable())afterBrowserState();
+  if(mediaFeatureAvailable())afterMediaState();
 }
 function applyProgress(next) {
   // A delta cannot create a queue, revive a completed file or overwrite a newer
@@ -1166,6 +1175,7 @@ function wireEvents() {
   });
   if(featureUIAvailable())wireFeatureEvents();
   if(browserFeatureAvailable())wireBrowserEvents();
+  if(mediaFeatureAvailable())wireMediaEvents();
 }
 // ---- browser extension: setup, reviews of browser downloads, VirusTotal ----
 let browserState = null, browserBusy = false, capturesPrimed = false, capturesShown = '';
@@ -1328,7 +1338,7 @@ function renderDownloadReputation(node, item) {
   node.replaceChildren();
   node.hidden = item.origin !== 'browser' && !report;
   if (node.hidden) return;
-  if (item.origin === 'browser') node.append(el('span', 'origin-chip', 'From your browser'));
+  if (item.origin === 'browser') node.append(el('span', 'origin-chip', item.kind === 'media' ? 'From YouTube' : 'From your browser'));
   const info = report ? virusTotalSummary({ ...report, kind: 'file', subject: 'this file' }) : null;
   if (info) appendVirusTotal(node, info);
   node.className = `download-reputation ${info?.tone || ''}`.trim();
@@ -1364,6 +1374,102 @@ function wireBrowserEvents() {
   });
   $('#vt-clear').addEventListener('click', () => browserTask(() => api.clearVirusTotalKey(), 'VirusTotal key removed.'));
   for (const [id, key] of [['vt-domains', 'domainChecks'], ['vt-files', 'fileChecks']]) $('#' + id).addEventListener('change', event => browserTask(() => api.saveVirusTotalSettings({ [key]: event.target.checked }), 'Preference saved.'));
+}
+// ---- YouTube downloads: one-time setup, quality for right-click downloads ----
+let mediaState = null, mediaBusy = false, mediaRequestsSeen = null, lastMediaPhase = null;
+const MEDIA_QUALITY_LABELS = { best: 'Best quality', 1080: '1080p', 720: '720p', 480: '480p', 'audio-m4a': 'Audio (M4A)', 'audio-mp3': 'Audio (MP3)' };
+function mediaFeatureAvailable() { return typeof api?.setUpYouTube === 'function'; }
+function mediaTools() { return mediaState?.tools || {}; }
+function mediaWaiting() { return Array.isArray(mediaState?.waiting) ? mediaState.waiting : []; }
+function mediaStatus() {
+  const tools = mediaTools();
+  if (!mediaState?.supported) return { text: 'YouTube downloads work with Ravenshelf on Windows.', tone: '' };
+  if (tools.phase === 'installing') return { text: `${tools.message || 'Setting up…'} ${Math.round((Number(tools.progress) || 0) * 100)}%`, tone: '' };
+  if (tools.phase === 'ready') return { text: 'Ready. Use the Ravenshelf button in YouTube’s player, or right-click a video.', tone: 'ok' };
+  if (['damaged', 'error'].includes(tools.phase)) return { text: tools.message || 'Setup did not finish. Try again.', tone: 'error' };
+  const size = `${formatBytes(tools.downloadBytes, 'about 180 MB')} once (about ${formatBytes(tools.diskBytes, '330 MB')} on disk)`;
+  return { text: `${tools.message ? `${tools.message} ` : ''}Not set up yet. Setup downloads ${size} from the programs’ official GitHub releases and checks every file before use.`, tone: '' };
+}
+function toolLines(target) {
+  target.replaceChildren(...(Array.isArray(mediaTools().tools) ? mediaTools().tools : []).map(tool => el('li', '', `${tool.name} ${tool.version} · ${tool.license} · ${tool.source}`)));
+}
+function renderYouTubeSettings() {
+  const card = $('#youtube-card'); if (!card) return;
+  card.hidden = !mediaState;
+  if (card.hidden) return;
+  const tools = mediaTools(), phase = tools.phase, status = mediaStatus(), waiting = mediaWaiting().length;
+  $('#youtube-status').textContent = status.text;
+  $('#youtube-status').className = `small-text browser-status ${status.tone}`.trim();
+  const progress = $('#youtube-progress');
+  progress.hidden = phase !== 'installing'; progress.value = Math.round((Number(tools.progress) || 0) * 100);
+  const setup = $('#youtube-setup');
+  setup.hidden = !mediaState.supported || ['installing', 'ready'].includes(phase);
+  setup.textContent = phase === 'damaged' ? 'Set up again' : phase === 'error' ? 'Try setup again' : 'Set up YouTube downloads';
+  setup.disabled = mediaBusy;
+  $('#youtube-cancel').hidden = phase !== 'installing';
+  $('#youtube-remove').hidden = !['ready', 'damaged'].includes(phase);
+  $('#youtube-remove').disabled = mediaBusy;
+  $('#youtube-waiting').hidden = !waiting;
+  $('#youtube-waiting').textContent = waiting === 1 ? 'One YouTube video is waiting. It starts when setup finishes.' : `${waiting} YouTube videos are waiting. They start when setup finishes.`;
+  $('#youtube-dismiss').hidden = !waiting || phase === 'installing';
+  const select = $('#youtube-quality'), qualities = Array.isArray(mediaState.qualities) ? mediaState.qualities : [];
+  const choices = qualities.map(choice => choice.id).join(',');
+  if (select.dataset.choices !== choices) { select.replaceChildren(...qualities.map(choice => { const option = el('option', '', choice.label); option.value = choice.id; return option; })); select.dataset.choices = choices; }
+  if (document.activeElement !== select) select.value = mediaState.quality || '1080';
+  select.disabled = mediaBusy;
+  toolLines($('#youtube-tools'));
+}
+function renderYouTubeDialog() {
+  const tools = mediaTools(), phase = tools.phase, status = mediaStatus(), waiting = mediaWaiting().length;
+  toolLines($('#youtube-dialog-tools'));
+  $('#youtube-dialog-intro').textContent = `${waiting > 1 ? `${waiting} YouTube videos are` : 'A YouTube video is'} waiting. Ravenshelf downloads YouTube videos with three free helper programs: setup gets them once (${formatBytes(tools.downloadBytes, 'about 180 MB')}) from their official GitHub releases and checks every file before use.`;
+  $('#youtube-dialog-status').textContent = phase === 'missing' && !tools.message ? '' : status.text;
+  $('#youtube-dialog-status').className = `small-text browser-status ${status.tone}`.trim();
+  const progress = $('#youtube-dialog-progress');
+  progress.hidden = phase !== 'installing'; progress.value = Math.round((Number(tools.progress) || 0) * 100);
+  const setup = $('#youtube-dialog-setup');
+  setup.hidden = phase === 'installing';
+  setup.textContent = ['damaged', 'error'].includes(phase) ? 'Try setup again' : 'Set up and download';
+  setup.disabled = mediaBusy || !mediaState?.supported;
+  $('#youtube-dialog-cancel').hidden = phase !== 'installing';
+  $('#youtube-dialog-later').hidden = phase === 'installing';
+}
+// Called after every state update: opens the setup when a video arrives
+// before setup, and reports when setup finishes.
+function afterMediaState() {
+  if (!mediaState) return;
+  const phase = mediaTools().phase, requests = Number(mediaState.requests) || 0, dialog = $('#youtube-dialog');
+  const arrived = mediaRequestsSeen !== null && requests > mediaRequestsSeen && mediaWaiting().length > 0 && phase !== 'ready';
+  mediaRequestsSeen = requests;
+  if (arrived && !$$('dialog').some(other => other.open && other !== dialog)) { renderYouTubeDialog(); showDialog(dialog); }
+  if (lastMediaPhase === 'installing' && phase === 'ready') {
+    toast('YouTube downloads are ready. Videos you send from YouTube start right away.');
+    if (dialog.open) dialog.close();
+  }
+  lastMediaPhase = phase;
+  if (dialog.open) renderYouTubeDialog();
+  if (currentView === 'settings') renderYouTubeSettings();
+}
+async function mediaTask(work, success) {
+  mediaBusy = true; renderYouTubeSettings(); if ($('#youtube-dialog').open) renderYouTubeDialog();
+  try {
+    const result = await work();
+    if (result && typeof result === 'object' && 'tools' in result) { mediaState = result; afterMediaState(); }
+    if (success) toast(success);
+    return result;
+  } catch (error) {
+    toast(errorText(error), true);
+    try { applyState(await api.getState()); } catch {}
+    return undefined;
+  } finally { mediaBusy = false; renderYouTubeSettings(); if ($('#youtube-dialog').open) renderYouTubeDialog(); }
+}
+function wireMediaEvents() {
+  for (const id of ['youtube-setup', 'youtube-dialog-setup']) $('#' + id).addEventListener('click', () => mediaTask(() => api.setUpYouTube()));
+  for (const id of ['youtube-cancel', 'youtube-dialog-cancel']) $('#' + id).addEventListener('click', () => mediaTask(() => api.cancelYouTubeSetup()));
+  $('#youtube-remove').addEventListener('click', () => mediaTask(() => api.removeYouTubeTools(), 'The YouTube helper programs were removed.'));
+  $('#youtube-dismiss').addEventListener('click', () => mediaTask(() => api.dismissYouTubeRequests(), 'Waiting YouTube videos dismissed.'));
+  $('#youtube-dialog-later').addEventListener('click', async () => { $('#youtube-dialog').close(); await mediaTask(() => api.dismissYouTubeRequests()); });
+  $('#youtube-quality').addEventListener('change', event => mediaTask(() => api.saveYouTubeSettings({ quality: event.target.value }), 'Preference saved.'));
 }
 async function start() {
   hydrateIcons(); wireEvents();

@@ -4,6 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {workspaceFor}=require('./parallel-download.cjs');
 const {scanConfiguredArchives}=require('./download-storage.cjs');
+const {MEDIA_FOLDER,MEDIA_EXTENSIONS,WORKSPACE_FILE:MEDIA_WORKSPACE_FILE}=require('./youtube.cjs');
 const TTL_MS=5*60*1000;
 const MAX_SELECTION=500;
 const ARCHIVE=/\.(?:rar|bin|zip|7z|iso|\d{3})$/i;
@@ -47,13 +48,18 @@ async function verifyFile(file){
 // archive-only rule because installed game files can sit beside the archives.
 const BROWSER_FOLDER='Browser downloads';
 function browserFile(download,folder){return download.origin==='browser'&&pathKey(path.basename(folder))===pathKey(BROWSER_FOLDER);}
+// YouTube downloads are saved only in Ravenshelf's own YouTube folder, as
+// video or audio files; their working folder holds only yt-dlp's media.* files.
+function mediaFile(download,folder){
+  return download.kind==='media'&&pathKey(path.basename(folder))===pathKey(MEDIA_FOLDER)&&MEDIA_EXTENSIONS.includes(path.extname(download.name).slice(1).toLowerCase());
+}
 function selection(download){
   if(!download||typeof download.id!=='string'||!download.id||download.id.length>200||!filename(download.name))bad();
-  const folder=local(download.folder);
-  if(!ARCHIVE.test(download.name)&&!browserFile(download,folder))bad();
+  const folder=local(download.folder),media=mediaFile(download,folder);
+  if(!ARCHIVE.test(download.name)&&!browserFile(download,folder)&&!media)bad();
   const final=path.join(folder,download.name),partial=final+'.atlas-part',workspace=workspaceFor(partial,download.id);
   if(!within(folder,final)||!within(folder,partial)||!within(folder,workspace)||path.dirname(workspace)!==folder)bad();
-  return {id:download.id,name:download.name,folder,final,partial,workspace};
+  return {id:download.id,name:download.name,folder,final,partial,workspace,media};
 }
 function isStopped(download){return !['queued','downloading'].includes(download.status)&&!['queued','scanning'].includes(download.scan?.status);}
 async function capture(download,{summary=false}={}){
@@ -73,8 +79,9 @@ async function capture(download,{summary=false}={}){
     const directory=await fs.promises.opendir(item.workspace);
     try{while(item.entries.length<=128){const entry=await directory.read();if(!entry)break;item.entries.push(entry.name);}}finally{await directory.close();}
     item.entries.sort();
-    if(item.entries.length>128||item.entries.some(name=>!WORKSPACE_FILE.test(name))){if(!summary)bad();item.issues=true;}
-    for(const name of item.entries.slice(0,128).filter(name=>WORKSPACE_FILE.test(name))){
+    const allowed=item.media?MEDIA_WORKSPACE_FILE:WORKSPACE_FILE;
+    if(item.entries.length>128||item.entries.some(name=>!allowed.test(name))){if(!summary)bad();item.issues=true;}
+    for(const name of item.entries.slice(0,128).filter(name=>allowed.test(name))){
       try{item.files.push(await captureFile(path.join(item.workspace,name),'partial',summary));}catch(error){if(!summary)throw error;item.issues=true;}
     }
   }

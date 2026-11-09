@@ -15,7 +15,7 @@ const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
 const EXTENSION_BROWSERS=Object.freeze(['chromium','firefox']);
 const FOLDER_NOT_UPDATED='The extension folder could not be updated, so your browser keeps the previous version. Restart Ravenshelf to try again.';
 
-function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
+function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,queueMedia=null,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
   manager.settings={browserIntegrationEnabled:false,...manager.settings};
   const profile=app.getPath('userData'),version=app.getVersion();
   const hostDir=path.join(profile,'browser-host'),extensionRoot=path.join(profile,'browser-extension');
@@ -33,6 +33,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   try{virusTotal.load();}catch{}
   const bridge=new BrowserBridge({hostDir,threatLists,virusTotal,resolveProvider,appVersion:version,platform,
     queueDownload:entry=>{assertQueueAvailable();return manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
+    queueMedia,
     openExternal:url=>shell.openExternal(safeURL(url).href),
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});
   bridge.on('change',()=>publish());
@@ -117,7 +118,8 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
     snapshot,
     // VirusTotal file check for a finished download that came from the browser.
     afterDownload(download){
-      if(download?.origin!=='browser'||closing)return;
+      // A YouTube video's fingerprint says nothing VirusTotal could judge, so it is not sent.
+      if(download?.origin!=='browser'||download.kind==='media'||closing)return;
       bridge.afterDownload(download,path.join(download.folder,download.name)).catch(()=>{});
     },
     async beforeQuit(){

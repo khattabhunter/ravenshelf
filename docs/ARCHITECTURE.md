@@ -38,6 +38,7 @@ Ravenshelf 0.4.0 is a Windows Electron application. The interface uses HTML, CSS
 | `src/browser-setup.cjs`, `src/browser-integration.cjs` | Extension folders, per-user connector registration and the Settings operations. |
 | `src/threat-lists.cjs`, `src/link-safety.cjs` | Public protection lists (download, validation, lookup, browser rules) and link and file checks before downloading. |
 | `src/virustotal.cjs`, `src/motw.cjs` | Optional VirusTotal lookups (domains and file fingerprints) and the internet-zone mark on taken-over files. |
+| `src/youtube.cjs`, `src/media-tools.cjs`, `src/media-downloads.cjs`, `src/media-integration.cjs` | YouTube downloads: address parsing and quality choices, the pinned and hash-checked helper programs (yt-dlp, Deno, FFmpeg), the yt-dlp runner, and the setup, waiting requests and Settings operations. `src/browser-extension/youtube.js` is the player button. |
 
 ```mermaid
 flowchart LR
@@ -80,6 +81,12 @@ The extension never fetches anything itself. For each browser download it asks t
 The connector is started by the browser per message. It reads `endpoint.json` beside it for the current pipe and token, sends a header frame `{v, token, origin}` and the request, and returns the app's reply (at most 1 MB). The app rejects any connection without the token or from an origin other than Ravenshelf's pinned extensions.
 
 The extension also asks for the protection lists' browser rules: domains only, chunked under the native-messaging reply limit (IDs 1–999), plus a redirect rule (ID 1000) that blocks main-frame navigations started by FuckingFast and FileKeeper pages toward other domains, and an allow rule (ID 1001) used while protection is off or paused. Pop-ups from those pages are closed through navigation events, and a navigation that gets past the rule (an ad frame taking over the tab, or a server redirect) is undone when it commits.
+
+### YouTube videos
+
+The player button (a content script in YouTube's top frame) and the right-click items send `{type:'media', url, quality}`. The protocol keeps only the 11-character video ID and a known quality. Before setup, the request waits in memory and Ravenshelf opens its setup; afterwards it joins the queue directly as a `kind:'media'` job, without the review that file downloads get, because the user chose the video and quality.
+
+A media job runs yt-dlp twice: once with `-J` to read the title, final format and sizes (the job is then renamed after the title), and once to download into a private working folder (`.atlas-segments-<id>` beside the final file) with fixed names (`media.*`). Progress comes from a machine-readable progress template; pausing stops yt-dlp and the processes it started (`taskkill /T`), and resuming continues its partial files. The finished file is linked into place without overwriting anything, marked as downloaded from the internet and scanned like other downloads. Cleanup treats a media job's working folder as holding only `media.*` files.
 
 ## Download lifecycle
 

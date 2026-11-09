@@ -4,6 +4,7 @@
 // from a browser is untrusted: it is size-limited and must match an exact shape
 // before Ravenshelf acts on it.
 const crypto=require('node:crypto');
+const {REQUEST_QUALITIES,youtubeVideoId}=require('./youtube.cjs');
 
 const HOST_NAME='io.github.khattabhunter.ravenshelf';
 // Public half of the key that pins the Chrome/Edge/Brave extension ID. Browsers
@@ -89,6 +90,15 @@ function validateRequest(message){
       exactKeys(message,['id']);
       if(!Number.isSafeInteger(message.id)||message.id<1||message.id>999)invalid();
       return {type:'threatRule',id:message.id};
+    // A YouTube video chosen with the player button or the right-click menu.
+    // Only its video ID and the quality choice go further.
+    case 'media':{
+      exactKeys(message,['url','quality']);
+      if(typeof message.quality!=='string'||!REQUEST_QUALITIES.includes(message.quality))invalid();
+      const videoId=youtubeVideoId(webAddress(message.url,{schemes:['https:']}));
+      if(!videoId)invalid();
+      return {type:'media',videoId,quality:message.quality};
+    }
     case 'lookup':
       exactKeys(message,['host']);
       if(typeof message.host!=='string'||!message.host||message.host.length>253||!/^[a-z0-9._-]+$/i.test(message.host))invalid();

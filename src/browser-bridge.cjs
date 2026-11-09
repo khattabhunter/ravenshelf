@@ -33,10 +33,10 @@ async function writeJSONAtomic(file,value){
 }
 
 class BrowserBridge extends EventEmitter{
-  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
+  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
     super();
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
-    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,openExternal,reveal,notify,setReputation,appVersion,now,platform,listenPath});
+    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,queueMedia,openExternal,reveal,notify,setReputation,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
     this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
   }
@@ -100,6 +100,13 @@ class BrowserBridge extends EventEmitter{
         return {ok:true,app:'Ravenshelf',version:this.appVersion,capture:true,protection:this.threatLists?{version:this.threatLists.version,total:this.threatLists.total}:null};
       }
       if(message.type==='capture'||message.type==='send')return {ok:true,...this.receive(browser,message)};
+      // YouTube videos skip the review: the user chose the video and quality
+      // themselves, and nothing but its video ID reaches Ravenshelf.
+      if(message.type==='media'){
+        if(typeof this.queueMedia!=='function')return {ok:false,error:'invalid'};
+        const result=await this.queueMedia({videoId:message.videoId,quality:message.quality,browser});
+        return ['queued','duplicate','setup','busy'].includes(result?.action)?{ok:true,action:result.action}:{ok:false,error:'failed'};
+      }
       if(message.type==='threats')return {ok:true,manifest:this.threatLists?this.threatLists.browserManifest():{version:'',total:0,rules:[]}};
       if(message.type==='threatRule'){const rule=this.threatLists?.browserRule(message.id);return rule?{ok:true,rule}:{ok:false,error:'not-found'};}
       if(message.type==='lookup'){const hit=this.threatLists?.lookup(message.host);return {ok:true,listed:hit?{category:hit.category,label:hit.label}:null};}

@@ -92,7 +92,8 @@ test('extension files are local, script-free in markup, and never contact the ne
   for(const file of EXTENSION_FILES)assert.ok(fs.existsSync(path.join(DIR,file)),file);
   for(const browser of ['chromium','firefox']){
     const manifest=extensionManifest(browser,'1.2.3');
-    assert.equal(manifest.host_permissions,undefined,'no website access is requested');
+    assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
+    assert.deepEqual(manifest.content_scripts.map(script=>script.matches),[['https://www.youtube.com/*']],'only YouTube pages get a page script');
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
     for(const icon of Object.values(manifest.icons))assert.ok(EXTENSION_FILES.includes(icon),icon);
     for(const script of manifest.background.scripts||[manifest.background.service_worker])assert.ok(EXTENSION_FILES.includes(script),script);
@@ -201,7 +202,8 @@ test('protection lists sync into browser rules, and a refused rule does not cost
   assert.deepEqual(full.addRules[0].condition.requestDomains,['bad.example','worse.example']);
   assert.deepEqual(rules.at(-1),P.toggleRules({guard:true,protection:true,pausedUntil:0},Date.now()));
   assert.equal(b.store.local.listVersion,'v1');assert.equal(b.store.local.listTotal,3);assert.equal(b.store.local.status,'connected');
-  assert.ok(b.of('menu').length===2&&b.of('alarm').some(call=>call[0]==='alarm'&&call[1]==='ravenshelf-sync'));
+  assert.deepEqual(b.of('menu').map(call=>call[1]),['ravenshelf-link','ravenshelf-page','ravenshelf-youtube']);
+  assert.ok(b.of('alarm').some(call=>call[0]==='alarm'&&call[1]==='ravenshelf-sync'));
   const before=b.of('native').length;
   b.api.alarms.onAlarm.emit({name:'ravenshelf-sync'});await tick(40);
   assert.deepEqual(b.of('native').slice(before).map(call=>call[1].type),['hello'],'an unchanged list version is not downloaded again');
@@ -344,4 +346,55 @@ test('while Ravenshelf is still fetching its lists, the extension looks again so
   const before=b.of('native').length;
   b.api.alarms.onAlarm.emit({name:'ravenshelf-sync-soon'});await tick(40);
   assert.equal(b.of('native')[before][1].type,'hello','the retry checks in with Ravenshelf again');
+});
+
+// ---- YouTube ----
+const VIDEO='aqz-KE-bpKQ',CANONICAL=`https://www.youtube.com/watch?v=${VIDEO}`;
+const fromYouTube=(b,msg,{url=`https://www.youtube.com/watch?v=${VIDEO}&t=5`,frameId=0,tab={id:5,incognito:false}}={})=>new Promise(resolve=>{
+  const handled=b.api.runtime.onMessage.emit(msg,{id:'self',url,tab,frameId},value=>resolve(own(value)))[0];
+  if(handled!==true)resolve(undefined);
+});
+test('right-clicking a YouTube video or link sends only the canonical address, with the quality chosen in Ravenshelf',async()=>{
+  const b=fakeBrowser({native:message=>message.type==='media'?{ok:true,action:'queued'}:{ok:true,action:'take',id:'c1'}});
+  const click=(info,tab={id:1,incognito:false})=>b.api.contextMenus.onClicked.emit(info,tab);
+  click({menuItemId:'ravenshelf-youtube',pageUrl:`https://www.youtube.com/watch?v=${VIDEO}&list=PL1&index=3`});await tick();
+  click({menuItemId:'ravenshelf-link',linkUrl:`https://youtu.be/${VIDEO}?si=track`,pageUrl:'https://news.example/article'});await tick();
+  click({menuItemId:'ravenshelf-link',linkUrl:'https://cdn.example/file.zip',pageUrl:'https://news.example/article'});await tick();
+  const sent=b.of('native').map(call=>call[1]);
+  assert.deepEqual(sent.slice(0,2),[{v:1,type:'media',url:CANONICAL,quality:'default'},{v:1,type:'media',url:CANONICAL,quality:'default'}]);
+  assert.equal(sent[2].type,'send','other links are files, as before');
+  assert.equal(b.of('notify').filter(call=>call[1]==='Downloading in Ravenshelf').length,1,'notifications are rate limited per kind');
+  for(const message of sent.slice(0,2))assert.doesNotThrow(()=>protocol.validateRequest(message),'the app accepts what the extension sends');
+  click({menuItemId:'ravenshelf-youtube',pageUrl:`https://www.youtube.com/shorts/${VIDEO}`},{id:2,incognito:true});await tick();
+  assert.equal(b.of('native').length,3,'private windows send nothing');
+});
+
+test('the YouTube player button is answered only for Ravenshelf’s own script in YouTube’s top frame',async()=>{
+  let answer={ok:true,action:'setup'};
+  const b=fakeBrowser({native:message=>message.type==='media'?answer:{ok:false}});
+  assert.deepEqual(await fromYouTube(b,{cmd:'youtube',quality:'720',url:`https://www.youtube.com/watch?v=${VIDEO}&t=5`}),{ok:true,action:'setup'});
+  assert.deepEqual(b.of('native').map(call=>call[1]),[{v:1,type:'media',url:CANONICAL,quality:'720'}]);
+  assert.equal(b.of('notify').length,0,'the button shows its own message in the player');
+  answer={ok:true,action:'queued'};
+  assert.deepEqual(await fromYouTube(b,{cmd:'youtube',quality:'audio-mp3',url:'javascript:alert(1)'}),{ok:true,action:'queued'},'a bad address falls back to the page’s own');
+  assert.equal(b.of('native').at(-1)[1].url,CANONICAL);
+  for(const msg of [{cmd:'youtube',quality:'default'},{cmd:'youtube',quality:'8k'},{cmd:'set',key:'capture',value:false},{cmd:'sendPage',url:'https://fuckingfast.co/x'}])
+    assert.deepEqual(await fromYouTube(b,msg),{ok:false,error:'invalid'},JSON.stringify(msg));
+  assert.equal(b.store.local.capture,undefined,'a page script cannot change settings');
+  assert.equal(await fromYouTube(b,{cmd:'youtube',quality:'720'},{frameId:3}),undefined,'frames inside the page are ignored');
+  assert.equal(await fromYouTube(b,{cmd:'youtube',quality:'720'},{url:'https://evil.example/watch?v=aqz-KE-bpKQ'}),undefined);
+  assert.equal(await fromYouTube(b,{cmd:'youtube',quality:'720'},{url:'https://m.youtube.com/watch?v=aqz-KE-bpKQ'}),undefined);
+  assert.equal(await fromYouTube(b,{cmd:'youtube',quality:'720'},{tab:null}),undefined,'only a page in a tab');
+  assert.deepEqual(await fromYouTube(b,{cmd:'youtube',quality:'720'},{tab:{id:9,incognito:true}}),{ok:false,error:'private'});
+  assert.equal(b.of('native').length,2);
+  const off=await b.message({cmd:'set',key:'youtube',value:false});
+  assert.equal(off.state.youtube,false);assert.equal(b.store.local.youtube,false);
+});
+
+test('the YouTube script uses only safe page APIs and acts only on real clicks',()=>{
+  const source=read('youtube.js');
+  assert.match(source,/event\.isTrusted/);assert.match(source,/sendMessage\(\{ cmd: 'youtube'/);
+  assert.doesNotMatch(source,/sendNativeMessage|storage\.local\.set|chrome\.tabs|location\.(?:assign|replace)|\.href\s*=/);
+  assert.doesNotMatch(read('youtube.css'),/@import|url\(/,'the stylesheet loads nothing');
+  for(const choice of P.PLAYER_CHOICES)assert.ok(P.MEDIA_QUALITIES.includes(choice.id));
 });

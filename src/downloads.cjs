@@ -11,7 +11,15 @@ const {BandwidthLimiter,normalizeBandwidthLimit}=require('./bandwidth-limiter.cj
 const {HostBackoff,hostKey}=require('./host-backoff.cjs');
 const {DEFAULT_SCHEDULE,normalizeSchedule,scheduleSnapshot}=require('./download-schedule.cjs');
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
+const {MEDIA_FOLDER,QUALITIES,VIDEO_ID,canonicalUrl,cleanTitle}=require('./youtube.cjs');
+const {removeMediaWorkspace}=require('./media-downloads.cjs');
 const APP_VERSION=require('../package.json').version;
+// YouTube jobs waiting or running at once; more are refused until some finish.
+const MAX_MEDIA_JOBS=50;
+const MEDIA_SETUP='Set up YouTube downloads in Settings first, then retry.';
+const MEDIA_INVALID='Only YouTube video addresses can be downloaded this way.';
+const MEDIA_FULL='Too many YouTube downloads are waiting. Let some finish first.';
+const LONE_SURROGATE=/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 // Connection failures that usually pass on their own are retried automatically:
 // at most twice in a row, waiting longer each time. A retry that received more
 // data resets the count, so a long download survives occasional drops.
@@ -36,8 +44,8 @@ function atomicJSON(file,data) {
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null}) {
-    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted;
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null,media=null}) {
+    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted; this.media=media;
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
     const stored=loadJSON(stateFile,{});
@@ -167,11 +175,7 @@ class DownloadManager extends EventEmitter {
       if(link.status!=='ready')continue;
       safeURL(link.url);
       if(this.downloads.some(d=>d.sourceUrl===(link.sourceUrl||link.url)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled'))continue;
-      const original=safeName(link.filename || new URL(link.url).pathname.split('/').pop());
-      const ext=path.extname(original),stem=original.slice(0,original.length-ext.length);
-      let name=original, i=1;
-      const conflicts=candidate=>this.downloads.some(d=>d.folder.toLowerCase()===folder.toLowerCase()&&[d.name.toLowerCase(),(d.name+'.atlas-part').toLowerCase()].some(p=>p===candidate.toLowerCase()||p===(candidate+'.atlas-part').toLowerCase()));
-      while(fs.existsSync(path.join(folder,name))||fs.existsSync(path.join(folder,name+'.atlas-part'))||conflicts(name)) name=`${stem} (${i++})${ext}`;
+      const name=this.availableName(folder,safeName(link.filename || new URL(link.url).pathname.split('/').pop()));
       const requestHeaders={...link.headers};if(link.referer)requestHeaders.Referer=safeURL(link.referer).href;
       const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};
       // A download taken over from a browser keeps the browser's internet-zone mark.
@@ -179,6 +183,28 @@ class DownloadManager extends EventEmitter {
       this.downloads.push(d);added.push(d.id);
     }
     this.save();this.changed();this.pump();return {added:added.length,ids:added};
+  }
+  // A name in the folder that no file, partial file or other queued download uses.
+  availableName(folder,original,ignoreId=null){
+    const ext=path.extname(original),stem=original.slice(0,original.length-ext.length);
+    let name=original, i=1;
+    const conflicts=candidate=>this.downloads.some(d=>d.id!==ignoreId&&d.folder.toLowerCase()===folder.toLowerCase()&&[d.name.toLowerCase(),(d.name+'.atlas-part').toLowerCase()].some(p=>p===candidate.toLowerCase()||p===(candidate+'.atlas-part').toLowerCase()));
+    while(fs.existsSync(path.join(folder,name))||fs.existsSync(path.join(folder,name+'.atlas-part'))||conflicts(name)) name=`${stem} (${i++})${ext}`;
+    return name;
+  }
+  // A YouTube video chosen in the browser extension. It starts under a
+  // placeholder name; the real title arrives when yt-dlp reads the video.
+  addMedia({videoId,quality}={}){
+    if(typeof videoId!=='string'||!VIDEO_ID.test(videoId)||typeof quality!=='string'||!Object.hasOwn(QUALITIES,quality))throw new Error(MEDIA_INVALID);
+    const existing=this.downloads.find(d=>d.kind==='media'&&d.media?.videoId===videoId&&d.media?.quality===quality&&d.status!=='cancelled');
+    if(existing)return {added:0,ids:[existing.id]};
+    if(this.downloads.filter(d=>d.kind==='media'&&['queued','downloading','paused'].includes(d.status)).length>=MAX_MEDIA_JOBS)throw new Error(MEDIA_FULL);
+    const folder=path.join(this.settings.downloadDir,MEDIA_FOLDER);fs.mkdirSync(folder,{recursive:true});
+    const url=canonicalUrl(videoId),name=this.availableName(folder,`YouTube video ${videoId}.${QUALITIES[quality].ext}`);
+    const d={id:crypto.randomUUID(),kind:'media',url,sourceUrl:url,name,gameTitle:MEDIA_FOLDER,folder,status:'queued',received:0,total:0,speed:0,error:'',etag:null,lastModified:null,headers:{},connectionMode:'media',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString(),
+      origin:'browser',markOfTheWeb:true,media:{videoId,quality}};
+    this.downloads.push(d);this.save();this.changed();this.pump();
+    return {added:1,ids:[d.id]};
   }
   action(id,action){
     const d=this.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
@@ -204,7 +230,7 @@ class DownloadManager extends EventEmitter {
         return !policy.limited||![...this.running.keys()].some(id=>hostKey(this.downloads.find(item=>item.id===id).url)===policy.key);
       });if(!d)break;
       const controller=new AbortController();this.running.set(d.id,controller);
-      const task=this.run(d,controller).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'download');}}).finally(()=>{
+      const task=(d.kind==='media'?this.runMedia(d,controller):this.run(d,controller)).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,d.kind==='media'?'media':'download');}}).finally(()=>{
         this.running.delete(d.id);this.taskById.delete(d.id);d.speed=0;d.activeConnections=0;this.save();this.changed();this.pump();
       });
       this.tasks.add(task);this.taskById.set(d.id,task);task.finally(()=>this.tasks.delete(task));
@@ -393,6 +419,59 @@ class DownloadManager extends EventEmitter {
       }
     }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);try{await responseBody?.cancel();}catch{}if(handle)await handle.close();d.activeConnections=0;}
   }
+  // A YouTube job: yt-dlp downloads into the job's private working folder,
+  // then the finished file is published under the video's title.
+  async runMedia(d,controller){
+    d.status='downloading';d.error='';d.speed=0;d.connectionMode='media';d.activeConnections=0;d.connectionNote='';this.changed();
+    const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
+    this.progressMeters.set(d.id,{download:d,rateMeter});
+    const workspace=workspaceFor(path.join(d.folder,d.name+'.atlas-part'),d.id);
+    try{
+      if(!this.media)throw new Error(MEDIA_SETUP);
+      fs.mkdirSync(workspace,{recursive:true});
+      // yt-dlp limits each job separately, so the shared limit is split across the download slots.
+      const limit=Number(this.settings.maxDownloadBytesPerSecond)||0,rateLimit=limit>0?Math.max(1024,Math.floor(limit/Math.max(1,this.settings.concurrency))):0;
+      const result=await this.media.download(d,{signal:controller.signal,workspace,rateLimit,
+        onDetails:details=>this.applyMediaDetails(d,details),
+        onProgress:(received,total)=>{if(d.status!=='downloading')return;d.received=Math.max(0,received);if(total>0)d.total=total;},
+        onNote:note=>{if(d.status==='downloading'&&d.connectionNote!==note){d.connectionNote=String(note||'').slice(0,200);this.changed();}}});
+      controller.signal.throwIfAborted();
+      await this.publishMedia(d,result,workspace,controller.signal);
+    }catch(err){
+      if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'media');}
+    }finally{this.progressMeters.delete(d.id);d.activeConnections=0;}
+  }
+  applyMediaDetails(d,details){
+    const title=cleanTitle(details?.title),ext=['mp4','mkv','webm','m4a','mp3'].includes(details?.ext)?details.ext:QUALITIES[d.media.quality].ext;
+    const formats=(Array.isArray(details?.formats)?details.formats:[]).slice(0,4).map(format=>({id:String(format.id||'').slice(0,40),size:Number.isSafeInteger(format.size)&&format.size>0?format.size:0,audio:format.audio===true}));
+    d.media={...d.media,title,ext,formats,duration:Number.isSafeInteger(details?.duration)?details.duration:0};
+    // At most 150 UTF-16 units (Windows allows 255 per name), without half an emoji.
+    const stem=safeName(title,'YouTube video').slice(0,150).replace(LONE_SURROGATE,'').replace(/[. ]+$/,'')||'YouTube video';
+    d.name=this.availableName(d.folder,`${stem}.${ext}`,d.id);
+    const total=formats.reduce((sum,format)=>sum+format.size,0);if(total)d.total=total;
+    this.save();this.changed();
+  }
+  async publishMedia(d,result,workspace,signal){
+    const stem=path.basename(d.name,path.extname(d.name));
+    // The joined file can come out as MKV instead of MP4; never overwrite a file that appeared meanwhile.
+    if(path.extname(d.name).slice(1).toLowerCase()!==result.ext||fs.existsSync(path.join(d.folder,d.name)))d.name=this.availableName(d.folder,`${stem}.${result.ext}`,d.id);
+    const final=path.join(d.folder,d.name);
+    signal.throwIfAborted();
+    try{await fs.promises.link(result.file,final);}catch(err){
+      if(!['ENOTSUP','EPERM','EXDEV'].includes(err.code))throw err;
+      await fs.promises.copyFile(result.file,final,fs.constants.COPYFILE_EXCL);
+    }
+    await fs.promises.unlink(result.file);
+    d.connectionNote='';
+    await removeMediaWorkspace(workspace).catch(()=>{d.connectionNote='Download complete. Some temporary files could not be removed.';});
+    const size=(await fs.promises.stat(final)).size;d.received=size;d.total=size;
+    if(d.markOfTheWeb&&this.markFile){
+      try{await this.markFile(final);}catch{d.connectionNote='Download complete. Windows’ downloaded-from-the-internet mark could not be added to this file.';}
+    }
+    d.status='completed';d.completedAt=new Date().toISOString();
+    if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
+    try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
+  }
   // Stores a reputation lookup result shown on the download's card.
   setReputation(id,reputation){
     const d=this.downloads.find(x=>x.id===id);if(!d)return false;
@@ -429,4 +508,4 @@ class DownloadManager extends EventEmitter {
   // and resumed on next launch; automatic completion waits for scans beforehand.
   async stop(){this.stopping=true;clearInterval(this.timer);clearInterval(this.progressTimer);clearInterval(this.scheduleTimer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}this.bandwidthLimiter.stop();await Promise.allSettled([...this.tasks]);this.progressMeters.clear();this.save();}
 }
-module.exports={DownloadManager,safeName,atomicJSON,loadJSON};
+module.exports={DownloadManager,safeName,atomicJSON,loadJSON,MAX_MEDIA_JOBS};

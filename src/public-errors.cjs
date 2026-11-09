@@ -1,4 +1,6 @@
 'use strict';
+const {MESSAGES:TOOL_MESSAGES}=require('./media-tools.cjs');
+const {MESSAGES:MEDIA_MESSAGES}=require('./media-downloads.cjs');
 
 // Only developer-authored messages cross the main-process error boundary.
 // Do not redact arbitrary exception text: paths, credentials and response data
@@ -148,7 +150,12 @@ const MESSAGES=new Map([
   'Wait for Ravenshelf to finish checking this link.',
   'Windows protected storage is unavailable, so the VirusTotal key was not saved.',
   'Turn on Connect the browser extension first.',
-  'Ravenshelf could not open the extension folder.'
+  'Ravenshelf could not open the extension folder.',
+  'Only YouTube video addresses can be downloaded this way.',
+  'Too many YouTube downloads are waiting. Let some finish first.',
+  'Choose a YouTube download quality.',
+  // Fixed messages of the YouTube helper programs and yt-dlp runner.
+  ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES)
 ].map(message=>[message,message]));
 // The connector check failing means this copy of the app was altered or damaged.
 const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';
@@ -181,7 +188,13 @@ const ACTIONS=new Map([
   ['updateThreatLists','The protection lists could not be updated. The previous lists are still used.'],
   ['setVirusTotalKey','The VirusTotal key could not be saved.'],
   ['clearVirusTotalKey','The VirusTotal key could not be removed. Try again.'],
-  ['saveVirusTotalSettings','The VirusTotal preference could not be saved. Try again.']
+  ['saveVirusTotalSettings','The VirusTotal preference could not be saved. Try again.'],
+  ['media',MEDIA_MESSAGES.failed],
+  ['setUpYouTube','YouTube downloads could not be set up. Try again later.'],
+  ['cancelYouTubeSetup','The YouTube setup could not be cancelled. Try again.'],
+  ['removeYouTubeTools','The YouTube helper programs could not be removed. Pause YouTube downloads and try again.'],
+  ['saveYouTubeSettings','The YouTube preference could not be saved. Try again.'],
+  ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],
