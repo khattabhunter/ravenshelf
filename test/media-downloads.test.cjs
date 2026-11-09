@@ -66,7 +66,8 @@ test('yt-dlp runs without configuration, plugins, cookies or remote code, for th
     assert.deepEqual(args.slice(0,6),['--ignore-config','--no-plugin-dirs','--no-remote-components','--no-js-runtimes','--js-runtimes',`deno:${path.join(dir,'set','deno.exe')}`]);
     for(const flag of ['--no-cookies','--no-cookies-from-browser','--no-playlist','--no-mtime'])assert.ok(args.includes(flag),flag);
     assert.deepEqual(args.slice(-2),['--',URL_OF],'the address is last, after "--"');
-    assert.equal(args.filter(arg=>arg.includes('youtube.com')).length,1);
+    assert.equal(args.filter(arg=>arg===URL_OF).length,1,'the address appears once');
+    assert.ok(!args.some(arg=>arg!==URL_OF&&/youtube/i.test(arg)),'no other argument names YouTube');
     assert.ok(!args.some(arg=>/^--?(exec|cookies$|cookies=|paths|P$|config-locations|batch-file|load-info-json|plugin-dirs$)/.test(arg)),args.join(' '));
     assert.equal(args[args.indexOf('--ffmpeg-location')+1],path.join(dir,'set'));
     // Only what Windows needs to start, with private temporary folders and no proxy or personal settings.

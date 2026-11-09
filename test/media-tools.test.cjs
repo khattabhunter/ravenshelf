@@ -73,7 +73,8 @@ test('the pinned helper programs come from their publishers’ GitHub releases w
   for(const tool of TOOLS){
     const url=new URL(tool.url);
     assert.equal(url.protocol,'https:');assert.equal(url.hostname,'github.com');
-    assert.match(url.pathname,new RegExp(`^/${tool.source.replace(/^github\.com\//,'')}/releases/download/v?${tool.version.replace(/\./g,'\\.')}/`),tool.id);
+    const repo=tool.source.replace(/^github\.com\//,'');
+    assert.ok([`/${repo}/releases/download/${tool.version}/`,`/${repo}/releases/download/v${tool.version}/`].some(prefix=>url.pathname.startsWith(prefix)),tool.id);
     assert.ok(Number.isSafeInteger(tool.size)&&tool.size>1024*1024,tool.id);assert.match(tool.sha256,/^[a-f0-9]{64}$/);
     for(const file of tool.files){assert.match(file.name,/^[a-z-]+\.exe$/);assert.match(file.sha256,/^[a-f0-9]{64}$/);assert.ok(file.size>1024*1024);}
     if(tool.archive)assert.equal(tool.archive,'zip');else assert.equal(tool.files[0].sha256,tool.sha256,'a program downloaded as is has one hash');
@@ -114,7 +115,7 @@ test('a download that does not match its pinned hash installs nothing',async t=>
   tools.install();await settled(tools);
   assert.equal(tools.snapshot().phase,'error');assert.equal(tools.snapshot().message,MESSAGES.failed);
   assert.deepEqual(fs.readdirSync(dir),[],'neither the set nor the setup folder is left');
-  await assert.rejects(tools.verified(),new RegExp(MESSAGES.setup.replace(/[.]/g,'\\.')));
+  await assert.rejects(tools.verified(),{message:MESSAGES.setup});
 });
 
 test('downloads follow redirects only to GitHub’s release download hosts',async t=>{

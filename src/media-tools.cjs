@@ -53,7 +53,6 @@ const allFiles=tools=>tools.flatMap(tool=>tool.files);
 const totalDownload=tools=>tools.reduce((sum,tool)=>sum+tool.size,0);
 const totalDisk=tools=>allFiles(tools).reduce((sum,file)=>sum+file.size,0);
 function badArchive(){return new Error(MESSAGES.failed);}
-function abortError(){const error=new Error('The operation was aborted.');error.name='AbortError';return error;}
 
 // CRC-32 for zip entries; zlib.crc32 where the runtime has it.
 let crcTable=null;

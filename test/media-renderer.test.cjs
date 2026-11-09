@@ -27,11 +27,6 @@ function fixture(api={}){
   const findButton=(root,label)=>all(root).find(node=>node.tagName==='button'&&node.textContent.trim()===label);
   return {get,lists,context,run,Element,all,findButton,toasts};
 }
-const baseState=(changes={})=>({supported:true,enabled:false,phase:'off',problem:'',appVersion:'0.5.0',
-  folders:{chromium:{path:'C:\\P\\browser-extension\\chromium',version:'0.5.0'},firefox:{path:'C:\\P\\browser-extension\\firefox',version:'0.5.0'}},
-  bridge:{running:false,contact:null,pending:0,captures:[]},
-  threatLists:{loaded:true,updating:false,total:0,version:'',updatedAt:null,sources:[]},
-  virusTotal:{configured:false,domainChecks:true,fileChecks:true,protectedStorage:true,problem:'',usage:{minute:0,day:0,perMinute:4,perDay:500}},...changes});
 const TOOLS=[{name:'yt-dlp',version:'2026.10.26',license:'Unlicense',source:'github.com/yt-dlp/yt-dlp'},{name:'Deno',version:'2.9.8',license:'MIT',source:'github.com/denoland/deno'},{name:'FFmpeg',version:'8.1.2',license:'GPL-3.0',source:'github.com/GyanD/codexffmpeg'}];
 const QUALITIES=[{id:'best',label:'Best quality'},{id:'1080',label:'1080p'},{id:'720',label:'720p'},{id:'480',label:'480p'},{id:'audio-m4a',label:'Audio (M4A)'},{id:'audio-mp3',label:'Audio (MP3)'}];
 const mediaState=(tools={},changes={})=>({supported:true,quality:'1080',requests:0,waiting:[],qualities:QUALITIES,
