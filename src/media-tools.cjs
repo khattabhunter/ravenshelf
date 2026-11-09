@@ -46,6 +46,16 @@ const TOOLS=Object.freeze([
 const CDN=new Set(['release-assets.githubusercontent.com','objects.githubusercontent.com','github-releases.githubusercontent.com']);
 const SET_NAME=/^tools-[a-f0-9]{16}$/,STAGING_NAME=/^\.staging-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MARKER='installed.json',STALL_MS=60000,SPACE_MARGIN=64*1024*1024,MAX_CENTRAL_DIRECTORY=16*1024*1024;
+// Downloads arrive in 2 MB parts over up to 8 connections, as in Ravenshelf's
+// own downloads: on some connections a single link to GitHub's file servers
+// stays at a few KB/s while others reach MB/s. A connection that runs under
+// 256 KB/s and at a quarter of the speed of the best one is dropped after
+// 4 seconds and its part asked for again on a fresh connection (up to 4
+// times per part). A part with no data for 20 seconds is retried; near the
+// end, a part still running after 6 seconds gets one extra connection and the
+// first copy to arrive is kept. The whole file is checked afterwards.
+const PART_SIZE=2*1024*1024,CONNECTIONS=8,PART_STALL_MS=20000,RACE_AFTER_MS=6000,PART_TRIES=6,RETRY_DELAY_MS=500;
+const SLOW_AFTER_MS=4000,SLOW_RATE=256*1024,SLOW_RESTARTS=4;
 const ROLES=['ytDlp','deno','ffmpeg','ffprobe'];
 
 const setName=tools=>'tools-'+crypto.createHash('sha256').update(JSON.stringify(tools)).digest('hex').slice(0,16);
@@ -143,13 +153,13 @@ async function hashFile(file){
 }
 // GitHub release downloads: the pinned address on github.com, then GitHub's
 // release download hosts only.
-async function toolFetch(url,{fetcher,signal}){
+async function toolFetch(url,{fetcher,signal,headers={}}){
   let current=new URL(url);
   for(let redirects=0;redirects<6;redirects++){
     if(current.protocol!=='https:'||current.username||current.password||current.port)throw new Error(MESSAGES.failed);
     const allowed=(redirects===0&&current.href===url&&current.hostname==='github.com')||(redirects>0&&CDN.has(current.hostname));
     if(!allowed)throw new Error(MESSAGES.failed);
-    const response=await fetcher(current.href,{redirect:'manual',timeoutMs:0,signal,headers:{Accept:'application/octet-stream','Accept-Encoding':'identity'}});
+    const response=await fetcher(current.href,{redirect:'manual',timeoutMs:0,http1:true,signal,headers:{Accept:'application/octet-stream','Accept-Encoding':'identity',...headers}});
     if(![301,302,303,307,308].includes(response.status))return response;
     const location=response.headers.get('location');await response.body?.cancel();
     if(!location)throw new Error(MESSAGES.failed);
@@ -157,6 +167,28 @@ async function toolFetch(url,{fetcher,signal}){
   }
   throw new Error(MESSAGES.failed);
 }
+async function writeAt(handle,data,position){
+  let offset=0;
+  while(offset<data.byteLength){const {bytesWritten}=await handle.write(data,offset,data.byteLength-offset,position+offset);if(!bytesWritten)throw new Error(MESSAGES.failed);offset+=bytesWritten;}
+}
+// Problems that another try can fix: the connection, a busy or slow server.
+function retryable(error){error.retry=true;return error;}
+function partAnswer(response){return [403,408,425,429,500,502,503,504].includes(response.status);}
+async function hashHandle(handle,size){
+  const hash=crypto.createHash('sha256'),buffer=Buffer.allocUnsafe(1024*1024);let position=0,head=Buffer.alloc(0);
+  while(position<size){
+    const {bytesRead}=await handle.read(buffer,0,Math.min(buffer.length,size-position),position);
+    if(!bytesRead)throw new Error(MESSAGES.failed);
+    if(head.length<4)head=Buffer.concat([head,buffer.subarray(0,Math.min(4-head.length,bytesRead))]);
+    hash.update(buffer.subarray(0,bytesRead));position+=bytesRead;
+  }
+  return {sha256:hash.digest('hex'),head};
+}
+const wait=(ms,signal)=>new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{signal?.removeEventListener('abort',stop);resolve();},ms);
+  const stop=()=>{clearTimeout(timer);reject(signal.reason);};
+  signal?.addEventListener('abort',stop,{once:true});
+});
 async function removeDirectory(directory){
   let stat;try{stat=await fs.promises.lstat(directory);}catch(error){if(error.code==='ENOENT')return;throw error;}
   // Never follow a link or junction out of the helper folder.
@@ -176,9 +208,11 @@ async function renameDirectory(from,to,{attempts=6,delayMs=250}={}){
 }
 
 class MediaTools{
-  constructor({root,fetcher=safeFetch,bandwidthLimiter=null,onChange=()=>{},onReady=()=>{},platform=process.platform,tools=TOOLS,stallMs=STALL_MS}={}){
+  constructor({root,fetcher=safeFetch,bandwidthLimiter=null,onChange=()=>{},onReady=()=>{},platform=process.platform,tools=TOOLS,stallMs=STALL_MS,
+    partSize=PART_SIZE,connections=CONNECTIONS,partStallMs=PART_STALL_MS,raceAfterMs=RACE_AFTER_MS,partTries=PART_TRIES,retryDelayMs=RETRY_DELAY_MS,
+    slowAfterMs=SLOW_AFTER_MS,slowRate=SLOW_RATE,slowRestarts=SLOW_RESTARTS}={}){
     if(typeof root!=='string'||!path.isAbsolute(root))throw new Error(MESSAGES.unsupported);
-    Object.assign(this,{root,fetcher,bandwidthLimiter,onChange,onReady,platform,tools,stallMs});
+    Object.assign(this,{root,fetcher,bandwidthLimiter,onChange,onReady,platform,tools,stallMs,partSize,connections,partStallMs,raceAfterMs,partTries,retryDelayMs,slowAfterMs,slowRate,slowRestarts});
     this.files=allFiles(tools);this.setId=setName(tools);this.dir=path.join(root,this.setId);
     this.cache=path.join(root,'cache');this.temp=path.join(root,'tmp');
     this.state={phase:'missing',progress:0,message:''};
@@ -263,12 +297,43 @@ class MediaTools{
     await this.removeOthers().catch(()=>{});
   }
   async fetchVerified(tool,file,signal,onBytes){
-    const response=await toolFetch(tool.url,{fetcher:this.fetcher,signal});
-    if(response.status!==200||!response.body){await response.body?.cancel();throw new Error(MESSAGES.failed);}
-    const length=response.headers.get('content-length'),encoding=response.headers.get('content-encoding');
-    if((length!==null&&(!/^\d+$/.test(length)||Number(length)!==tool.size))||(encoding&&encoding!=='identity')){await response.body.cancel();throw new Error(MESSAGES.failed);}
     const opened=await openDownloadFile(file,{create:true});
-    const hash=crypto.createHash('sha256'),reader=response.body.getReader(),magic=[];
+    try{
+      // The first part's answer shows whether the server sends parts; a server
+      // that sends the whole file instead is read as one stream.
+      let first;
+      for(let tries=1;;tries++){
+        try{first=await this.openPart(tool,0,Math.min(tool.size,this.partSize)-1,signal);break;}
+        catch(error){signal.throwIfAborted();if(!error?.retry||tries>=this.partTries)throw new Error(MESSAGES.failed);await wait(this.retryDelayMs*tries,signal);}
+      }
+      if(first.whole)await this.streamWhole(tool,first.response,opened,signal,onBytes);
+      else await this.downloadParts(tool,opened,first.response,signal,onBytes);
+      await opened.handle.sync();await opened.verify(tool.size);
+      const {sha256,head}=await hashHandle(opened.handle,tool.size);
+      const expectedMagic=tool.archive==='zip'?[0x50,0x4b,0x03,0x04]:[0x4d,0x5a];
+      if(sha256!==tool.sha256||expectedMagic.some((byte,index)=>head[index]!==byte))throw new Error(MESSAGES.failed);
+    }finally{await opened.handle.close();}
+  }
+  // One request for bytes start..end through the pinned release address.
+  async openPart(tool,start,end,signal){
+    let response;
+    try{response=await toolFetch(tool.url,{fetcher:this.fetcher,signal,headers:{Range:`bytes=${start}-${end}`}});}
+    catch(error){if(signal.aborted||error?.message===MESSAGES.failed)throw error;throw retryable(new Error(MESSAGES.failed));}
+    const encoding=response.headers.get('content-encoding'),length=response.headers.get('content-length');
+    const lengthIs=size=>length===null||(/^\d+$/.test(length)&&Number(length)===size);
+    if(!encoding||encoding==='identity'){
+      if(response.status===206&&response.body&&lengthIs(end-start+1)){
+        const range=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range')||'');
+        if(range&&Number(range[1])===start&&Number(range[2])===end&&Number(range[3])===tool.size)return {response,whole:false};
+      }else if(response.status===200&&start===0&&response.body&&lengthIs(tool.size))return {response,whole:true};
+    }
+    await response.body?.cancel().catch(()=>{});
+    const error=new Error(MESSAGES.failed);
+    throw partAnswer(response)?retryable(error):error;
+  }
+  // The whole file as one stream, for servers that do not send parts.
+  async streamWhole(tool,response,opened,signal,onBytes){
+    const reader=response.body.getReader();
     let received=0,lastActivity=Date.now(),waiting=false;
     const stall=new AbortController(),watchdog=setInterval(()=>{if(!waiting&&Date.now()-lastActivity>this.stallMs)stall.abort();},Math.min(1000,this.stallMs));
     watchdog.unref?.();
@@ -282,20 +347,149 @@ class MediaTools{
         lastActivity=Date.now();
         if(received+value.byteLength>tool.size)throw new Error(MESSAGES.failed);
         if(this.bandwidthLimiter){waiting=true;try{await this.bandwidthLimiter.consume(value.byteLength,{signal});}finally{waiting=false;lastActivity=Date.now();}}
-        for(const byte of value.subarray(0,Math.max(0,4-magic.length)))magic.push(byte);
-        hash.update(value);
-        let offset=0;while(offset<value.byteLength){const {bytesWritten}=await opened.handle.write(value,offset,value.byteLength-offset,received+offset);if(!bytesWritten)throw new Error(MESSAGES.failed);offset+=bytesWritten;}
+        await writeAt(opened.handle,value,received);
         received+=value.byteLength;onBytes(value.byteLength);
       }
-      const expectedMagic=tool.archive==='zip'?[0x50,0x4b,0x03,0x04]:[0x4d,0x5a];
-      if(received!==tool.size||hash.digest('hex')!==tool.sha256||expectedMagic.some((byte,index)=>magic[index]!==byte))throw new Error(MESSAGES.failed);
-      await opened.handle.sync();await opened.verify(received);
+      if(received!==tool.size)throw new Error(MESSAGES.failed);
     }finally{
       clearInterval(watchdog);signal.removeEventListener('abort',cancelRead);
       try{await reader.cancel();}catch{}
       try{reader.releaseLock();}catch{}
-      await opened.handle.close();
     }
+  }
+  // Reads exactly one part into memory; no data for partStallMs ends the try.
+  async readPart(response,length,signal,onData){
+    const data=Buffer.alloc(length),reader=response.body.getReader();
+    let received=0,timer=null,stalled=false;
+    const cancel=()=>{reader.cancel().catch(()=>{});};
+    const arm=()=>{clearTimeout(timer);timer=setTimeout(()=>{stalled=true;cancel();},this.partStallMs);timer.unref?.();};
+    signal.addEventListener('abort',cancel,{once:true});
+    try{
+      arm();
+      for(;;){
+        const {done,value}=await reader.read();
+        if(signal.aborted||stalled)throw retryable(new Error(MESSAGES.failed));
+        if(done)break;
+        if(received+value.byteLength>length)throw new Error(MESSAGES.failed);
+        clearTimeout(timer);
+        if(this.bandwidthLimiter)await this.bandwidthLimiter.consume(value.byteLength,{signal});
+        data.set(value,received);received+=value.byteLength;onData(received);
+        arm();
+      }
+      if(received!==length)throw retryable(new Error(MESSAGES.failed));
+      return data;
+    }catch(error){
+      if(error?.message===MESSAGES.failed)throw error;
+      throw retryable(new Error(MESSAGES.failed));
+    }finally{
+      clearTimeout(timer);signal.removeEventListener('abort',cancel);
+      try{await reader.cancel();}catch{}
+      try{reader.releaseLock();}catch{}
+    }
+  }
+  async downloadParts(tool,opened,firstResponse,signal,onBytes){
+    const parts=[];
+    for(let start=0;start<tool.size;start+=this.partSize){
+      const end=Math.min(tool.size,start+this.partSize)-1;
+      parts.push({start,end,length:end-start+1,done:false,writing:false,raced:false,tries:0,restarts:0,attempts:new Set(),received:0,startedAt:0});
+    }
+    const pending=parts.slice(1);
+    let reported=0,lastActivity=Date.now(),closed=false,timer=null;
+    const report=()=>{
+      let total=0;for(const part of parts)total+=part.done?part.length:Math.min(part.length,part.received);
+      if(total>reported){onBytes(total-reported);reported=total;}
+    };
+    await new Promise((resolve,reject)=>{
+      const finish=error=>{
+        if(closed)return;
+        closed=true;clearInterval(timer);signal.removeEventListener('abort',onAbort);
+        for(const part of parts)for(const attempt of part.attempts)attempt.controller.abort();
+        if(error)reject(error);else resolve();
+      };
+      const onAbort=()=>finish(signal.reason instanceof Error?signal.reason:new Error(MESSAGES.cancelled));
+      const active=()=>parts.reduce((count,part)=>count+part.attempts.size,0);
+      const fill=()=>{
+        if(closed)return;
+        if(parts.every(part=>part.done)){finish();return;}
+        while(active()<this.connections){
+          let part=pending.shift();
+          if(!part){
+            const now=Date.now();
+            part=parts.filter(item=>!item.done&&!item.writing&&!item.raced&&item.attempts.size===1&&now-item.startedAt>=this.raceAfterMs)
+              .sort((a,b)=>a.received/a.length-b.received/b.length)[0];
+            if(!part)break;
+            part.raced=true;
+          }
+          begin(part);
+        }
+      };
+      // Drops connections far slower than the best one; their parts start
+      // again at once on another connection. If every connection is slow,
+      // nothing is dropped.
+      const dropSlow=()=>{
+        const now=Date.now(),rate=attempt=>attempt.received/Math.max(0.001,(now-attempt.startedAt)/1000);
+        let best=0;for(const part of parts)for(const attempt of part.attempts)if(now-attempt.startedAt>=this.slowAfterMs/4)best=Math.max(best,rate(attempt));
+        for(const part of parts){
+          if(part.done||part.writing||part.attempts.size!==1||part.restarts>=this.slowRestarts)continue;
+          const [attempt]=part.attempts,speed=rate(attempt);
+          if(now-attempt.startedAt<this.slowAfterMs||speed>=this.slowRate||speed*4>=best||part.length-attempt.received<=speed*2)continue;
+          part.restarts++;attempt.slow=true;attempt.controller.abort();
+        }
+      };
+      const begin=(part,given=null)=>{
+        const attempt={controller:new AbortController(),startedAt:Date.now(),received:0,slow:false};
+        if(!part.attempts.size)part.startedAt=attempt.startedAt;
+        part.attempts.add(attempt);
+        (async()=>{
+          let failure=null;
+          try{
+            let response=given;
+            if(!response){
+              const answer=await this.openPart(tool,part.start,part.end,attempt.controller.signal);
+              if(answer.whole){await answer.response.body?.cancel().catch(()=>{});throw new Error(MESSAGES.failed);}
+              response=answer.response;
+            }
+            const data=await this.readPart(response,part.length,attempt.controller.signal,received=>{
+              lastActivity=Date.now();attempt.received=received;
+              if(received>part.received)part.received=received;
+              report();
+            });
+            if(closed||part.done||part.writing)return;
+            part.writing=true;
+            await writeAt(opened.handle,data,part.start);
+            part.done=true;part.writing=false;lastActivity=Date.now();
+            for(const other of part.attempts)if(other!==attempt)other.controller.abort();
+            report();
+          }catch(error){failure=error;}
+          part.attempts.delete(attempt);
+          if(closed)return;
+          // A failed write is a disk problem, not a network one.
+          if(part.writing&&!part.done){finish(failure||new Error(MESSAGES.failed));return;}
+          if(failure&&!part.done){
+            if(attempt.slow){if(!part.attempts.size){part.received=0;pending.unshift(part);}}
+            else if(!attempt.controller.signal.aborted){
+              if(!failure.retry){finish(new Error(MESSAGES.failed));return;}
+              if(!part.attempts.size){
+                part.tries++;part.received=0;
+                if(part.tries>=this.partTries){finish(new Error(MESSAGES.failed));return;}
+                const again=setTimeout(()=>{if(!closed){pending.unshift(part);fill();}},Math.min(5000,this.retryDelayMs*part.tries));
+                again.unref?.();
+              }
+            }
+          }
+          fill();
+        })();
+      };
+      signal.addEventListener('abort',onAbort,{once:true});
+      if(signal.aborted){onAbort();return;}
+      timer=setInterval(()=>{
+        if(Date.now()-lastActivity>this.stallMs){finish(new Error(MESSAGES.failed));return;}
+        dropSlow();fill();
+      },Math.min(1000,this.stallMs,this.slowAfterMs));
+      timer.unref?.();
+      begin(parts[0],firstResponse);
+      fill();
+    });
   }
   // Older pinned sets and abandoned setup folders. Only folders with
   // Ravenshelf's own names are touched. Runs only when no setup is in

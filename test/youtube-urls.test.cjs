@@ -64,6 +64,14 @@ test('quality choices match between the player menu, the protocol and the downlo
   }
   assert.equal(youtube.QUALITIES['audio-mp3'].ext,'mp3');assert.equal(youtube.QUALITIES['audio-m4a'].ext,'m4a');
   assert.ok(youtube.QUALITIES['1080'].args.join(' ').includes('res:1080'));assert.ok(youtube.QUALITIES['720'].args.join(' ').includes('res:720'));
+  const pick=id=>{const args=youtube.QUALITIES[id].args;return args[args.indexOf('-f')+1];};
+  for(const id of ['best','1080','720','480']){
+    // HLS audio (format 234) downloads in parts like HLS video; the AAC file is the fallback.
+    assert.equal(pick(id),'bv*+234/bv*+ba/b',id);
+    const args=youtube.QUALITIES[id].args;
+    assert.deepEqual(args.slice(args.indexOf('--merge-output-format'),args.indexOf('--merge-output-format')+2),['--merge-output-format','mp4'],`${id}: joined as MP4 even though yt-dlp can't read the HLS audio's codec`);
+  }
+  assert.equal(pick('audio-m4a'),'234/ba[ext=m4a]/ba/b');assert.equal(pick('audio-mp3'),'234/ba/b');
 });
 
 test('the extension can send a YouTube video, and only its ID and quality reach the app',()=>{

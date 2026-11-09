@@ -267,7 +267,7 @@ class DownloadManager extends EventEmitter {
       if(d.headersNeedRefresh){await refreshHeaders();signal.throwIfAborted();}
       const originalUrl=d.url;
       this.hostBackoff.assertAvailable(originalUrl);
-      let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
+      let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0,http1:true});
       lastActivity=Date.now();
       if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url){
         await res.body?.cancel();
@@ -276,7 +276,7 @@ class DownloadManager extends EventEmitter {
         }
         signal.throwIfAborted();
         this.hostBackoff.assertAvailable(d.url);
-        res=await this.fetcher(d.url,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0});
+        res=await this.fetcher(d.url,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0,http1:true});
       }
       if([429,503].includes(res.status)){
         const failure=this.hostBackoff.failure(d.url,res);try{await res.body?.cancel();}catch{}

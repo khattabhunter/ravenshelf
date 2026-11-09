@@ -7,21 +7,24 @@ const VIDEO_ID=/^[A-Za-z0-9_-]{11}$/;
 const YOUTUBE_HOSTS=new Set(['www.youtube.com','youtube.com','m.youtube.com']);
 const MEDIA_FOLDER='YouTube';
 // Video choices prefer the most widely playable codecs (H.264 video, AAC audio)
-// at the chosen size. A video that YouTube offers larger only in VP9 or AV1
-// still downloads at the best size, joined as MKV when MP4 cannot hold it.
-// Between video streams of the same size and codec, HLS (m3u8) streams come
-// first: YouTube slows its single-file video streams to a few hundred KB/s,
-// while HLS streams arrive in parts that download several at a time. The audio
-// still comes from YouTube's AAC files (those arrive at full speed), which
-// keeps H.264 videos in MP4.
-const videoArgs=limit=>Object.freeze(['-f','bv*+ba/b','-S',`res${limit},fps,vcodec:h264,acodec:m4a,proto:m3u8`,'--merge-output-format','mp4/mkv']);
+// at the chosen size; a video that YouTube offers larger only in VP9 or AV1
+// still downloads at the best size. YouTube can slow its single-file streams,
+// audio included, to a few hundred KB/s or less, while its HLS (m3u8) streams
+// arrive in parts that download several at a time. So HLS video comes first
+// between streams of the same size and codec, and the audio is YouTube's HLS
+// AAC stream (format 234) when there is one, else its AAC file; the audio-only
+// choices start from the same HLS stream. yt-dlp can't read the codec of the
+// HLS audio from YouTube's playlist and would otherwise choose MKV, so videos
+// are joined as MP4, which holds H.264, VP9 and AV1 video with AAC audio.
+const HLS_AUDIO='234';
+const videoArgs=limit=>Object.freeze(['-f',`bv*+${HLS_AUDIO}/bv*+ba/b`,'-S',`res${limit},fps,vcodec:h264,acodec:m4a,proto:m3u8`,'--merge-output-format','mp4']);
 const QUALITIES=Object.freeze({
   best:Object.freeze({label:'Best quality',ext:'mp4',audio:false,args:videoArgs('')}),
   '1080':Object.freeze({label:'1080p',ext:'mp4',audio:false,args:videoArgs(':1080')}),
   '720':Object.freeze({label:'720p',ext:'mp4',audio:false,args:videoArgs(':720')}),
   '480':Object.freeze({label:'480p',ext:'mp4',audio:false,args:videoArgs(':480')}),
-  'audio-m4a':Object.freeze({label:'Audio (M4A)',ext:'m4a',audio:true,args:Object.freeze(['-f','ba[ext=m4a]/ba/b','-x','--audio-format','m4a','--embed-metadata'])}),
-  'audio-mp3':Object.freeze({label:'Audio (MP3)',ext:'mp3',audio:true,args:Object.freeze(['-f','ba/b','-x','--audio-format','mp3','--audio-quality','0','--embed-metadata'])})
+  'audio-m4a':Object.freeze({label:'Audio (M4A)',ext:'m4a',audio:true,args:Object.freeze(['-f',`${HLS_AUDIO}/ba[ext=m4a]/ba/b`,'-x','--audio-format','m4a','--embed-metadata'])}),
+  'audio-mp3':Object.freeze({label:'Audio (MP3)',ext:'mp3',audio:true,args:Object.freeze(['-f',`${HLS_AUDIO}/ba/b`,'-x','--audio-format','mp3','--audio-quality','0','--embed-metadata'])})
 });
 // Listed in menu order (an object would put the numeric keys first).
 const QUALITY_IDS=Object.freeze(['best','1080','720','480','audio-m4a','audio-mp3']);

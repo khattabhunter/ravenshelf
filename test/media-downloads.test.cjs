@@ -209,7 +209,7 @@ test('progress adds up the video and audio parts, and only known numbers are rea
   assert.deepEqual(track({downloaded:30,total:60,format:'140'}),{received:130,total:160});
   const open=media.downloadArgs({deno:'d',dir:'t',cache:'c'},ID,'720',0);
   assert.equal(open.includes('--limit-rate'),false);
-  assert.deepEqual(open.slice(open.indexOf('--concurrent-fragments'),open.indexOf('--concurrent-fragments')+2),['--concurrent-fragments','4'],'without a limit, stream parts download four at a time');
+  assert.deepEqual(open.slice(open.indexOf('--concurrent-fragments'),open.indexOf('--concurrent-fragments')+2),['--concurrent-fragments','8'],'without a limit, stream parts download eight at a time');
   assert.ok(open.join(' ').includes('res:720,fps,vcodec:h264,acodec:m4a,proto:m3u8'),'HLS video streams are preferred between equal choices');
   const args=media.downloadArgs({deno:'d',dir:'t',cache:'c'},ID,'720',10);
   assert.deepEqual(args.slice(args.indexOf('--limit-rate'),args.indexOf('--limit-rate')+2),['--limit-rate','1024'],'a tiny limit is raised to 1 KB/s');

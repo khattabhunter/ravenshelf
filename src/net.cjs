@@ -32,7 +32,7 @@ function safeURL(value) {
   return u;
 }
 // Validate the actual addresses used by the socket, preventing DNS rebinding into local services.
-const dispatcher = new Agent({ connect: { timeout:20000, lookup(host,options,callback) {
+const connect = { timeout:20000, lookup(host,options,callback) {
   dns.lookup(host,{all:true,verbatim:true},(err,addresses)=>{
     if(err) return callback(err);
     if(!addresses.length || addresses.some(x=>!isPublicIP(x.address))) return callback(new Error('Private network destination blocked.'));
@@ -40,17 +40,21 @@ const dispatcher = new Agent({ connect: { timeout:20000, lookup(host,options,cal
     if(!eligible.length) return callback(new Error('No compatible public address.'));
     if(options.all) callback(null,eligible); else callback(null,eligible[0].address,eligible[0].family);
   });
-}}});
+}};
+const dispatcher = new Agent({ connect });
+// File transfers use HTTP/1.1. Over HTTP/2 every request to a host shares one
+// connection, so split downloads would all ride the same, possibly slow, link.
+const fileDispatcher = new Agent({ connect, allowH2:false });
 async function safeFetch(value, options={}) {
   let url=safeURL(String(value));
   const originalUrl=url.href;
-  let {timeoutMs=30000,maxBytes, ...init}=options;
+  let {timeoutMs=30000,maxBytes,http1=false, ...init}=options;
   const signal = timeoutMs>0 ? (init.signal ? AbortSignal.any([init.signal,AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)) : init.signal;
   const headers = new Headers(init.headers || {});
   if(!headers.has('User-Agent')) headers.set('User-Agent','Mozilla/5.0 Ravenshelf/0.3');
   let method=init.method || 'GET', body=init.body;
   for(let n=0;n<8;n++) {
-    const res=await fetch(url.href,{...init,method,body,headers,signal,dispatcher,redirect:'manual'});
+    const res=await fetch(url.href,{...init,method,body,headers,signal,dispatcher:http1?fileDispatcher:dispatcher,redirect:'manual'});
     if(![301,302,303,307,308].includes(res.status) || options.redirect==='manual') return res;
     const location=res.headers.get('location');
     await res.body?.cancel();
