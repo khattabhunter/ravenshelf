@@ -84,10 +84,12 @@ function baseArgs(paths){
     '--no-playlist','--no-mtime','--encoding','utf-8','--color','never','--socket-timeout','30','--retries','5','--fragment-retries','5'];
 }
 function probeArgs(paths,videoId,quality){return [...baseArgs(paths),'-J',...QUALITIES[quality].args,'--',canonicalUrl(videoId)];}
-// Parts of HLS streams download four at a time. yt-dlp applies a speed limit to
-// each part on its own, so with a limit the parts download one at a time and
-// the limit holds for the whole download.
-const PARALLEL_PARTS='4';
+// Parts of HLS streams download eight at a time. In trials on a fast home
+// connection, eight beat four on videos that YouTube's nearby servers didn't
+// have yet, and sixteen was never faster than eight. yt-dlp applies a speed
+// limit to each part on its own, so with a limit the parts download one at a
+// time and the limit holds for the whole download.
+const PARALLEL_PARTS='8';
 function downloadArgs(paths,videoId,quality,rateLimit=0){
   return [...baseArgs(paths),'--newline','--progress',
     '--progress-template',`download:${PROGRESS} %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(info.format_id)s`,
