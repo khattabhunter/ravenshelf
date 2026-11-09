@@ -70,7 +70,8 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
   register('removeDownloads',({ids,mode,token}={})=>track(async()=>{
     const selected=idsFrom(ids);if(!['files','list'].includes(mode))throw new Error('Choose delete files or remove from list.');
     if(completion?.snapshot().phase==='executing')throw new Error('The completion action has started. Wait before changing the queue.');
-    completion?.cancel('Queue cleanup cancelled the completion action.');
+    // Only an armed finish action is cancelled; with none set there is nothing to report.
+    if(completion&&completion.snapshot().mode!=='none')completion.cancel('Queue cleanup cancelled the completion action.');
     try{
       await manager.pauseAndWait(selected);
       if(mode==='list'){const result=manager.removeFromList(selected);return {removedIds:result.ids,errors:[],bytesFreed:0};}

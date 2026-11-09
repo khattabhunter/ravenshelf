@@ -141,7 +141,7 @@ function bridgeFixture(t,options={}){
   const bridge=new BrowserBridge({hostDir:dir,threatLists:lists(options.listed||{'bad.example':'malware'}),appVersion:'0.5.0',
     inspect:options.inspect||(async(url,{lookupHost,referer})=>({status:'ready',url,sourceUrl:url,filename:new URL(url).pathname.split('/').pop()||'file',size:10,chain:[{url,host:new URL(url).hostname,listed:lookupHost(new URL(url).hostname)}],sniffed:'zip',referer})),
     resolveProvider:options.resolveProvider||null,virusTotal:options.virusTotal||null,now:options.now||Date.now,
-    queueDownload:async entry=>{events.queued.push(entry);return {added:1};},openExternal:async url=>{events.opened.push(url);},
+    queueDownload:async entry=>{events.queued.push(entry);return options.queueResult||{added:1};},openExternal:async url=>{events.opened.push(url);},
     reveal:()=>{events.revealed++;},notify:note=>events.notes.push(note),setReputation:(id,value)=>events.reputation.push([id,value])});
   t.after(()=>bridge.stop());
   return {bridge,dir,events};
@@ -217,6 +217,19 @@ test('a normal download is taken, checked, and queued only when the user chooses
   assert.equal(bridge.snapshot().captures[0].status,'queued');
   await assert.rejects(bridge.action({id:decision.id,action:'download'}),/cannot download/);
   await assert.rejects(bridge.action({id:'missing',action:'download'}),/no longer available/);
+});
+
+test('downloading a link the queue already holds says so instead of claiming it was added',async t=>{
+  const {bridge,events}=bridgeFixture(t,{queueResult:{added:0,ids:[]}});
+  const decision=bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',url:'https://cdn.example/again.zip',filename:'again.zip'}));
+  assert.equal(decision.action,'take');
+  await until(()=>bridge.snapshot().captures[0].status==='ready','inspection');
+  const result=await bridge.action({id:decision.id,action:'download'});
+  assert.equal(result.added,0);assert.equal(events.queued.length,1);
+  const capture=bridge.snapshot().captures[0];
+  assert.equal(capture.status,'duplicate');assert.match(capture.message,/already in your Downloads list/);
+  assert.equal(bridge.snapshot().pending,0,'a duplicate no longer waits for a decision');
+  await assert.rejects(bridge.action({id:decision.id,action:'download'}),/cannot download/);
 });
 
 test('risky files need explicit confirmation and blocked ones cannot be forced',async t=>{

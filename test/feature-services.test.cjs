@@ -16,12 +16,12 @@ function load(file,replacements={},extra=''){
   const module={exports:{}},native=createRequire(file),requireFn=name=>Object.prototype.hasOwnProperty.call(replacements,name)?replacements[name]:native(name);
   vm.compileFunction(fs.readFileSync(file,'utf8')+extra,['require','module','exports','__filename','__dirname'],{filename:file})(requireFn,module,module.exports,file,path.dirname(file));return module.exports;
 }
-function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null,Notification,packaged=false}={}){
+function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null,Notification,packaged=false,completionMode='none'}={}){
   const root=fs.mkdtempSync(path.join(base,'case-')),profile=path.join(root,'profile'),folder=path.join(root,'Game');fs.mkdirSync(profile);fs.mkdirSync(folder);
   const manager=new DownloadManager({stateFile:path.join(profile,'library.json'),downloadDir:root,fetcher:async()=>{throw new Error('Network access is not part of feature tests.');}});
   manager.settings={...manager.settings,autoUpdateEnabled:false,clipboardWatchEnabled:false,notificationsEnabled:false,...settings};
   const calls={publish:0,quit:0,metadata:[],getGame:[],prepare:[],spawn:[],events:[],clipboardReads:0},handlers=new Map(),instances={};
-  const completion={phase:'idle',snapshot(){return {phase:this.phase,mode:'none'};},cancel(){this.phase='idle';calls.events.push('completion:cancel');},dispose(){calls.events.push('completion:dispose');}};
+  const completion={phase:'idle',mode:completionMode,snapshot(){return {phase:this.phase,mode:this.mode};},cancel(){this.phase='idle';this.mode='none';calls.events.push('completion:cancel');},dispose(){calls.events.push('completion:dispose');}};
   const appEvents=new Map(),app={isPackaged:packaged,getVersion:()=> '0.4.0',getPath:()=>profile,setPath(){},requestSingleInstanceLock:()=>true,exit(){},on(name,fn){appEvents.set(name,fn);},whenReady:()=>new Promise(()=>{}),quit(){calls.quit++;},setName(){}};
   const frame={url:'atlas://app/index.html'},win={webContents:{mainFrame:frame,send(){}},isDestroyed:()=>false,show(){},focus(){}};
   class FakeUpdater{
@@ -62,6 +62,12 @@ test('Feature defaults preserve saved preferences and clipboard observation rema
 test('List-only removal preserves files and releases locks after the actual manager removes its rows',async t=>{
   const f=fixture(t),download=f.add();const result=await f.handlers.get('removeDownloads')({ids:[download.id],mode:'list'});
   assert.deepEqual(result.removedIds,[download.id]);assert.equal(f.manager.downloads.length,0);assert.equal(f.manager.quiescing.size,0);assert.equal(fs.readFileSync(path.join(f.folder,download.name),'utf8'),'fixture archive');assert.ok(f.calls.publish>0);
+});
+test('Removing downloads cancels a finish action only when one is set',async t=>{
+  const idle=fixture(t),first=idle.add();await idle.handlers.get('removeDownloads')({ids:[first.id],mode:'list'});
+  assert.ok(!idle.calls.events.includes('completion:cancel'),'with no finish action set, nothing is reported as cancelled');
+  const armed=fixture(t,{completionMode:'close'}),second=armed.add();await armed.handlers.get('removeDownloads')({ids:[second.id],mode:'list'});
+  assert.ok(armed.calls.events.includes('completion:cancel'));
 });
 test('File deletion needs a current preview token and retains unrelated files',async t=>{
   const f=fixture(t),download=f.add(),unrelated=path.join(f.folder,'untracked.rar');fs.writeFileSync(unrelated,'keep');

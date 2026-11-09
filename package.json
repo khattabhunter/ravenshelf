@@ -1,6 +1,6 @@
 {
   "name": "atlas-repack-library",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Ravenshelf: a privacy-hardened game catalogue and batch download manager for Windows",
   "author": "Ravenshelf contributors",

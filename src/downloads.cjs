@@ -12,6 +12,12 @@ const {HostBackoff,hostKey}=require('./host-backoff.cjs');
 const {DEFAULT_SCHEDULE,normalizeSchedule,scheduleSnapshot}=require('./download-schedule.cjs');
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
 const APP_VERSION=require('../package.json').version;
+// Connection failures that usually pass on their own are retried automatically:
+// at most twice in a row, waiting longer each time. A retry that received more
+// data resets the count, so a long download survives occasional drops.
+const NETWORK_RETRY_CODES=new Set(['ECONNRESET','ETIMEDOUT','EPIPE','ECONNABORTED','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT']);
+const NETWORK_RETRY_LIMIT=2,NETWORK_RETRY_MS=15000;
+function networkFailure(error){for(let cause=error,depth=0;cause&&depth<4;cause=cause.cause,depth++)if(NETWORK_RETRY_CODES.has(cause.code))return true;return false;}
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
 function safeName(value,fallback='download') {
   let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
@@ -185,7 +191,7 @@ class DownloadManager extends EventEmitter {
     if(['pause','cancel','resume','retry'].includes(action)){delete d.pauseReason;delete d.scheduleRequested;}
     if(action==='pause'&&['queued','downloading'].includes(d.status)){d.status='paused';this.running.get(id)?.abort();}
     else if(action==='cancel'&&!['completed','cancelled'].includes(d.status)){d.status='cancelled';this.running.get(id)?.abort();}
-    else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';d.retryCount=0;}
+    else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';d.retryCount=0;d.networkRetries=0;}
     d.speed=0;if(d.status!=='downloading')d.activeConnections=0;this.save();this.changed();this.pump();return this.state();
   }
   pump(){
@@ -209,7 +215,7 @@ class DownloadManager extends EventEmitter {
     const partial=path.join(d.folder,d.name+'.atlas-part'), final=path.join(d.folder,d.name);
     const workspace=workspaceFor(partial,d.id),connections=Math.min(normalizeConnections(this.settings.connectionsPerFile),this.hostBackoff.policy(d.url).connectionLimit);
     fs.mkdirSync(d.folder,{recursive:true});
-    let offset=0;
+    let offset=0,progressFrom=null;
     let lastActivity=Date.now(),intentionalWaits=0;
     const throttle=async(bytes,signal=controller.signal)=>{
       intentionalWaits++;
@@ -294,7 +300,7 @@ class DownloadManager extends EventEmitter {
       // Only a verified resource validator can authorize a resumed prefix.
       if(d.etag&&!validatorFor(new Headers({etag:d.etag})))d.etag=null;
       if(offset&&!d.etag&&!(d.lastModified&&d.lastModifiedVerified))offset=0;
-      d.received=offset;rateMeter.reset(offset);
+      d.received=offset;rateMeter.reset(offset);progressFrom=offset;
       const saved=readState(workspace);let triedParallel=false;
       if((saved&&!saved.disabled)||(connections>1&&!offset&&d.total>=MIN_PARALLEL_SIZE&&!saved?.disabled)){
         triedParallel=true;if(await parallel())return;
@@ -376,6 +382,13 @@ class DownloadManager extends EventEmitter {
           d.connectionNote='The host is busy. Waiting before retrying with fewer connections.';
           if(failure.automatic!==false&&d.retryCount<=2){d.status='queued';d.error='';}
           else{d.status='error';d.error=publicErrorMessage(failure,'download');}
+        }else if(networkFailure(err)&&!controller.signal.aborted){
+          if(progressFrom!==null&&d.received>progressFrom)d.networkRetries=0;
+          const tries=Math.max(0,Math.min(NETWORK_RETRY_LIMIT,Number(d.networkRetries)||0));
+          if(tries<NETWORK_RETRY_LIMIT){
+            d.networkRetries=tries+1;d.retryAt=this.now()+NETWORK_RETRY_MS*d.networkRetries;d.status='queued';d.error='';
+            d.connectionNote='The connection dropped. Ravenshelf will try again shortly.';
+          }else{d.status='error';d.error=publicErrorMessage(err,'download');}
         }else{d.status='error';d.error=publicErrorMessage(err,'download');}
       }
     }finally{clearInterval(watchdog);this.progressMeters.delete(d.id);try{await responseBody?.cancel();}catch{}if(handle)await handle.close();d.activeConnections=0;}

@@ -8,16 +8,16 @@ const {createBrowserIntegration}=require('../src/browser-integration.cjs');
 const {publicErrorMessage}=require('../src/public-errors.cjs');
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
-function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError=''}={}){
+function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null}={}){
   const profile=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-integration-'));
   t.after(()=>fs.rmSync(profile,{recursive:true,force:true}));
   const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[]};
   const manager={settings:{downloadDir:profile,notificationsEnabled:true,...(enabled?{browserIntegrationEnabled:true}:{})},downloads:[],
     updateSettings(changes){Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){}};
-  const versions={};
+  const versions={...existingVersions};
   const setup={
     exportedVersion:(root,browser)=>versions[browser]||null,
-    exportExtension:async({browser,root,version})=>{events.exported.push(browser);versions[browser]=version;fs.mkdirSync(path.join(root,browser),{recursive:true});return {path:path.join(root,browser)};},
+    exportExtension:async({browser,root,version})=>{if(exportError)throw exportError;events.exported.push(browser);versions[browser]=version;fs.mkdirSync(path.join(root,browser),{recursive:true});return {path:path.join(root,browser)};},
     registerNativeHost:async({hostDir})=>{assert.ok(path.isAbsolute(hostDir));if(registerError)throw registerError;events.registered++;},
     unregisterNativeHost:async()=>{events.unregistered++;}
   };
@@ -63,6 +63,18 @@ test('connecting registers the connector, writes both extension folders and star
   await assert.rejects(f.call('setBrowserIntegration','yes'),/Choose on or off/);
 });
 
+test('after an update, an extension folder that cannot be replaced does not stop the connection',async t=>{
+  const f=fixture(t,{existingVersions:{chromium:'0.4.9',firefox:'0.4.9'},exportError:Object.assign(new Error('EPERM: rename C:\\Users\\Player\\chromium'),{code:'EPERM'})});
+  const on=await f.call('setBrowserIntegration',true);
+  assert.equal(on.phase,'on');assert.equal(on.bridge.running,true);assert.ok(fs.existsSync(f.endpoint),'the connector can still reach Ravenshelf');
+  assert.match(on.problem,/could not be updated/);assert.ok(!on.problem.includes('Player'));assert.equal(on.folders.chromium.version,'0.4.9');
+});
+test('without any extension folder, a failed export still stops setup',async t=>{
+  const f=fixture(t,{exportError:Object.assign(new Error('no space'),{code:'ENOSPC'})});
+  await assert.rejects(f.call('setBrowserIntegration',true));
+  const state=f.integration.snapshot();
+  assert.equal(state.phase,'error');assert.equal(state.bridge.running,false);assert.equal(fs.existsSync(f.endpoint),false);
+});
 test('a failed setup leaves the switch off and explains the problem',async t=>{
   const f=fixture(t,{registerError:Object.assign(new Error('reg.exe failed at C:\\Users\\Player\\x'),{code:'EPERM'})});
   await assert.rejects(f.call('setBrowserIntegration',true));

@@ -61,7 +61,7 @@ Game details show system requirements when the source provides them. Where a ver
 3. Read each result. **Ready** means a file response was found. **Needs a browser step** means the host requires interaction. **Not found** means the host explicitly reported a missing or deleted file. Other failures remain **Not verified** with an explanation.
 4. Read the archive-set warnings. Recognizable numbered archives are checked for earlier/internal gaps, duplicate part numbers and inconsistent known sizes among nonfinal parts. Errors require a fresh **Queue these ready files anyway** confirmation. An unknown final part is a warning: a gap-free selection does not prove the whole archive is present.
 5. Use **Download all** when the required set is ready. If only some links are ready, the button clearly names how many files it can queue. Only those ready files enter the queue. If the archive check itself fails, check the links again first.
-6. Follow progress in **Downloads**. Use pause, resume, retry, cancel or the completed file's folder button as needed.
+6. Follow progress in **Downloads**. Use pause, resume, retry, cancel or the completed file's folder button as needed. If a connection drops or times out, Ravenshelf retries by itself up to twice in a row before showing the error.
 
 Check the source notes for required parts, optional languages, updates and separate replacement archives. Before extracting a multipart archive, make sure all required parts are present. Ravenshelf does not automatically extract files, test archive contents or run installers.
 
@@ -125,7 +125,7 @@ Keep `.atlas-part` files and `.atlas-segments-*` support folders alongside their
 Use a card's remove button, select several files, or choose **Clean up completed** in Downloads. **Select visible** affects the current filter; the selected count can include entries selected under another filter. Review the listed files and estimated size before proceeding.
 
 - **Remove from list** is always the initial choice. It stops selected transfers and removes their queue entries while keeping their files.
-- **Delete files** permanently removes the selected managed download files and their queue entries. It requires a fresh confirmation checkbox every time. It does not uninstall games or clear an entire download folder.
+- **Delete files** permanently removes the selected managed download files and their queue entries. It requires a fresh confirmation checkbox every time. It does not uninstall games or clear an entire download folder. In game folders it deletes only downloaded archives; downloads taken over from your browser can be any file type and are deleted from the **Browser downloads** folder.
 
 Opening the preview pauses selected active downloads. Cancelling leaves them paused; resume them explicitly in Downloads. Changed, linked, shared or inaccessible files can be refused. If only some files can be removed, the dialog reports the failures and requires another preview before retrying.
 
@@ -267,7 +267,7 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | Automatic close or shutdown is waiting | Check download cards for queued/running scans or results needing review. Resolve the result and scan again, or choose **Keep Ravenshelf open**. |
 | Catalogue update fails | Keep the current results and retry Refresh later. Source changes can require an app update. |
 | The app still shows old behavior after updating | Close all older Ravenshelf windows, then open the new release executable. |
-| The browser extension says it is not connected | In **Settings → Browser extension**, check that **Connect the browser extension** is on and Ravenshelf is open. If it says the extension isn't the one Ravenshelf set up, load the folder from **Open folder** again. |
+| The browser extension says it is not connected | In **Settings → Browser extension**, check that **Connect the browser extension** is on and Ravenshelf is open. Open Ravenshelf normally, not with **Run as administrator**: Windows stops the browser from reaching an app running as administrator. If it says the extension isn't the one Ravenshelf set up, load the folder from **Open folder** again. |
 | A download went to the browser instead of Ravenshelf | Ravenshelf was closed or didn't answer in time, the download was unencrypted (HTTP), or it came from a private window. Check the toolbar button's status. |
 | A site you need is blocked | Check the address. If you trust it, pause protection for 10 minutes from the toolbar button, or turn off **Block dangerous sites**. |
 
