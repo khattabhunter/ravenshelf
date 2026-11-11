@@ -305,7 +305,7 @@ test('model names lose their trademark marks and nothing else',()=>{
 });
 
 test('an answer of the wrong shape never throws and gives the basic result',()=>{
-  for(const raw of [null,undefined,'text',42,[],[laptop()],{},{schema:2,...laptop(),schema:2},{schema:1},{schema:1,system:[],processors:'',video:'card',directx:{name:{}},drivers:[null,7,'x'],disks:[[]],partitions:[{letter:{}}],volumes:[null,{letter:['C:']}],memory:[]},
+  for(const raw of [null,undefined,'text',42,[],[laptop()],{},{...laptop(),schema:2},{schema:1},{schema:1,system:[],processors:'',video:'card',directx:{name:{}},drivers:[null,7,'x'],disks:[[]],partitions:[{letter:{}}],volumes:[null,{letter:['C:']}],memory:[]},
     JSON.parse('{"schema":1,"__proto__":{"polluted":true},"system":{"__proto__":{"caption":"x"}},"video":[{"__proto__":{"name":"x"}}]}')]){
     const result=summarize(raw,options);
     assert.equal(result.status,'basic');assert.deepEqual(result.notes,['probe-failed']);

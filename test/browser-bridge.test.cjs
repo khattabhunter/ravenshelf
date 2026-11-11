@@ -343,7 +343,10 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   assert.equal(decision.action,'block','a program over plain HTTP, however its ending is spelled');
   // From the server's name for the file: a warning that must be confirmed, and the saved name on show.
   const id=decide({url:`https://cdn.example/${encodeURIComponent(FULLWIDTH_EXE)}`}).id;
-  const dotted=decide({url:'https://cdn.example/setup.exe.'}).id,spaced=decide({url:'https://cdn.example/b',filename:'run.scr  '}).id;
+  const dotted=decide({url:'https://cdn.example/setup.exe.'}).id;
+  // The browser's own name for the file is cleaned as soon as it arrives: the notice already shows it.
+  decide({url:'https://cdn.example/b',filename:'run.scr  '});
+  assert.match(events.notes.at(-1).body,/^run\.scr was sent from your browser/);
   await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'inspections');
   const byId=Object.fromEntries(bridge.snapshot().captures.map(capture=>[capture.id,capture]));
   assert.equal(byId[id].name,'SkyUI patch.exe');assert.equal(byId[id].verdict.level,'warning');
@@ -371,7 +374,9 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE).slice(-5),'.exex','cleaned once, it still looks harmless');
   assert.equal(safeName(safeName(LONG_DEVICE)).slice(-4),'.exe','cleaned again, as the queue would, it is a program');
   assert.equal(savedName(LONG_DEVICE),'_con.'+'a'.repeat(171)+'.exe');
-  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id,hidden=decide({url:'https://cdn.example/d',filename:'run.bat'+'\ufeff.'.repeat(3)}).id;
+  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id;
+  decide({url:'https://cdn.example/d',filename:'run.bat'+'\ufeff.'.repeat(3)});
+  assert.match(events.notes.at(-1).body,/^run\.bat was sent from your browser/,'layers of invisible characters and dots are gone from the first moment');
   await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'more inspections');
   const later=Object.fromEntries(bridge.snapshot().captures.map(capture=>[capture.id,capture]));
   assert.equal(later[device].name,'_con.'+'a'.repeat(171)+'.exe');assert.equal(later[device].verdict.level,'warning');
