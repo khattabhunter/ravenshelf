@@ -4,7 +4,7 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.6.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.7.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
@@ -48,16 +48,16 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.6.0-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.7.0-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.6.0-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.7.0-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
-A matching checksum detects a mismatch with the published file; provenance records its build origin. From 0.4.2, the release's `.sigstore.json` file is the same signed record; you can pass it to the command with `--bundle .\Ravenshelf-0.6.0-Windows.exe.sigstore.json` instead of fetching it from GitHub. Neither certifies that software is malware-free, and the executable remains unsigned.
+A matching checksum detects a mismatch with the published file; provenance records its build origin. From 0.4.2, the release's `.sigstore.json` file is the same signed record; you can pass it to the command with `--bundle .\Ravenshelf-0.7.0-Windows.exe.sigstore.json` instead of fetching it from GitHub. Neither certifies that software is malware-free, and the executable remains unsigned.
 
 ## Features
 
@@ -87,7 +87,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Host support
 
-| Source | Status in 0.6.0 |
+| Source | Status in 0.7.0 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
