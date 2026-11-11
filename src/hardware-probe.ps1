@@ -1,8 +1,12 @@
 # Reads a summary of this PC's hardware for Ravenshelf's "PC specs" page and
 # prints it as one JSON object. Read-only: it changes nothing and contacts no
-# network. It asks Windows only for the model names, sizes and capability
-# levels listed below, and prints nothing else. It never asks for serial
-# numbers, the computer name, user names, volume labels or network addresses.
+# network. It prints only what is named below: model and maker names, sizes,
+# versions, drive letters, how parts are connected, capability levels, whether
+# Windows reports a graphics device as working, the name of the setup file its
+# driver came from, and the time DirectX last saw an adapter. It never asks
+# for serial numbers, the computer name, user names, volume labels or network
+# addresses. Two registry keys are read record by record; of each record only
+# the values named below are printed.
 # A graphics adapter's device path is looked at only to pick out how the
 # adapter is connected and its maker and model numbers; the rest of the path
 # (which can identify one device) is never printed.
@@ -84,8 +88,10 @@ try {
   })
 } catch { }
 
+# Which numbered disk each drive letter is on. Partitions without a letter
+# (recovery and system partitions) are left out.
 try {
-  $result.partitions = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName MSFT_Partition -Property DriveLetter,DiskNumber | Where-Object { $_.DriveLetter } | ForEach-Object {
+  $result.partitions = @(Get-CimInstance -Namespace 'root/Microsoft/Windows/Storage' -ClassName MSFT_Partition -Property DriveLetter,DiskNumber | Where-Object { $_.DriveLetter -match '[A-Za-z]' } | ForEach-Object {
     @{ letter = [string]$_.DriveLetter; disk = [string]$_.DiskNumber }
   })
 } catch { }

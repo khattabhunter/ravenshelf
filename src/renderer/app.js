@@ -800,7 +800,8 @@ async function scanInstalled(addFolder){
 const HARDWARE_NOTES = {
   'probe-failed': 'Windows did not answer the full hardware check, so only the basics are shown. Choose Check again to retry.',
   'not-windows': 'The full hardware check works only on Windows. Only the basics are shown here.',
-  'basic-display': 'Windows is using its basic display driver, so the graphics card could not be identified. Install the graphics driver from the maker of the PC or the graphics card, then check again.',
+  'basic-display': 'Windows is using its basic display driver, so the graphics adapter could not be identified. Install the graphics driver from the maker of the PC or of the graphics adapter, then check again.',
+  'basic-display-extra': 'Another graphics adapter is running on Windows’ basic display driver, so it is not listed here. Install its driver, then check again.',
 };
 // Memory sizes in MB or GB. Graphics and installed memory are sold in whole
 // gigabytes but reported slightly under, so a value within 4% of a whole number
@@ -905,15 +906,24 @@ function renderHardware() {
   $('#hardware-status').textContent = hardwareBusy ? 'Reading this PC’s hardware…'
     : date && Number.isFinite(date.getTime()) ? `Checked at ${date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} · Read on this PC only, never sent anywhere.` : '';
   const messages = (Array.isArray(hardware?.notes) ? hardware.notes : []).filter(note => typeof note === 'string' && Object.hasOwn(HARDWARE_NOTES, note)).map(note => HARDWARE_NOTES[note]);
-  const notes = $('#hardware-notes');
-  notes.replaceChildren(...messages.map(message => el('p', 'warning-note', message)));
-  notes.hidden = !messages.length;
+  // A screen reader reads these notes out when they appear, so they are
+  // written again only when they change.
+  const notes = $('#hardware-notes'), shown = JSON.stringify(messages);
+  if (notes.dataset.shown !== shown) {
+    notes.dataset.shown = shown;
+    notes.replaceChildren(...messages.map(message => el('p', 'warning-note', message)));
+  }
   const grid = $('#hardware-grid');
   if (!hardware) {
     if (hardwareBusy) { grid.replaceChildren(busyLine('Reading the processor, graphics, memory and drives…')); return; }
     const empty = el('div', 'empty-state');
-    if (hardwareFailed) emptyState(empty, 'This PC’s specs could not be read', 'Something stopped the check before it finished. Nothing left this PC.', 'chip', {label: 'Try again', icon: 'refresh', run: () => loadHardware(true)});
-    else emptyState(empty, 'See what is inside this PC', 'Ravenshelf reads the processor, graphics, memory and drives when you ask. Nothing leaves this PC.', 'chip', {label: 'Check this PC', icon: 'refresh', run: () => loadHardware(true)});
+    if (hardwareFailed) {
+      emptyState(empty, 'This PC’s specs could not be read', 'Something stopped the check before it finished. Nothing left this PC.', 'chip', {label: 'Try again', icon: 'refresh', run: () => loadHardware(true)});
+      // Said aloud by a screen reader: nothing else on the page reports the failure.
+      empty.setAttribute('role', 'alert');
+    }
+    // Before the first check. Opening the page starts one at once, so this is on screen for a moment at most.
+    else emptyState(empty, 'See what is inside this PC', 'Ravenshelf reads the processor, graphics, memory and drives when you open this page. Nothing leaves this PC.', 'chip');
     grid.replaceChildren(empty);
     return;
   }
@@ -924,7 +934,7 @@ function renderHardware() {
   if (adapters.length) cards.push(...adapters.map(adapter => graphicsCard(adapter, adapters.length > 1)));
   else {
     const missing = specCard('Graphics', 'gpu', complete ? 'Not detected' : 'Not read');
-    missing.append(el('p', '', complete ? 'Windows did not report a graphics card with a working driver.' : 'Graphics details need the full hardware check.'));
+    missing.append(el('p', '', complete ? 'Windows did not report a graphics adapter with a working driver.' : 'Graphics details need the full hardware check.'));
     cards.push(missing);
   }
   cards.push(memoryCard(hardware.memory));
@@ -937,6 +947,11 @@ function renderHardware() {
 }
 async function loadHardware(refresh) {
   if (hardwareBusy) return;
+  // A check switches its button off and redraws the page; either takes the
+  // keyboard focus away from where it was. A check started from this page
+  // hands it to Check again when it is over, unless you have moved on.
+  const again = $('#check-hardware'), origin = document.activeElement;
+  const fromHere = origin === again || $('#hardware-grid').contains(origin);
   hardwareBusy = true; renderHardware();
   try {
     const result = await api.getHardware({refresh: Boolean(refresh)});
@@ -944,7 +959,11 @@ async function loadHardware(refresh) {
     else hardwareFailed = true;
   }
   catch (error) { hardwareFailed = true; toast(errorText(error), true); }
-  finally { hardwareBusy = false; renderHardware(); }
+  finally {
+    hardwareBusy = false; renderHardware();
+    const now = document.activeElement;
+    if (fromHere && currentView === 'hardware' && (!now || now === document.body || now === again)) again.focus();
+  }
 }
 function renderCompletionAction(){
   const action=state.completionAction||{mode:'none',phase:'idle'};
