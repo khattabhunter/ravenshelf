@@ -1,8 +1,9 @@
 // Ravenshelf extension background: a service worker in Chrome, Edge and Brave,
 // an event page in Firefox. It hands downloads to the Ravenshelf app on this PC,
 // keeps the browser's own blocking rules in step with Ravenshelf's protection
-// lists, stops the pop-ups and redirects that file-host pages start, and sends
-// the YouTube videos you choose (player button or right-click) to Ravenshelf.
+// lists, stops the pop-ups and redirects that file-host pages start, sends the
+// YouTube videos you choose (player button or right-click) to Ravenshelf, and
+// labels files you download on Nexus Mods with their game and mod.
 // It talks only to Ravenshelf on this PC, through the native connector.
 'use strict';
 if (typeof importScripts === 'function' && !globalThis.RavenshelfPolicy) importScripts('policy.js');
@@ -13,7 +14,7 @@ const BROWSER = isFirefox ? 'firefox' : 'chromium';
 const VERSION = api.runtime.getManifest().version;
 const menus = api.contextMenus || api.menus;
 const dnr = api.declarativeNetRequest;
-const DEFAULTS = Object.freeze({ capture: true, protection: true, guard: true, youtube: true, pausedUntil: 0, listVersion: '', listTotal: 0, listSyncedAt: 0, listFirstRule: 0, status: 'unknown', appVersion: '' });
+const DEFAULTS = Object.freeze({ capture: true, protection: true, guard: true, youtube: true, nexus: true, pausedUntil: 0, listVersion: '', listTotal: 0, listSyncedAt: 0, listFirstRule: 0, status: 'unknown', appVersion: '' });
 const PAUSE_MS = 10 * 60 * 1000;
 const SYNC_MINUTES = 60;
 const POPUP_WATCH_MS = 15000;
@@ -94,7 +95,14 @@ async function decide(item, plan) {
     notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', plan.reason);
     return 'stop';
   }
-  const reply = await ask(plan.message, 6000);
+  let reply = await ask(plan.message, 6000);
+  if (!reply.ok && reply.error === 'invalid' && plan.message.mod) {
+    // An older Ravenshelf does not know about mods, and any Ravenshelf refuses a
+    // label it does not accept: the download is then sent without its label, so
+    // a problem with the label never costs the check of the download.
+    const { mod, ...plain } = plan.message;
+    reply = await ask(plain, 6000);
+  }
   if (reply.ok && (reply.action === 'take' || reply.action === 'block')) {
     await removeDownload(item.id);
     if (reply.action === 'block') notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', reply.reason || 'It failed Ravenshelf’s safety checks.');
@@ -102,21 +110,26 @@ async function decide(item, plan) {
   }
   return 'continue';
 }
+// The browser's download, the switches, and what open Nexus Mods pages said.
+async function planFor(item) {
+  const [current] = await Promise.all([settings(), restore()]);
+  const now = Date.now();
+  return P.downloadPlan(item, current, { pages: modNotes(now), now });
+}
 if (api.downloads.onDeterminingFilename) {
   // Chrome holds the download here, before a file name is chosen.
   api.downloads.onDeterminingFilename.addListener((item, suggest) => {
     let released = false;
     const release = () => { if (!released) { released = true; try { suggest(); } catch (error) {} } };
-    settings()
-      .then(current => { const plan = P.downloadPlan(item, current); return plan.kind === 'ignore' ? 'continue' : decide(item, plan); })
+    planFor(item)
+      .then(plan => plan.kind === 'ignore' ? 'continue' : decide(item, plan))
       .then(result => { if (result === 'continue') release(); }, release);
     return true;
   });
 } else {
   // Firefox has no file-name hook: pause the new download while Ravenshelf decides.
   api.downloads.onCreated.addListener(item => {
-    settings().then(async current => {
-      const plan = P.downloadPlan(item, current);
+    planFor(item).then(async plan => {
       if (plan.kind === 'ignore') return;
       await quiet(() => api.downloads.pause(item.id));
       if (await decide(item, plan) === 'continue') await quiet(() => api.downloads.resume(item.id));
@@ -226,15 +239,30 @@ const restoredAt = new Map();
 const goingBack = new Map();
 // The file-host page to return to from Ravenshelf's warning page, per tab.
 const returnTo = new Map();
+// What each open Nexus Mods tab last said about its game, mod and file.
+const modPages = new Map();
+const MAX_MOD_PAGES = 50;
+// The notes that are still fresh. Older ones are dropped for good, so they
+// cannot come back into use if the PC's clock is set back.
+function modNotes(now) {
+  let dropped = false;
+  for (const [tab, page] of modPages) {
+    if (page && Number.isFinite(page.at) && now - page.at >= 0 && now - page.at < P.NEXUS_PAGE_MS) continue;
+    modPages.delete(tab); dropped = true;
+  }
+  if (dropped) persist();
+  return Array.from(modPages.values());
+}
 const closing = new Set();
 let restored = null;
 function restore() {
   if (!restored) restored = (async () => {
     try {
-      const saved = await api.storage.session.get(['tabInfo', 'watched', 'returnTo']);
+      const saved = await api.storage.session.get(['tabInfo', 'watched', 'returnTo', 'modPages']);
       for (const [tab, info] of Object.entries(saved.tabInfo || {})) if (!tabInfo.has(Number(tab))) tabInfo.set(Number(tab), info);
       for (const [tab, watch] of Object.entries(saved.watched || {})) if (!watched.has(Number(tab))) watched.set(Number(tab), watch);
       for (const [tab, url] of Object.entries(saved.returnTo || {})) if (!returnTo.has(Number(tab))) returnTo.set(Number(tab), url);
+      for (const [tab, page] of Object.entries(saved.modPages || {})) if (!modPages.has(Number(tab))) modPages.set(Number(tab), page);
     } catch (error) {}
   })();
   return restored;
@@ -244,7 +272,14 @@ function persist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     while (tabInfo.size > 300) tabInfo.delete(tabInfo.keys().next().value);
-    quiet(() => api.storage.session.set({ tabInfo: Object.fromEntries(tabInfo), watched: Object.fromEntries(watched), returnTo: Object.fromEntries(returnTo) }));
+    // Over the limit, the oldest notes go first, whichever tab they belong to.
+    const noted = tab => { const page = modPages.get(tab); return page && Number.isFinite(page.at) ? page.at : -Infinity; };
+    while (modPages.size > MAX_MOD_PAGES) {
+      let oldest;
+      for (const tab of modPages.keys()) if (oldest === undefined || noted(tab) < noted(oldest)) oldest = tab;
+      modPages.delete(oldest);
+    }
+    quiet(() => api.storage.session.set({ tabInfo: Object.fromEntries(tabInfo), watched: Object.fromEntries(watched), returnTo: Object.fromEntries(returnTo), modPages: Object.fromEntries(modPages) }));
   }, 100);
 }
 async function guardActive() { const current = await settings(); return current.guard !== false && !(current.pausedUntil > Date.now()); }
@@ -342,6 +377,8 @@ api.webNavigation.onCommitted.addListener(details => {
   if (details.frameId !== 0 || details.tabId < 0) return;
   restore().then(async () => {
     const tabId = details.tabId;
+    // A tab that has left Nexus Mods has no mod page to remember.
+    if (modPages.has(tabId) && P.hostOf(details.url) !== P.NEXUS_HOST) { modPages.delete(tabId); persist(); }
     if (closing.has(tabId)) return;
     const back = goingBack.get(tabId);
     if (back && back.until > Date.now() && back.url === details.url) { await quiet(() => api.tabs.goBack(tabId)); return; }
@@ -400,7 +437,7 @@ api.webNavigation.onErrorOccurred.addListener(details => {
 api.tabs.onRemoved.addListener(tabId => {
   restore().then(() => {
     closing.delete(tabId); starts.delete(tabId); handled.delete(tabId); restoredAt.delete(tabId); goingBack.delete(tabId);
-    if (tabInfo.delete(tabId) | watched.delete(tabId) | returnTo.delete(tabId)) persist();
+    if (tabInfo.delete(tabId) | watched.delete(tabId) | returnTo.delete(tabId) | modPages.delete(tabId)) persist();
   }).catch(() => {});
 });
 
@@ -409,7 +446,7 @@ async function popupState() {
   const current = await settings();
   return {
     version: VERSION, browser: BROWSER, status: current.status, appVersion: current.appVersion,
-    capture: current.capture, protection: current.protection, guard: current.guard, youtube: current.youtube,
+    capture: current.capture, protection: current.protection, guard: current.guard, youtube: current.youtube, nexus: current.nexus,
     pausedUntil: current.pausedUntil > Date.now() ? current.pausedUntil : 0, listTotal: current.listTotal, listSyncedAt: current.listSyncedAt
   };
 }
@@ -423,8 +460,10 @@ async function handleMessage(message, sender) {
     return { ok: true, state: await popupState() };
   }
   if (command === 'set') {
-    if (!['capture', 'protection', 'guard', 'youtube'].includes(message.key) || typeof message.value !== 'boolean') return { ok: false };
+    if (!['capture', 'protection', 'guard', 'youtube', 'nexus'].includes(message.key) || typeof message.value !== 'boolean') return { ok: false };
     await api.storage.local.set({ [message.key]: message.value });
+    // Switching Nexus Mods labels off also forgets what its pages said.
+    if (message.key === 'nexus' && !message.value) { await restore(); modPages.clear(); persist(); }
     await applyToggles();
     return { ok: true, state: await popupState() };
   }
@@ -472,9 +511,34 @@ async function handleYouTube(message, sender) {
   const url = P.youtubeVideoId(message.url) ? message.url : sender.url;
   return sendMedia(url, message.quality, Boolean(sender.tab.incognito), false);
 }
+// Ravenshelf's own page script in the top frame of a www.nexusmods.com page.
+function nexusSender(sender) {
+  return Boolean(sender) && sender.id === api.runtime.id && Boolean(sender.tab) && sender.frameId === 0 &&
+    typeof sender.url === 'string' && /^https:\/\/www\.nexusmods\.com\//.test(sender.url);
+}
+// Remembers what a tab's Nexus Mods page said about its mod. Nothing leaves the
+// browser here: the note is used only if you then start a download from Nexus
+// Mods, and private windows are never noted.
+async function handleNexus(message, sender) {
+  if (!message || message.cmd !== 'nexus' || sender.tab.incognito || !Number.isInteger(sender.tab.id) || sender.tab.id < 0) return { ok: false };
+  const [current] = await Promise.all([settings(), restore()]);
+  if (current.nexus === false) return { ok: false };
+  // The page is no longer a mod's page: forget what this tab said before.
+  if (message.page === null) { if (modPages.delete(sender.tab.id)) persist(); return { ok: true }; }
+  const page = P.nexusPage(message.page, P.nexusAddress(message.url) || P.nexusAddress(sender.url));
+  if (!page) return { ok: false };
+  modPages.delete(sender.tab.id);
+  modPages.set(sender.tab.id, { ...page, at: Date.now() });
+  persist();
+  return { ok: true };
+}
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (youtubeSender(sender) && !trustedSender(sender)) {
     handleYouTube(message, sender).then(sendResponse, () => sendResponse({ ok: false }));
+    return true;
+  }
+  if (nexusSender(sender) && !trustedSender(sender)) {
+    handleNexus(message, sender).then(sendResponse, () => sendResponse({ ok: false }));
     return true;
   }
   if (!trustedSender(sender)) return false;

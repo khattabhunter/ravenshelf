@@ -33,6 +33,13 @@
     Object.freeze({ id: 'audio-mp3', label: 'MP3', hint: 'Plays everywhere', group: 'audio' })
   ]);
   const MEDIA_QUALITIES = Object.freeze(['default', ...PLAYER_CHOICES.map(choice => choice.id)]);
+  // Nexus Mods: the site's pages, and the servers its files come from.
+  const NEXUS_HOST = 'www.nexusmods.com';
+  const NEXUS_FILE_ROOTS = Object.freeze(['nexus-cdn.com']);
+  // How long what a Nexus Mods page showed can label a download started there.
+  const NEXUS_PAGE_MS = 30 * 60 * 1000;
+  const NEXUS_MAX_ID = 2147483647;
+  const NEXUS_MAX_FILES = 20;
 
   function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch (error) { return ''; } }
   function onHosts(host, roots) { return Boolean(host) && roots.some(rootHost => host === rootHost || host.endsWith('.' + rootHost)); }
@@ -45,7 +52,9 @@
   function schemeOf(url) { try { return new URL(url).protocol; } catch (error) { return ''; } }
 
   // What to do with a download the browser is starting, before asking the app.
-  function downloadPlan(item, settings) {
+  // `context` holds what open Nexus Mods pages reported ({ pages, now }), so a
+  // mod file can be labelled with its game and mod.
+  function downloadPlan(item, settings, context) {
     if (!settings || settings.capture === false || !item || typeof item !== 'object') return { kind: 'ignore' };
     if (item.byExtensionId) return { kind: 'ignore' };
     if (item.incognito) return { kind: 'ignore' };
@@ -67,7 +76,137 @@
     if (filename && filename.length <= 1024) message.filename = filename;
     if (typeof item.mime === 'string' && item.mime && item.mime.length <= 200 && !/[\x00-\x1f\x7f]/.test(item.mime)) message.mime = item.mime;
     if (size) message.totalBytes = size;
+    if (settings.nexus !== false && context && Array.isArray(context.pages)) {
+      // The label is an extra: whatever goes wrong with it, the download is still sent to be checked.
+      let mod = null;
+      try { mod = nexusMatch({ url, finalUrl, referrer, filename }, context.pages, Number(context.now) || 0); } catch (error) { mod = null; }
+      if (mod) message.mod = mod;
+    }
     return { kind: 'ask', message };
+  }
+
+  // ---- Nexus Mods ----
+  // A positive whole number such as a mod or file number, or undefined.
+  function nexusId(value) {
+    const number = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,10}$/.test(value) ? Number(value) : NaN;
+    return Number.isSafeInteger(number) && number >= 1 && number <= NEXUS_MAX_ID ? number : undefined;
+  }
+  // Text a page showed, made safe to pass on: control characters, invisible,
+  // blank and text-direction characters, private-use characters and broken
+  // character pairs removed, spaces collapsed, length limited without cutting
+  // a character in half. Empty gives undefined. The app refuses the same
+  // characters (src/mods.cjs).
+  function nexusText(value, max) {
+    if (typeof value !== 'string') return undefined;
+    const text = value.slice(0, 4000)
+      .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffd]/gu, ' ')
+      .replace(/\s+/g, ' ').trim().slice(0, max).replace(/[\ud800-\udbff]$/, '').trim();
+    return text || undefined;
+  }
+  // The game and mod a Nexus Mods address is about: /{game}/mods/{number},
+  // with the file number when the address names one.
+  function nexusAddress(value) {
+    if (typeof value !== 'string' || !value || value.length > MAX_URL) return null;
+    let url;
+    try { url = new URL(value); } catch (error) { return null; }
+    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== NEXUS_HOST || url.username || url.password || url.port) return null;
+    const match = /^\/(?:games\/)?([a-z0-9][a-z0-9_-]{0,63})\/mods\/(\d{1,10})\/?$/i.exec(url.pathname);
+    const modId = match ? nexusId(match[2]) : undefined;
+    if (!modId) return null;
+    const address = { game: match[1].toLowerCase(), modId };
+    const fileId = nexusId(url.searchParams.get('file_id'));
+    if (fileId) address.fileId = fileId;
+    return address;
+  }
+  // File names are compared without case or punctuation.
+  function nexusKey(name) {
+    return baseName(name).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().slice(0, 300);
+  }
+  // The same, without the " (1)" or "(1)" a browser adds to a second copy of a
+  // file. Tried only when the name as it stands matches nothing.
+  function nexusLooseKey(name) {
+    return nexusKey(baseName(name).normalize('NFKC').replace(/ ?\(\d{1,3}\)(?=(?:\.[a-z0-9]{1,8}){0,2}$)/i, ''));
+  }
+  // What a Nexus Mods page said about itself, cleaned. Which game and mod the
+  // page is about comes from its address, not from anything on the page. The
+  // names and files it shows are left out while the page itself says it is a
+  // different mod's page: the site can change its address a moment before it
+  // changes what it shows.
+  function nexusPage(details, address) {
+    if (!address || !address.game || !address.modId || !details || typeof details !== 'object') return null;
+    const page = { game: address.game, modId: address.modId, files: [] };
+    const shown = nexusId(details.modId), canonical = nexusAddress(details.canonical);
+    if ((shown && shown !== address.modId) || (canonical && (canonical.modId !== address.modId || canonical.game !== address.game))) return page;
+    const gameId = nexusId(details.gameId);
+    if (gameId) page.gameId = gameId;
+    const gameName = nexusText(details.gameName, 100);
+    if (gameName) page.gameName = gameName;
+    const modName = nexusText(details.modName, 200);
+    if (modName) page.modName = modName;
+    for (const item of Array.isArray(details.files) ? details.files.slice(0, NEXUS_MAX_FILES) : []) {
+      if (!item || typeof item !== 'object') continue;
+      const fileId = nexusId(item.fileId), key = nexusKey(nexusText(item.fileUri, 300) || '');
+      if (!fileId || !key) continue;
+      const file = { fileId, key };
+      const fileName = nexusText(item.fileName, 200);
+      if (fileName) file.fileName = fileName;
+      page.files.push(file);
+    }
+    return page;
+  }
+  function nexusMod(page, file) {
+    const mod = { site: 'nexusmods', game: page.game, modId: page.modId };
+    if (page.gameId) mod.gameId = page.gameId;
+    if (file && file.fileId) mod.fileId = file.fileId;
+    if (page.gameName) mod.gameName = page.gameName;
+    if (page.modName) mod.modName = page.modName;
+    if (file && file.fileName) mod.fileName = file.fileName;
+    return mod;
+  }
+  // Which mod a browser download belongs to, or null. Only a file that comes
+  // from Nexus Mods' own file servers can be labelled: a page on the site can
+  // link to files kept anywhere. Then the evidence is, in this order: the
+  // file's name is one a Nexus Mods page showed in the last half hour; the
+  // download was started from a mod's own address; or the file's address
+  // carries the game and mod numbers of such a page. Evidence that points at
+  // more than one mod gives no label.
+  function nexusMatch(item, pages, now) {
+    if (!item || typeof item !== 'object' || !Array.isArray(pages)) return null;
+    const target = typeof item.finalUrl === 'string' && item.finalUrl ? item.finalUrl : item.url;
+    if (schemeOf(target) !== 'https:' || !onHosts(hostOf(target), NEXUS_FILE_ROOTS)) return null;
+    const recent = pages.filter(page => page && typeof page === 'object' && page.game && page.modId && Array.isArray(page.files) && Number.isFinite(page.at) && now - page.at >= 0 && now - page.at < NEXUS_PAGE_MS).sort((a, b) => b.at - a.at);
+    const sameMod = (a, b) => a.game === b.game && a.modId === b.modId;
+    // Older files sit at /{game number}/{mod number}/{file name} on the file servers.
+    let numbers = null;
+    try {
+      const path = /^\/(\d{1,10})\/(\d{1,10})\/[^/]+$/.exec(new URL(target).pathname);
+      const gameId = path ? nexusId(path[1]) : undefined, modId = path ? nexusId(path[2]) : undefined;
+      if (gameId && modId) numbers = { gameId, modId };
+    } catch (error) { numbers = null; }
+    // A page whose numbers differ from the ones in the file's address is about another mod.
+    const agrees = page => !numbers || (page.modId === numbers.modId && (!page.gameId || page.gameId === numbers.gameId));
+    // The page that started the download names the mod, when the browser passes its full address on.
+    const address = nexusAddress(typeof item.referrer === 'string' ? item.referrer : '');
+    if (address && numbers && address.modId !== numbers.modId) return null;
+    const fileIn = (page, key) => key ? page.files.find(candidate => candidate && candidate.key === key) : undefined;
+    for (const key of [nexusKey(item.filename), nexusLooseKey(item.filename)]) {
+      const listed = recent.filter(page => agrees(page) && fileIn(page, key));
+      if (!listed.length) continue;
+      const chosen = address ? listed.filter(page => sameMod(page, address)) : listed;
+      // The same file name on pages of different mods says nothing about which one this is.
+      if (!chosen.length || !chosen.every(page => sameMod(page, chosen[0]))) return null;
+      return nexusMod(chosen[0], fileIn(chosen[0], key));
+    }
+    if (address) {
+      const same = recent.filter(page => sameMod(page, address) && agrees(page));
+      const file = address.fileId && same.length ? same[0].files.find(candidate => candidate && candidate.fileId === address.fileId) : null;
+      return nexusMod(same[0] || address, file || address);
+    }
+    if (numbers) {
+      const page = recent.find(candidate => candidate.gameId === numbers.gameId && candidate.modId === numbers.modId);
+      if (page) return nexusMod(page, page.files.length === 1 ? page.files[0] : null);
+    }
+    return null;
   }
 
   function threatRule(rule) {
@@ -141,7 +280,7 @@
     if (/forbidden/i.test(text)) return 'not-allowed';
     return 'unavailable';
   }
-  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText };
+  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusMatch };
   if (typeof module === 'object' && module.exports) module.exports = policy;
   else root.RavenshelfPolicy = Object.freeze(policy);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

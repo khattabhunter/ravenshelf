@@ -13,6 +13,8 @@ const {DEFAULT_SCHEDULE,normalizeSchedule,scheduleSnapshot}=require('./download-
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
 const {MEDIA_FOLDER,QUALITIES,VIDEO_ID,canonicalUrl,cleanTitle}=require('./youtube.cjs');
 const {removeMediaWorkspace}=require('./media-downloads.cjs');
+const {SITE:MOD_SITE,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED}=require('./mods.cjs');
+const {safeName,folderName:safeFolderName}=require('./safe-name.cjs');
 const APP_VERSION=require('../package.json').version;
 // YouTube jobs waiting or running at once; more are refused until some finish.
 const MAX_MEDIA_JOBS=50;
@@ -26,13 +28,13 @@ const LONE_SURROGATE=/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\u
 const NETWORK_RETRY_CODES=new Set(['ECONNRESET','ETIMEDOUT','EPIPE','ECONNABORTED','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT']);
 const NETWORK_RETRY_LIMIT=2,NETWORK_RETRY_MS=15000;
 function networkFailure(error){for(let cause=error,depth=0;cause&&depth<4;cause=cause.cause,depth++)if(NETWORK_RETRY_CODES.has(cause.code))return true;return false;}
+// A Nexus Mods file is known by its address without the part after "?": that
+// part is a signed, short-lived pass that carries the account's number and
+// differs on every click, while the address before it names the file.
+const withoutQuery=value=>{try{const url=new URL(value);url.search='';url.hash='';return url.href;}catch{return value;}};
+const isModFile=item=>item.origin==='browser'&&item.mod?.site===MOD_SITE;
+const linkIdentity=item=>isModFile(item)?withoutQuery(item.sourceUrl||item.url):item.sourceUrl||item.url;
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
-function safeName(value,fallback='download') {
-  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
-  if(!s || s==='.' || s==='..') s=fallback;
-  if(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(s)) s='_'+s;
-  return s;
-}
 function atomicJSON(file,data) {
   fs.mkdirSync(path.dirname(file),{recursive:true});
   const temporary=file+'.'+crypto.randomUUID()+'.tmp';
@@ -166,20 +168,42 @@ class DownloadManager extends EventEmitter {
     this.downloads=this.downloads.filter(d=>!set.has(d.id));for(const id of selected)this.quiescing.delete(id);
     this.save();this.changed();return {removed:selected.length,ids:selected};
   }
-  add({links,gameTitle}) {
+  // `group` puts the folder one level down, such as Mods\<game> for mod files.
+  add({links,gameTitle,group}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
-    const folderName=safeName(gameTitle,'Imported files').slice(0,100);
-    const folder=path.join(this.settings.downloadDir,folderName); fs.mkdirSync(folder,{recursive:true});
+    // Before 0.7.0 a folder name was cut at 100 characters without tidying the cut,
+    // which could leave a space or a dot at its end. A game that already has such a
+    // folder, on disk or in the list, keeps it, so that its parts stay together and
+    // are still recognised. Folders are compared without case, as they are below.
+    const earlierName=safeName(gameTitle,'Imported files').slice(0,100),earlier=path.join(this.settings.downloadDir,earlierName);
+    const keepsEarlier=!group&&(this.downloads.some(d=>d.folder.toLowerCase()===earlier.toLowerCase())||fs.existsSync(earlier));
+    const folderName=keepsEarlier?earlierName:safeFolderName(gameTitle);
+    const folder=group?path.join(this.settings.downloadDir,safeFolderName(group),folderName):path.join(this.settings.downloadDir,folderName); fs.mkdirSync(folder,{recursive:true});
     const added=[];
     for(const link of links){
       if(link.status!=='ready')continue;
       safeURL(link.url);
-      if(this.downloads.some(d=>d.sourceUrl===(link.sourceUrl||link.url)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled'))continue;
+      const held=this.downloads.find(d=>linkIdentity(d)===linkIdentity(link)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled');
+      if(held){
+        // A Nexus Mods link stops working after a while. Downloading the same file
+        // again from its page brings a new link: a failed entry for that file takes
+        // it and starts again from where it stopped, instead of staying stuck.
+        if(held.status==='error'&&isModFile(held)&&isModFile(link)&&!this.quiescing.has(held.id)){
+          const headers={...link.headers};if(link.referer)headers.Referer=safeURL(link.referer).href;
+          delete held.headersNeedRefresh;delete held.pauseReason;delete held.scheduleRequested;
+          // From here on it is the same as pressing Retry, with the new link.
+          Object.assign(held,{url:link.url,sourceUrl:link.sourceUrl||link.url,headers,mod:{...link.mod},status:'queued',error:'',retryCount:0,networkRetries:0,speed:0,activeConnections:0});
+          added.push(held.id);
+        }
+        continue;
+      }
       const name=this.availableName(folder,safeName(link.filename || new URL(link.url).pathname.split('/').pop()));
       const requestHeaders={...link.headers};if(link.referer)requestHeaders.Referer=safeURL(link.referer).href;
       const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};
       // A download taken over from a browser keeps the browser's internet-zone mark.
       if(link.origin==='browser'){d.origin='browser';d.markOfTheWeb=link.markOfTheWeb===true;}
+      // The game and mod of a file downloaded on Nexus Mods, checked by the browser bridge.
+      if(isModFile(link))d.mod={...link.mod};
       this.downloads.push(d);added.push(d.id);
     }
     this.save();this.changed();this.pump();return {added:added.length,ids:added};
@@ -239,7 +263,8 @@ class DownloadManager extends EventEmitter {
   async run(d,controller){
     d.status='downloading';d.error='';d.speed=0;d.connectionMode='checking';d.connectionNote='';d.activeConnections=0;this.changed();
     const partial=path.join(d.folder,d.name+'.atlas-part'), final=path.join(d.folder,d.name);
-    const workspace=workspaceFor(partial,d.id),connections=Math.min(normalizeConnections(this.settings.connectionsPerFile),this.hostBackoff.policy(d.url).connectionLimit);
+    // Nexus Mods serves free accounts one connection per file, so mod files never use more.
+    const workspace=workspaceFor(partial,d.id),connections=d.mod?1:Math.min(normalizeConnections(this.settings.connectionsPerFile),this.hostBackoff.policy(d.url).connectionLimit);
     fs.mkdirSync(d.folder,{recursive:true});
     let offset=0,progressFrom=null;
     let lastActivity=Date.now(),intentionalWaits=0;
@@ -264,12 +289,15 @@ class DownloadManager extends EventEmitter {
     };
     const request=async(extraHeaders,signal=controller.signal)=>{
       signal.throwIfAborted();
-      if(d.headersNeedRefresh){await refreshHeaders();signal.throwIfAborted();}
+      // A mod file's link is signed for the click that made it, and only its page on
+      // Nexus Mods gives another: it is never looked up again from here. The header
+      // that could not be kept for it is the page's address, not a sign-in.
+      if(d.headersNeedRefresh){if(d.mod)delete d.headersNeedRefresh;else{await refreshHeaders();signal.throwIfAborted();}}
       const originalUrl=d.url;
       this.hostBackoff.assertAvailable(originalUrl);
       let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0,http1:true});
       lastActivity=Date.now();
-      if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url){
+      if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url&&!d.mod){
         await res.body?.cancel();
         if(originalUrl===d.url){
           await refreshHeaders();
@@ -301,6 +329,8 @@ class DownloadManager extends EventEmitter {
         try{await this.markFile(final);}catch{d.connectionNote='Download complete. Windows’ downloaded-from-the-internet mark could not be added to this file.';}
       }
       d.total=d.received;d.status='completed';d.completedAt=new Date().toISOString();
+      // A finished mod file no longer needs its signed link: only the plain address is kept.
+      if(d.mod){d.url=withoutQuery(d.url);d.sourceUrl=withoutQuery(d.sourceUrl);}
       if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
       try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
     };
@@ -354,8 +384,9 @@ class DownloadManager extends EventEmitter {
           res=await request(headers);responseBody=res.body;
         }
       }
-      d.connectionMode='single';if(!d.connectionNote)d.connectionNote=connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
-      if(!res.ok){await res.body?.cancel();throw new Error(`Host returned HTTP ${res.status}. Check the source link or retry.`);}
+      d.connectionMode='single';if(!d.connectionNote)d.connectionNote=d.mod?ONE_CONNECTION_NOTE:connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
+      // A mod file's link that Nexus Mods no longer accepts: say what to do, not just a number.
+      if(!res.ok){await res.body?.cancel();throw new Error(d.mod&&MOD_LINK_REFUSED.includes(res.status)?MOD_LINK_EXPIRED:`Host returned HTTP ${res.status}. Check the source link or retry.`);}
       const encoding=res.headers.get('content-encoding');
       if(encoding&&encoding.toLowerCase()!=='identity'){await res.body?.cancel();throw new Error('Host ignored the uncompressed transfer request. Use another mirror to preserve reliable byte ranges.');}
       const type=(res.headers.get('content-type')||'').toLowerCase();
@@ -405,7 +436,7 @@ class DownloadManager extends EventEmitter {
       if(d.status==='downloading'){
         if(failure?.code==='HOST_BACKOFF'){
           d.retryAt=Math.max(failure.retryAt||0,this.hostBackoff.policy(d.url).retryAt);d.retryCount=Math.max(0,Math.min(2,Number(d.retryCount)||0))+1;d.retryStatus=failure.status;
-          d.connectionNote='The host is busy. Waiting before retrying with fewer connections.';
+          d.connectionNote=d.mod?'The host is busy. Waiting before retrying.':'The host is busy. Waiting before retrying with fewer connections.';
           if(failure.automatic!==false&&d.retryCount<=2){d.status='queued';d.error='';}
           else{d.status='error';d.error=publicErrorMessage(failure,'download');}
         }else if(networkFailure(err)&&!controller.signal.aborted){

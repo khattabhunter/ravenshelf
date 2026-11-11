@@ -9,7 +9,7 @@ const crypto=require('node:crypto');
 const {execFile}=require('node:child_process');
 const {HOST_NAME,CHROMIUM_EXTENSION_KEY,CHROMIUM_EXTENSION_ID,FIREFOX_EXTENSION_ID}=require('./browser-protocol.cjs');
 
-const EXTENSION_FILES=Object.freeze(['background.js','policy.js','popup.html','popup.js','popup.css','blocked.html','blocked.js','youtube.js','youtube.css','icons/icon-16.png','icons/icon-32.png','icons/icon-48.png','icons/icon-128.png']);
+const EXTENSION_FILES=Object.freeze(['background.js','policy.js','popup.html','popup.js','popup.css','blocked.html','blocked.js','youtube.js','youtube.css','nexus.js','icons/icon-16.png','icons/icon-32.png','icons/icon-48.png','icons/icon-128.png']);
 const HOST_EXE='ravenshelf-browser-host.exe';
 const REGISTRY_KEYS=Object.freeze([
   Object.freeze({browser:'chromium',name:'Google Chrome',key:`HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`}),
@@ -17,10 +17,14 @@ const REGISTRY_KEYS=Object.freeze([
   Object.freeze({browser:'chromium',name:'Brave',key:`HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\${HOST_NAME}`}),
   Object.freeze({browser:'firefox',name:'Firefox',key:`HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${HOST_NAME}`})
 ]);
-const DESCRIPTION='Sends downloads to Ravenshelf to be checked first, blocks dangerous sites and pop-ups, and adds a download button to YouTube.';
-// The only website the extension reads or changes: Ravenshelf's download
-// button in YouTube's player. It runs in the top frame of www.youtube.com.
+// Browsers show at most 132 characters of this.
+const DESCRIPTION='Sends downloads to Ravenshelf to be checked first, blocks dangerous sites and pop-ups, and works with YouTube and Nexus Mods.';
+// The only two websites the extension has a page script on, each in the top
+// frame only. On www.youtube.com it adds Ravenshelf's download button to the
+// player. On www.nexusmods.com it changes nothing: it reads which game, mod
+// and file the page is about, so a download started there is filed by game.
 const YOUTUBE_SCRIPT=Object.freeze({matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false});
+const NEXUS_SCRIPT=Object.freeze({matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false});
 const sha256=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 
 function extensionManifest(browser,version){
@@ -30,7 +34,8 @@ function extensionManifest(browser,version){
     icons:{16:'icons/icon-16.png',32:'icons/icon-32.png',48:'icons/icon-48.png',128:'icons/icon-128.png'},
     action:{default_title:'Ravenshelf',default_popup:'popup.html',default_icon:{16:'icons/icon-16.png',32:'icons/icon-32.png'}},
     content_security_policy:{extension_pages:"script-src 'self'; object-src 'none'; base-uri 'none'"},
-    content_scripts:[{...YOUTUBE_SCRIPT,matches:[...YOUTUBE_SCRIPT.matches],js:[...YOUTUBE_SCRIPT.js],css:[...YOUTUBE_SCRIPT.css]}]
+    content_scripts:[{...YOUTUBE_SCRIPT,matches:[...YOUTUBE_SCRIPT.matches],js:[...YOUTUBE_SCRIPT.js],css:[...YOUTUBE_SCRIPT.css]},
+      {...NEXUS_SCRIPT,matches:[...NEXUS_SCRIPT.matches],js:[...NEXUS_SCRIPT.js]}]
   };
   if(browser==='chromium')return {...common,key:CHROMIUM_EXTENSION_KEY,minimum_chrome_version:'121',
     permissions:['downloads','nativeMessaging','declarativeNetRequest','declarativeNetRequestFeedback','webNavigation','contextMenus','notifications','storage','alarms','activeTab'],
@@ -40,8 +45,10 @@ function extensionManifest(browser,version){
     background:{scripts:['policy.js','background.js']},
     browser_specific_settings:{gecko:{id:FIREFOX_EXTENSION_ID,strict_min_version:'140.0',
       // Download and page addresses go to the Ravenshelf app on this PC, which
-      // Mozilla counts as transmitting browsing activity.
-      data_collection_permissions:{required:['browsingActivity']}}}};
+      // Mozilla counts as transmitting browsing activity. With a download from
+      // Nexus Mods go the names its page showed (game, mod, file), which
+      // Mozilla counts as website content.
+      data_collection_permissions:{required:['browsingActivity','websiteContent']}}}};
   throw new Error('Choose Chrome, Edge, Brave or Firefox.');
 }
 // Writes the extension into <root>/<browser>, replacing an older copy only
@@ -107,4 +114,4 @@ async function unregisterNativeHost({hostDir,platform=process.platform,fsApi=fs,
   if(typeof hostDir==='string'&&path.win32.isAbsolute(hostDir))for(const name of ['chromium.json','firefox.json','endpoint.json'])await fsApi.promises.unlink(path.win32.join(hostDir,name)).catch(()=>{});
   return {removed};
 }
-module.exports={EXTENSION_FILES,HOST_EXE,REGISTRY_KEYS,YOUTUBE_SCRIPT,extensionManifest,exportExtension,exportedVersion,nativeHostManifests,registerNativeHost,unregisterNativeHost};
+module.exports={EXTENSION_FILES,HOST_EXE,REGISTRY_KEYS,YOUTUBE_SCRIPT,NEXUS_SCRIPT,DESCRIPTION,extensionManifest,exportExtension,exportedVersion,nativeHostManifests,registerNativeHost,unregisterNativeHost};

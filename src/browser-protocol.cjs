@@ -5,6 +5,7 @@
 // before Ravenshelf acts on it.
 const crypto=require('node:crypto');
 const {REQUEST_QUALITIES,youtubeVideoId}=require('./youtube.cjs');
+const {modContext}=require('./mods.cjs');
 
 const HOST_NAME='io.github.khattabhunter.ravenshelf';
 // Public half of the key that pins the Chrome/Edge/Brave extension ID. Browsers
@@ -74,11 +75,12 @@ function validateRequest(message){
       if(typeof message.extensionVersion!=='string'||!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(message.extensionVersion)||!['chromium','firefox'].includes(message.browser))invalid();
       return {type:'hello',extensionVersion:message.extensionVersion,browser:message.browser};
     case 'capture':{
-      exactKeys(message,['url'],['finalUrl','referrer','pageUrl','filename','mime','totalBytes','incognito']);
+      // "mod" is the label for a file downloaded on Nexus Mods: its game and mod.
+      exactKeys(message,['url'],['finalUrl','referrer','pageUrl','filename','mime','totalBytes','incognito','mod']);
       if(message.incognito!==undefined&&message.incognito!==false)invalid();
       const totalBytes=message.totalBytes===undefined?undefined:message.totalBytes;
       if(totalBytes!==undefined&&(!Number.isSafeInteger(totalBytes)||totalBytes<-1))invalid();
-      return {type:'capture',url:webAddress(message.url),finalUrl:webAddress(message.finalUrl,{optional:true}),referrer:webAddress(message.referrer,{optional:true}),pageUrl:webAddress(message.pageUrl,{optional:true}),filename:text(message.filename,1024),mime:text(message.mime,200),totalBytes:totalBytes>0?totalBytes:undefined};
+      return {type:'capture',url:webAddress(message.url),finalUrl:webAddress(message.finalUrl,{optional:true}),referrer:webAddress(message.referrer,{optional:true}),pageUrl:webAddress(message.pageUrl,{optional:true}),filename:text(message.filename,1024),mime:text(message.mime,200),totalBytes:totalBytes>0?totalBytes:undefined,mod:modContext(message.mod)};
     }
     case 'send':
       exactKeys(message,['url','kind'],['pageUrl']);

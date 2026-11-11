@@ -8,7 +8,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const protocol=require('../src/browser-protocol.cjs');
 const setup=require('../src/browser-setup.cjs');
-const {BrowserBridge,MAX_PENDING,isProvider,baseName}=require('../src/browser-bridge.cjs');
+const {BrowserBridge,MAX_PENDING,isProvider,baseName,savedName}=require('../src/browser-bridge.cjs');
 
 const CHROME=`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`,FIREFOX=`firefox:${protocol.FIREFOX_EXTENSION_ID}`;
 const temp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-bridge-'));
@@ -44,7 +44,7 @@ test('browser requests must match an exact shape',()=>{
   assert.deepEqual(ok({type:'hello',extensionVersion:'0.5.0',browser:'chromium'}),{type:'hello',extensionVersion:'0.5.0',browser:'chromium'});
   bad({type:'hello',extensionVersion:'0.5',browser:'chromium'});bad({type:'hello',extensionVersion:'0.5.0',browser:'safari'});bad({type:'hello',extensionVersion:'0.5.0',browser:'chromium',extra:1});
   const capture=ok({type:'capture',url:'https://cdn.example/a b.zip',finalUrl:'https://cdn2.example/x.zip',referrer:'',pageUrl:'https://page.example/',filename:'x.zip',mime:'application/zip',totalBytes:-1,incognito:false});
-  assert.deepEqual(capture,{type:'capture',url:'https://cdn.example/a%20b.zip',finalUrl:'https://cdn2.example/x.zip',referrer:undefined,pageUrl:'https://page.example/',filename:'x.zip',mime:'application/zip',totalBytes:undefined});
+  assert.deepEqual(capture,{type:'capture',url:'https://cdn.example/a%20b.zip',finalUrl:'https://cdn2.example/x.zip',referrer:undefined,pageUrl:'https://page.example/',filename:'x.zip',mime:'application/zip',totalBytes:undefined,mod:undefined});
   assert.equal(ok({type:'capture',url:'http://plain.example/a',totalBytes:42}).totalBytes,42);
   for(const url of ['blob:https://x.example/uuid','data:text/plain,hi','javascript:alert(1)','ftp://x.example/a','file:///C:/a','chrome://settings','https://','https://x.example/\u0000','https://x.example/'+'a'.repeat(8200),42])bad({type:'capture',url});
   bad({type:'capture',url:'https://x.example/a',incognito:true});bad({type:'capture',url:'https://x.example/a',totalBytes:1.5});bad({type:'capture',url:'https://x.example/a',filename:'a\nb'});
@@ -62,12 +62,16 @@ test('extension manifests request only what the features need',()=>{
   const chrome=setup.extensionManifest('chromium','0.5.0'),firefox=setup.extensionManifest('firefox','0.5.0');
   assert.equal(chrome.manifest_version,3);assert.equal(chrome.key,protocol.CHROMIUM_EXTENSION_KEY);assert.equal(chrome.background.service_worker,'background.js');
   assert.deepEqual(firefox.background,{scripts:['policy.js','background.js']});
-  assert.equal(firefox.browser_specific_settings.gecko.id,protocol.FIREFOX_EXTENSION_ID);assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions,{required:['browsingActivity']});
+  assert.equal(firefox.browser_specific_settings.gecko.id,protocol.FIREFOX_EXTENSION_ID);assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions,{required:['browsingActivity','websiteContent']},'addresses, and the names a Nexus Mods page showed');
   for(const manifest of [chrome,firefox]){
     assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
-    // The one page script: the download button in YouTube's player, top frame of www.youtube.com only.
-    assert.deepEqual(manifest.content_scripts,[{matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false}]);
-    for(const file of [...manifest.content_scripts[0].js,...manifest.content_scripts[0].css])assert.ok(setup.EXTENSION_FILES.includes(file),file);
+    // The two page scripts, top frame only: the download button in YouTube's
+    // player, and the reader that notes which mod a Nexus Mods page is about.
+    assert.deepEqual(manifest.content_scripts,[
+      {matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false},
+      {matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false}]);
+    for(const script of manifest.content_scripts)for(const file of [...script.js,...(script.css||[])])assert.ok(setup.EXTENSION_FILES.includes(file),file);
+    assert.ok(manifest.description.length<=132,'browsers cut a longer description short');assert.match(manifest.description,/YouTube and Nexus Mods/);
     assert.equal(manifest.externally_connectable,undefined);assert.equal(manifest.web_accessible_resources,undefined);
     assert.ok(!manifest.permissions.some(permission=>/cookies|tabs|history|scripting|webRequest|<all_urls>|\*/.test(permission)),manifest.permissions.join());
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
@@ -322,6 +326,89 @@ test('requests beyond the rate limit are refused',async t=>{
   const {bridge}=bridgeFixture(t,{now:()=>1});
   let busy=0;for(let i=0;i<260;i++){const response=await bridge.respond('chromium',{v:1,type:'threats'});if(response.error==='busy')busy++;}
   assert.equal(busy,20);
+});
+
+test('a name is judged in the form it will be saved in, and the review shows that form',async t=>{
+  const {safeName,folderName}=require('../src/safe-name.cjs');
+  // Names that only look harmless until Windows-safe cleaning turns them into programs.
+  const FULLWIDTH_EXE='SkyUI patch.\uff45\uff58\uff45',FULLWIDTH_DOT='photo.jpg\uff0eexe';
+  assert.equal(safeName(FULLWIDTH_EXE),'SkyUI patch.exe');assert.equal(safeName(FULLWIDTH_DOT),'photo.jpg.exe');
+  const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:decodeURIComponent(url.split('/').pop()),size:5,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'windows-program'});
+  const {bridge,events}=bridgeFixture(t,{inspect});
+  const decide=message=>bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',...message}));
+  // From the browser's own file name: blocked at once, like the plain spelling.
+  let decision=decide({url:'https://cdn.example/a',filename:FULLWIDTH_DOT});
+  assert.equal(decision.action,'block');assert.match(decision.reason,/really a \.exe program/);
+  decision=decide({url:'http://plain.example/a',filename:'tool.\uff45\uff58\uff45'});
+  assert.equal(decision.action,'block','a program over plain HTTP, however its ending is spelled');
+  // From the server's name for the file: a warning that must be confirmed, and the saved name on show.
+  const id=decide({url:`https://cdn.example/${encodeURIComponent(FULLWIDTH_EXE)}`}).id;
+  const dotted=decide({url:'https://cdn.example/setup.exe.'}).id;
+  // The browser's own name for the file is cleaned as soon as it arrives: the notice already shows it.
+  decide({url:'https://cdn.example/b',filename:'run.scr  '});
+  assert.match(events.notes.at(-1).body,/^run\.scr was sent from your browser/);
+  await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'inspections');
+  const byId=Object.fromEntries(bridge.snapshot().captures.map(capture=>[capture.id,capture]));
+  assert.equal(byId[id].name,'SkyUI patch.exe');assert.equal(byId[id].verdict.level,'warning');
+  assert.ok(byId[id].verdict.reasons.some(reason=>reason.code==='program'),JSON.stringify(byId[id].verdict));
+  assert.equal(byId[dotted].name,'setup.exe');assert.equal(byId[dotted].verdict.level,'warning');
+  await assert.rejects(bridge.action({id,action:'download'}),/Confirm that you understand/);
+  await bridge.action({id,action:'download',acknowledgeRisk:true});
+  assert.equal(events.queued[0].filename,'SkyUI patch.exe');
+  assert.equal(safeName(events.queued[0].filename),events.queued[0].filename,'the queue saves it under exactly this name');
+  // With no name from the browser or the server, the name comes from the address, and is judged in its saved form too.
+  decision=decide({url:`http://plain.example/${encodeURIComponent('tool.\uff45\uff58\uff45')}`});
+  assert.equal(decision.action,'block','a program over plain HTTP whose name is only in the address');
+  assert.equal(bridge.snapshot().captures.find(capture=>capture.id===decision.id).name,'tool.exe');
+  const bare=bridgeFixture(t,{inspect:async url=>({status:'ready',url,sourceUrl:url,size:5,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'windows-program'})});
+  const taken=bare.bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',url:`https://cdn.example/${encodeURIComponent(FULLWIDTH_EXE)}`}));
+  assert.match(bare.events.notes.at(-1).body,/^SkyUI patch\.exe was sent from your browser/,'the notice names it as it will be saved');
+  await until(()=>bare.bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'inspection');
+  const [named]=bare.bridge.snapshot().captures;
+  assert.equal(named.id,taken.id);assert.equal(named.name,'SkyUI patch.exe');assert.equal(named.verdict.level,'warning');
+  // Every name the review can show is already in its saved form.
+  for(const capture of bridge.snapshot().captures)assert.equal(safeName(capture.name),capture.name,capture.name);
+  // Cleaning a name can uncover something to clean again. The judged name is the one that no longer
+  // changes, because the queue cleans every name once more before it saves the file.
+  const LONG_DEVICE='con.'+'a'.repeat(171)+'.exex';
+  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE).slice(-5),'.exex','cleaned once, it still looks harmless');
+  assert.equal(safeName(safeName(LONG_DEVICE)).slice(-4),'.exe','cleaned again, as the queue would, it is a program');
+  assert.equal(savedName(LONG_DEVICE),'_con.'+'a'.repeat(171)+'.exe');
+  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id;
+  decide({url:'https://cdn.example/d',filename:'run.bat'+'\ufeff.'.repeat(3)});
+  assert.match(events.notes.at(-1).body,/^run\.bat was sent from your browser/,'layers of invisible characters and dots are gone from the first moment');
+  await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'more inspections');
+  const later=Object.fromEntries(bridge.snapshot().captures.map(capture=>[capture.id,capture]));
+  assert.equal(later[device].name,'_con.'+'a'.repeat(171)+'.exe');assert.equal(later[device].verdict.level,'warning');
+  assert.ok(later[device].verdict.reasons.some(reason=>reason.code==='program'),JSON.stringify(later[device].verdict));
+  await bridge.action({id:device,action:'download',acknowledgeRisk:true});
+  assert.equal(events.queued.at(-1).filename,later[device].name);assert.equal(safeName(events.queued.at(-1).filename),later[device].name,'saved under the judged name');
+  assert.equal(savedName('run.bat'+'\ufeff.'.repeat(3)),'run.bat');assert.equal(savedName('a'+'\ufeff.'.repeat(119)),'a','however deep the layers go');
+  assert.equal(savedName(''),undefined);assert.equal(savedName(undefined),undefined);assert.equal(savedName('game.zip'),'game.zip');
+  // The same holds for names made of the awkward pieces in any order, and ordinary names are not touched.
+  const pieces=['con','NUL','com1','.','..',' ','a','.exe','.bat','x','\ufeff','\u2028','\u1680','\u00a0','\u3000','\uff0e','\uff23\uff2f\uff2e','\ud83d\ude00','_',':','/','*','\t','\u200b','e\u0301','\ufdfa','\ufeff.'];
+  let seed=20261111,unsettled=0,uncovered=0;const pick=n=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed%n;};
+  for(let i=0;i<20000;i++){
+    let odd='';for(let j=1+pick(6);j>0;j--){const piece=pieces[pick(pieces.length)];odd+=pick(4)?piece:piece.repeat(1+pick(190));}
+    const name=savedName(odd);
+    if(name===undefined){assert.equal(odd,'');continue;}
+    if(safeName(name)!==name)unsettled++;
+    if(safeName(odd)!==name)uncovered++;
+  }
+  assert.equal(unsettled,0,'every judged name is saved unchanged');assert.ok(uncovered>50,`${uncovered} of these names needed more than one cleaning`);
+  for(const plain of ['game.zip','Setup (1).exe','My Mod v1.2-12604-1-2.7z','\u0633\u0643\u0627\u064a.rar','archive.part01.rar'])assert.equal(savedName(plain),safeName(plain));
+  // Folder names: cut to 100 characters, and still without a trailing dot or space after the cut.
+  assert.equal(folderName('a'.repeat(97)+'\u2026b'),'a'.repeat(97));
+  assert.equal(folderName('\u2025'.repeat(50)+'x'),'Imported files');
+  assert.equal(folderName('a'.repeat(96)+'\ufdfa'),'a'.repeat(96)+'\u0635\u0644\u0649','a letter that spells out several words: cut at 100, then the space the cut left is removed');
+  for(const odd of ['a'.repeat(97)+'\u2026b','\u2025'.repeat(50)+'x','a'.repeat(96)+'\ufdfa','b'.repeat(99)+'. .','c'.repeat(99)+'\ud83d\ude00','CON','con.txt','..','.',' ','x'.repeat(300)]){
+    const name=folderName(odd);
+    assert.ok(name.length>0&&name.length<=100,odd);assert.doesNotMatch(name,/[. ]$/,odd);assert.doesNotMatch(name,/[\ud800-\udbff]$/,odd);
+    assert.doesNotMatch(name,/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i,odd);assert.equal(folderName(name),name,'cleaning twice changes nothing');
+  }
+  // The cleaning normalises before it replaces path characters, so look-alike dots and slashes cannot survive as real ones.
+  assert.equal(safeName('\uff0e\uff0e\uff0f\uff0e\uff0e\uff0fWindows'),'.._.._Windows');
+  assert.equal(folderName('\uff0e\uff0e'),'Imported files');
 });
 
 test('file names from the browser are reduced to a safe base name',()=>{

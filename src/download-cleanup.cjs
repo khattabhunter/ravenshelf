@@ -5,6 +5,7 @@ const crypto=require('node:crypto');
 const {workspaceFor}=require('./parallel-download.cjs');
 const {scanConfiguredArchives}=require('./download-storage.cjs');
 const {MEDIA_FOLDER,MEDIA_EXTENSIONS,WORKSPACE_FILE:MEDIA_WORKSPACE_FILE}=require('./youtube.cjs');
+const {SITE:MOD_SITE,MODS_FOLDER}=require('./mods.cjs');
 const TTL_MS=5*60*1000;
 const MAX_SELECTION=500;
 const ARCHIVE=/\.(?:rar|bin|zip|7z|iso|\d{3})$/i;
@@ -53,10 +54,15 @@ function browserFile(download,folder){return download.origin==='browser'&&pathKe
 function mediaFile(download,folder){
   return download.kind==='media'&&pathKey(path.basename(folder))===pathKey(MEDIA_FOLDER)&&MEDIA_EXTENSIONS.includes(path.extname(download.name).slice(1).toLowerCase());
 }
+// Mod files downloaded on Nexus Mods are saved only in Ravenshelf's own
+// Mods\<game> folders and can be any file type, like other browser downloads.
+function modFile(download,folder){
+  return download.origin==='browser'&&download.mod?.site===MOD_SITE&&pathKey(path.basename(path.dirname(folder)))===pathKey(MODS_FOLDER);
+}
 function selection(download){
   if(!download||typeof download.id!=='string'||!download.id||download.id.length>200||!filename(download.name))bad();
   const folder=local(download.folder),media=mediaFile(download,folder);
-  if(!ARCHIVE.test(download.name)&&!browserFile(download,folder)&&!media)bad();
+  if(!ARCHIVE.test(download.name)&&!browserFile(download,folder)&&!modFile(download,folder)&&!media)bad();
   const final=path.join(folder,download.name),partial=final+'.atlas-part',workspace=workspaceFor(partial,download.id);
   if(!within(folder,final)||!within(folder,partial)||!within(folder,workspace)||path.dirname(workspace)!==folder)bad();
   return {id:download.id,name:download.name,folder,final,partial,workspace,media};

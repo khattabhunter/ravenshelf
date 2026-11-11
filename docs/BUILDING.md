@@ -95,6 +95,9 @@ Passing tests establish the exercised cases, not that every host response, Windo
 | `src/defender-scan.cjs`, `src/header-vault.cjs` | Scan interpretation and saved request-header encryption. |
 | `src/catalog*.cjs` | Catalogue sections and background refresh. |
 | `src/installed-games.cjs`, `src/installed-scan.ps1` | Read-only installation and version discovery. |
+| `src/hardware.cjs`, `src/hardware-probe.ps1` | The PC specs page's read-only hardware probe and its checks. Changing the probe script also means updating the lists and fingerprint in `test/hardware.test.cjs`. |
+| `src/mods.cjs` | Checks for the Nexus Mods label on browser downloads and the `Mods` folder rule. |
+| `src/safe-name.cjs` | Makes file and folder names safe for Windows. Used by the queue and the browser review. |
 | `src/completion-action.cjs`, `src/completion-policy.cjs` | Queue/scan completion checks and cancellable finish actions. |
 | `src/feature-services.cjs` | Validated integration for update, cleanup, metadata, clipboard, notifications and verification operations. |
 | `src/app-updater.cjs`, `src/updater-helper.cs` | GitHub release checks, approval-gated staging, leftover cleanup and native portable replacement after app exit. |

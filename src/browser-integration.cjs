@@ -11,6 +11,7 @@ const browserSetup=require('./browser-setup.cjs');
 const {safeURL}=require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
 const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
+const {MODS_FOLDER,modFolder}=require('./mods.cjs');
 
 const EXTENSION_BROWSERS=Object.freeze(['chromium','firefox']);
 const FOLDER_NOT_UPDATED='The extension folder could not be updated, so your browser keeps the previous version. Restart Ravenshelf to try again.';
@@ -32,7 +33,8 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   try{threatLists.load();}catch{}
   try{virusTotal.load();}catch{}
   const bridge=new BrowserBridge({hostDir,threatLists,virusTotal,resolveProvider,appVersion:version,platform,
-    queueDownload:entry=>{assertQueueAvailable();return manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
+    // A file downloaded on Nexus Mods goes to Mods\<game>; everything else to Browser downloads.
+    queueDownload:entry=>{assertQueueAvailable();return entry.mod?manager.add({links:[entry],gameTitle:modFolder(entry.mod),group:MODS_FOLDER}):manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
     queueMedia,
     openExternal:url=>shell.openExternal(safeURL(url).href),
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});

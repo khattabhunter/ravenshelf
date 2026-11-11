@@ -217,6 +217,65 @@ test('same source is deduplicated within the same destination', async t => {
   assert.equal(manager.downloads.length, 1);
 });
 
+test('a game whose folder was made by an earlier version keeps it, and a new game gets a tidy folder name', async t => {
+  // Before 0.7.0 a folder name was cut at 100 characters and left as it was. This made-up title is cut right after a space.
+  const title = 'Example Quest: Legends of the Northern Kingdom \u2013 Complete Edition, v4.04 Hotfix 2 + 22 DLCs + Bonus Content + Windows 7 Fix';
+  const earlierName = safeName(title, 'Imported files').slice(0, 100), tidyName = earlierName.trimEnd();
+  assert.equal(earlierName.at(-1), ' ');
+  const part = n => link(`part-${n}`, `game.part0${n}.rar`);
+  // The queue as the earlier version saved it: part 1 is finished, in the folder with the space at its end.
+  const { manager, downloadDir } = fixture(t, async () => response('abc', { 'content-length': '3' }), (_root, dir) => {
+    const folder = path.join(dir, earlierName);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'game.part01.rar'), 'abc');
+    return { settings: { downloadDir: dir, concurrency: 1, favorites: [] }, downloads: [{
+      id: 'earlier', name: 'game.part01.rar', folder, gameTitle: title, status: 'completed', url: part(1).url, sourceUrl: part(1).sourceUrl, received: 3, total: 3, etag: null, lastModified: null, speed: 0, headers: {}, error: '',
+    }] };
+  });
+  // The same game again, with one part more: the part that is there is recognised, and the new one joins it.
+  const result = manager.add({ gameTitle: title, links: [part(1), part(2)] });
+  assert.equal(result.added, 1, 'the finished part is not downloaded a second time');
+  await finished(manager);
+  assert.deepEqual(manager.downloads.map(d => [d.name, d.status, path.basename(d.folder)]), [['game.part01.rar', 'completed', earlierName], ['game.part02.rar', 'completed', earlierName]]);
+  assert.deepEqual(fs.readdirSync(downloadDir), [earlierName], 'no second folder appears beside the first');
+  // The list alone is enough too, when the folder itself is gone, however the title's letters are cased now.
+  fs.rmSync(path.join(downloadDir, earlierName), { recursive: true });
+  const shouted = title.toUpperCase(), shoutedName = safeName(shouted, 'Imported files').slice(0, 100);
+  assert.equal(shoutedName.at(-1), ' ');assert.notEqual(shoutedName, earlierName);
+  assert.equal(manager.add({ gameTitle: shouted, links: [part(1), part(2)] }).added, 0, 'both parts are still recognised');
+  assert.deepEqual(fs.readdirSync(downloadDir), [shoutedName], 'the folder comes back under the earlier kind of name');
+  fs.rmSync(path.join(downloadDir, shoutedName), { recursive: true });
+  fs.mkdirSync(path.join(downloadDir, earlierName));
+  // The folder alone is enough, even after its entries were removed from the list.
+  manager.downloads.length = 0;
+  manager.add({ gameTitle: title, links: [part(3)] });
+  assert.equal(path.basename(manager.downloads[0].folder), earlierName);
+  await finished(manager);
+  // A game with no earlier folder gets the tidy name, and so do folders inside a group such as Mods.
+  const other = title.replace('Example Quest', 'Another Quest');
+  manager.add({ gameTitle: other, links: [part(4)] });
+  const fresh = path.basename(manager.downloads.at(-1).folder);
+  assert.equal(fresh, safeName(other, 'Imported files').slice(0, 100).trimEnd());assert.notEqual(fresh.at(-1), ' ');assert.equal(fresh.length, 99);
+  manager.add({ gameTitle: title, group: 'Mods', links: [part(5)] });
+  assert.equal(manager.downloads.at(-1).folder, path.join(downloadDir, 'Mods', tidyName));
+  // So does the same long title where nothing is on disk or in the list yet.
+  const empty = fixture(t, async () => response('abc', { 'content-length': '3' }));
+  assert.equal(empty.manager.downloads.length, 0);
+  empty.manager.add({ gameTitle: title, links: [part(1)] });
+  assert.equal(path.basename(empty.manager.downloads[0].folder), tidyName);
+  // Files without a game go to Imported files, whatever other folders happen to be there.
+  fs.mkdirSync(path.join(empty.downloadDir, 'download'));
+  empty.manager.add({ links: [part(2)] });
+  assert.equal(path.basename(empty.manager.downloads[1].folder), 'Imported files');
+  await finished(empty.manager);
+  assert.deepEqual(fs.readdirSync(path.join(empty.downloadDir, 'download')), []);
+  // A title whose cut needs no tidying is unchanged from the earlier version.
+  manager.add({ gameTitle: 'Short Game \u2013 v1.0', links: [part(6)] });
+  assert.equal(path.basename(manager.downloads.at(-1).folder), 'Short Game \u2013 v1.0');
+  await finished(manager);
+  assert.deepEqual(fs.readdirSync(downloadDir).sort(), [fresh, earlierName, 'Mods', 'Short Game \u2013 v1.0'].sort());
+});
+
 test('queued final names cannot collide with another job\'s temporary partial path', async t => {
   const { manager } = fixture(t, async url => response(url.endsWith('/first') ? 'abc' : 'def', { 'content-length': '3' }));
   manager.add({ gameTitle: 'Game', links: [link('first', 'file.rar'), link('second', 'file.rar.atlas-part')] });

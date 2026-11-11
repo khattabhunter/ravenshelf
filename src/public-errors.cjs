@@ -1,6 +1,7 @@
 'use strict';
 const {MESSAGES:TOOL_MESSAGES}=require('./media-tools.cjs');
 const {MESSAGES:MEDIA_MESSAGES}=require('./media-downloads.cjs');
+const {LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED}=require('./mods.cjs');
 
 // Only developer-authored messages cross the main-process error boundary.
 // Do not redact arbitrary exception text: paths, credentials and response data
@@ -155,7 +156,9 @@ const MESSAGES=new Map([
   'Too many YouTube downloads are waiting. Let some finish first.',
   'Choose a YouTube download quality.',
   // Fixed messages of the YouTube helper programs and yt-dlp runner.
-  ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES)
+  ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES),
+  // A mod file's download link that Nexus Mods no longer accepts.
+  MOD_LINK_EXPIRED
 ].map(message=>[message,message]));
 // The connector check failing means this copy of the app was altered or damaged.
 const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';
@@ -194,7 +197,8 @@ const ACTIONS=new Map([
   ['cancelYouTubeSetup','The YouTube setup could not be cancelled. Try again.'],
   ['removeYouTubeTools','The YouTube helper programs could not be removed. Pause YouTube downloads and try again.'],
   ['saveYouTubeSettings','The YouTube preference could not be saved. Try again.'],
-  ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.']
+  ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.'],
+  ['getHardware','This PC’s specs could not be read. Try again.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],

@@ -20,6 +20,7 @@ const {createFeatureServices,featureSettings}=require('./feature-services.cjs');
 const {createBrowserIntegration}=require('./browser-integration.cjs');
 const {createMediaIntegration}=require('./media-integration.cjs');
 const {markFromInternet}=require('./motw.cjs');
+const {createHardwareService}=require('./hardware.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media;
 const checked=new Map(),hostWindows=new Set(),mediaWindows=new Set();
@@ -190,6 +191,9 @@ app.whenReady().then(async()=>{
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',event=>event.preventDefault());
   win.webContents.on('will-attach-webview',event=>event.preventDefault());
+  // PC specs are read only when the page asks for them, and stay on this PC.
+  const hardware=createHardwareService();
+  handle('getHardware',options=>hardware.get({refresh:options?.refresh===true}));
   handle('getState',appState);
   handle('listGames',async options=>providers.listGames({page:Math.max(1,Math.min(2000,Number(options?.page)||1)),search:String(options?.search||'').slice(0,200)}));
   handle('getCatalogSections',()=>catalog.getCatalogSections());
