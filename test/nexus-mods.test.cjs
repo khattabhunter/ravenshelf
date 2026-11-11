@@ -75,6 +75,17 @@ test('text read from a page is cleaned before it goes anywhere',()=>{
   assert.equal(P.nexusText('x'.repeat(100000),50).length,50);
   for(const value of ['','   ','\u200b\u202e',null,undefined,5,{},[],true])assert.equal(P.nexusText(value,10),undefined);
   assert.equal(P.nexusText(' '.repeat(3999)+'kept',10),'k','only the first 4,000 characters are looked at');assert.equal(P.nexusText(' '.repeat(4000)+'late',10),undefined);
+  // Characters that no version of Unicode has assigned, and the object placeholder, show as boxes or as nothing.
+  for(const code of [0x378,0xfdd0,0xfffe,0xffff,0xfffc,0x1fffe,0x10ffff])assert.equal(P.nexusText(`a${String.fromCodePoint(code)}b`,10),'a b',`U+${code.toString(16)}`);
+  // Marks that sit on the letter before them: three in a row at most, and none in front of the name.
+  const acute=String.fromCharCode(0x301),hook=String.fromCharCode(0x309);
+  assert.equal(P.nexusText('e'+acute,10),'e'+acute);assert.equal(P.nexusText('e'+acute+hook+acute,10),'e'+acute+hook+acute);
+  assert.equal(P.nexusText('Z'+acute.repeat(40)+'algo',50),'Z'+acute.repeat(3)+'algo','a pile of marks would cover the lines above and below');
+  assert.equal(P.nexusText('a'+acute.repeat(4)+'b'+hook.repeat(9)+acute,50),'a'+acute.repeat(3)+'b'+hook.repeat(3));
+  assert.equal(P.nexusText(acute+'abc',10),'abc','a mark in front would sit on whatever stands before the name');
+  assert.equal(P.nexusText(' '+acute+' '+hook+acute+' abc',10),'abc');assert.equal(P.nexusText(acute.repeat(3),10),undefined);assert.equal(P.nexusText(acute+' '+hook,10),undefined);
+  assert.equal(P.nexusText('ab '+acute+'c',10),'ab '+acute+'c','a mark after a space inside the text is left alone');
+  assert.equal(P.nexusText('ab'+acute.repeat(9),4),'ab'+acute.repeat(2),'the limit on length still holds');
   assert.equal(P.nexusId('735025'),735025);assert.equal(P.nexusId(12),12);assert.equal(P.nexusId('1'),1);assert.equal(P.nexusId('2147483647'),2147483647);assert.equal(P.nexusId(2147483647),2147483647);assert.equal(P.nexusId('0000000001'),1);
   for(const value of ['0','-1','1.5','1e3',' 5','5 ','0x10','99999999999','\uff15',0,-1,1.5,2147483648,NaN,Infinity,null,undefined,'',{},[5]])assert.equal(P.nexusId(value),undefined,String(value));
 });
@@ -136,8 +147,12 @@ test('a download is labelled only when it comes from Nexus Mods’ file servers 
   const item={url:CDN,referrer:'https://www.nexusmods.com/',filename:FILE_NAME};
   const pages=[noted()];
   assert.deepEqual(P.nexusMatch(item,pages,NOW),LABEL,'the file name a Nexus Mods file page showed');
-  assert.deepEqual(P.nexusMatch({...item,filename:`C:\\Users\\P\\Downloads\\${FILE_NAME.replace('.7z',' (1).7z')}`},pages,NOW),LABEL,'a second copy of it');
-  assert.deepEqual(P.nexusMatch({url:'https://short.example/x',finalUrl:CDN,filename:FILE_NAME},pages,NOW),LABEL,'the address the download ended up at decides');
+  assert.deepEqual(P.nexusMatch({...item,url:NEWER_CDN,filename:`C:\\Users\\P\\Downloads\\${FILE_NAME.replace('.7z',' (1).7z')}`},pages,NOW),LABEL,'a second copy of it, at an address where only the name can find the page');
+  assert.deepEqual(P.nexusMatch({url:'https://www.nexusmods.com/Core/Libs/Common/Widgets/DownloadPopUp?id=735025',finalUrl:CDN,filename:FILE_NAME},pages,NOW),LABEL,'a download that began on the site and was handed to a file server');
+  assert.deepEqual(P.nexusMatch({url:NEWER_CDN,finalUrl:CDN,filename:FILE_NAME},pages,NOW),LABEL,'or was handed from one file server to another');
+  // A download that began on another site and only ended up on a file server is not labelled.
+  for(const first of ['https://short.example/x','http://www.nexusmods.com/x','https://nexusmods.com/x','https://users.nexusmods.com/x','https://www.nexusmods.com.example.com/x','https://example.com/www.nexusmods.com/x','http://supporter-files.nexus-cdn.com/x',42,undefined,''])
+    assert.equal(P.nexusMatch({url:first,finalUrl:CDN,filename:FILE_NAME},pages,NOW),null,String(first));
   assert.deepEqual(P.nexusMatch({url:CDN,filename:FILE_NAME},pages,NOW),LABEL,'which page started it does not matter');
   assert.deepEqual([...P.NEXUS_FILE_ROOTS],['nexus-cdn.com']);
   // A file kept anywhere else is never a Nexus Mods file, whatever its name and whichever page linked to it.
@@ -160,8 +175,8 @@ test('a download is labelled only when it comes from Nexus Mods’ file servers 
   assert.deepEqual(P.nexusMatch(unnumbered,[noted(SHOWN,FILE_URL,NOW-P.NEXUS_PAGE_MS+1)],NOW),LABEL);
   for(const at of [NOW-P.NEXUS_PAGE_MS,NOW-P.NEXUS_PAGE_MS-1,NOW+1,NaN,undefined])assert.equal(P.nexusMatch(unnumbered,[{...noted(),at}],NOW),null,String(at));
   // With no matching name, the game and mod numbers in an older file address find the page.
-  const other={...item,filename:'renamed.7z'};
-  assert.deepEqual(P.nexusMatch(other,pages,NOW),LABEL);
+  const other={...item,filename:'renamed.7z'},MOD_ONLY=(({fileId,fileName,...rest})=>rest)(LABEL);
+  assert.deepEqual(P.nexusMatch(other,pages,NOW),MOD_ONLY,'the numbers name the mod; which of its files this is, they do not say');
   assert.equal(P.nexusMatch({...other,url:CDN.replace('/12604/','/12605/')},pages,NOW),null,'a different mod number is not this mod');
   assert.equal(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/')},pages,NOW),null,'the same mod number under another game number is another mod');
   assert.equal(P.nexusMatch({...item,url:CDN.replace('/1704/','/9999/')},pages,NOW),null,'even under a file name the page showed');
@@ -171,8 +186,9 @@ test('a download is labelled only when it comes from Nexus Mods’ file servers 
   assert.equal(P.nexusMatch({...other,url:'https://supporter-files.nexus-cdn.com/1704/12604/sub/renamed.7z'},pages,NOW),null,'nor numbers in front of a longer path');
   assert.equal(P.nexusMatch({...other,url:'https://supporter-files.nexus-cdn.com/1704/12604/'},pages,NOW),null);
   assert.equal(P.nexusMatch({...other,url:'https://supporter-files.nexus-cdn.com/8f14e45f-ceea-467f-9a36-dedd4bea2543/file.7z'},pages,NOW),null,'newer addresses carry no numbers');
-  assert.deepEqual(P.nexusMatch(other,[noted({...SHOWN,files:[]},PAGE_URL)],NOW),{site:'nexusmods',game:GAME,modId:12604,gameId:1704,gameName:'Skyrim Special Edition',modName:'SkyUI'},'the mod is known, the file is not');
-  assert.deepEqual(P.nexusMatch(other,[noted({...SHOWN,files:[SHOWN.files[0],{fileId:'9',fileUri:'second.7z'}]})],NOW).fileId,undefined,'with two files on show, the file is not guessed');
+  assert.deepEqual(P.nexusMatch(other,[noted({...SHOWN,files:[]},PAGE_URL)],NOW),MOD_ONLY,'the mod is known, the file is not');
+  assert.deepEqual(P.nexusMatch(other,[noted({...SHOWN,files:[SHOWN.files[0],{fileId:'9',fileUri:'second.7z'}]})],NOW),MOD_ONLY,'with two files on show, the file is not guessed');
+  assert.deepEqual(P.nexusMatch({...item,filename:'Optional Textures-12604-2-0.7z'},pages,NOW),MOD_ONLY,'nor with one: another file of the mod is not the one the page showed');
   assert.equal(P.nexusMatch(other,[noted({...SHOWN,gameId:''})],NOW),null,'a page that did not say its game number cannot be found by numbers');
   // A name that matches a page of a different mod than the numbers in the address says is not used.
   const elsewhere=noted({gameId:'1151',gameName:'Fallout 4',modName:'Another Mod',files:[{fileId:'5',fileUri:FILE_NAME}]},'https://www.nexusmods.com/fallout4/mods/77?file_id=5',NOW-10);
@@ -205,7 +221,13 @@ test('a download is labelled only when it comes from Nexus Mods’ file servers 
   assert.equal(P.nexusMatch({...item,referrer:'https://www.nexusmods.com/fallout4/mods/77'},[elsewhere,noted()],NOW),null,'a starting page and file numbers that name different mods cancel out');
   assert.equal(P.nexusMatch({...item,filename:'other.7z',referrer:'https://www.nexusmods.com/fallout4/mods/77'},[elsewhere],NOW),null,'also when no page lists the file');
   assert.equal(P.nexusMatch({...item,filename:'other.7z',referrer:'https://www.nexusmods.com/fallout4/mods/77'},[],NOW),null);
-  assert.deepEqual(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},pages,NOW),{site:'nexusmods',game:GAME,modId:12604,fileId:735025},'a note whose game number differs from the file’s address is left out: only the starting page’s own numbers are used');
+  // The starting page's own note says which game its mod belongs to. A file address with another game's number is another game's mod of that number.
+  assert.equal(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},pages,NOW),null);
+  assert.equal(P.nexusMatch({...item,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},pages,NOW),null,'even under a file name the page showed');
+  assert.equal(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},[noted(SHOWN,FILE_URL,NOW-60000),noted({...SHOWN,gameId:'9999'},FILE_URL,NOW-10)],NOW),null,'two notes of the page that disagree: no label');
+  assert.deepEqual(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},[noted({...SHOWN,gameId:''})],NOW),(({gameId,...rest})=>rest)(LABEL),'a note that does not say its game number does not contradict the address');
+  assert.deepEqual(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},[],NOW),{site:'nexusmods',game:GAME,modId:12604,fileId:735025},'and with no note there is nothing to contradict it');
+  assert.deepEqual(P.nexusMatch({...other,url:CDN.replace('/1704/','/9999/'),referrer:FILE_URL},[noted(SHOWN,FILE_URL,NOW-P.NEXUS_PAGE_MS)],NOW),{site:'nexusmods',game:GAME,modId:12604,fileId:735025},'a note that is too old counts for nothing, either way');
   // Broken input never throws and never labels by accident.
   for(const bad of [[null,pages],[item,null],['x',pages],[{},pages],[{url:42},pages],[unnumbered,[null,'x',{},{files:'x',at:NOW},{...noted(),game:''},{...noted(),modId:0},{...noted(),files:'x'},{...noted(),files:null},{...noted(),at:String(NOW-1000)},{...noted(),at:null}]]])assert.equal(P.nexusMatch(bad[0],bad[1],NOW),null);
   assert.deepEqual(P.nexusMatch(item,[{...noted(),files:[null,'x',{key:5},7]}],NOW),{site:'nexusmods',game:GAME,modId:12604,gameId:1704,gameName:'Skyrim Special Edition',modName:'SkyUI'},'unusable file entries in a stored note are skipped, not tripped over');
@@ -225,7 +247,8 @@ test('the capture message carries the label only for Nexus Mods files, and the a
   assert.deepEqual(P.downloadPlan(item,{capture:false},context),{kind:'ignore'});
   assert.equal(P.downloadPlan({id:2,url:'https://cdn.example/game.zip',filename:'game.zip'},on,context).message.mod,undefined);
   // The address the browser ended up at is the one that counts, in both directions.
-  assert.deepEqual(P.downloadPlan({id:3,url:'https://short.example/x',finalUrl:CDN,filename:FILE_NAME},on,context).message.mod,LABEL);
+  assert.deepEqual(P.downloadPlan({id:3,url:'https://www.nexusmods.com/x',finalUrl:CDN,filename:FILE_NAME},on,context).message.mod,LABEL);
+  assert.equal(P.downloadPlan({id:3,url:'https://short.example/x',finalUrl:CDN,filename:FILE_NAME},on,context).message.mod,undefined,'a download that began on another site');
   assert.equal(P.downloadPlan({id:4,url:CDN,finalUrl:`https://mirror.example/${FILE_NAME}`,filename:FILE_NAME},on,context).message.mod,undefined);
   // A file whose address carries no numbers is found by its name, which the plan passes on without the folders in front of it.
   assert.deepEqual(P.downloadPlan({id:5,url:NEWER_CDN,filename:`C:\\Users\\Player\\Downloads\\${FILE_NAME}`},on,context).message.mod,LABEL);
@@ -553,6 +576,11 @@ test('the app checks every part of a mod label and refuses anything malformed',(
     {...LABEL,modName:'filler\u3164'},{...LABEL,gameName:'half\uffa0width'},{...LABEL,modName:'jamo\u115f'},{...LABEL,modName:'jamo\u1160'},{...LABEL,fileName:'vs\ufe0f'},{...LABEL,modName:'cgj\u034f'},
     {...LABEL,modName:'khmer\u17b4'},{...LABEL,modName:'mongolian\u180b'},{...LABEL,modName:'vs\udb40\udd00'},{...LABEL,modName:'\u2800\u2800'},{...LABEL,gameName:'braille\u2800blank'}
   ])bad(value);
+  // Unassigned characters, the object placeholder, and marks that pile up on a letter or stand in front of a name.
+  const ACUTE=String.fromCharCode(0x301);
+  for(const text of [`x${String.fromCodePoint(0x378)}`,`x${String.fromCodePoint(0xfffe)}`,`x${String.fromCodePoint(0xfffc)}y`,`x${String.fromCodePoint(0x10ffff)}`,`Z${ACUTE.repeat(4)}algo`,`Zalgo${ACUTE.repeat(4)}`,`${ACUTE}abc`,`a ${ACUTE.repeat(4)}`])
+    for(const key of ['gameName','modName','fileName'])bad({...LABEL,[key]:text});
+  for(const text of [`e${ACUTE}`,`e${ACUTE.repeat(3)}`,`a ${ACUTE}b`,`e${ACUTE.repeat(3)} o${ACUTE.repeat(3)}`])assert.equal(ok({...LABEL,modName:text}).modName,text);
   // The extension's cleaning and the app's check never disagree: what the extension lets through the app
   // accepts, and every character the app refuses is one the extension takes out.
   const refused=text=>{try{mods.modContext({...LABEL,modName:text});return false;}catch{return true;}};
@@ -566,6 +594,18 @@ test('the app checks every part of a mod label and refuses anything malformed',(
     removed++;assert.ok(!cleaned.includes(character),`U+${code.toString(16)} is refused by the app, so the extension must take it out`);
   }
   assert.ok(removed>=8500,`the comparison covers the refused characters (${removed})`);
+  // The same for text made of awkward pieces in any order: whatever the extension's cleaning returns, the app accepts.
+  const pieces=['a','Z',' ','  ',ACUTE,ACUTE.repeat(2),ACUTE.repeat(5),String.fromCharCode(0x309),String.fromCharCode(0x200b),String.fromCodePoint(0x378),String.fromCodePoint(0xfffc),String.fromCharCode(9),String.fromCodePoint(0x1f600),String.fromCharCode(0xd83d),String.fromCharCode(0x202e),'-','.'];
+  let seed=20261112,kept=0;const pick=n=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed%n;};
+  for(let round=0;round<5000;round++){
+    let raw='';for(let n=1+pick(12);n>0;n--)raw+=pieces[pick(pieces.length)];
+    for(const max of [100,200,3]){
+      const cleaned=P.nexusText(raw,max);
+      if(cleaned===undefined)continue;
+      kept++;assert.equal(refused(cleaned),false,JSON.stringify(raw));assert.ok(cleaned.length<=max);
+    }
+  }
+  assert.ok(kept>8000,`most of these leave some text (${kept})`);
   // One list of refused characters, written the same way in both places.
   const refusedClass=source=>/\[\\p\{Cc\}[^\]]*\]/.exec(source)[0];
   assert.equal(refusedClass(read('policy.js')),refusedClass(fs.readFileSync(path.join(__dirname,'..','src','mods.cjs'),'utf8')));
@@ -575,7 +615,11 @@ test('the app checks every part of a mod label and refuses anything malformed',(
 test('only a file fetched from Nexus Mods’ file servers can carry a label',()=>{
   assert.deepEqual([...mods.FILE_ROOTS],['nexus-cdn.com']);
   for(const request of [{url:CDN},{url:NEWER_CDN},{url:'https://files.nexus-cdn.com/a/b.zip'},{url:'https://nexus-cdn.com/x.zip'},{url:'https://SUPPORTER-FILES.NEXUS-CDN.COM/x.zip'},
-    {url:'https://short.example/x',finalUrl:CDN},{url:CDN,referrer:'https://evil.example/'},{url:CDN,pageUrl:'https://evil.example/'}])assert.equal(mods.fromNexus(request),true,JSON.stringify(request));
+    {url:'https://www.nexusmods.com/x',finalUrl:CDN},{url:'https://WWW.NEXUSMODS.COM/x?y=1',finalUrl:NEWER_CDN},{url:NEWER_CDN,finalUrl:CDN},{url:CDN,finalUrl:CDN},
+    {url:CDN,referrer:'https://evil.example/'},{url:CDN,pageUrl:'https://evil.example/'}])assert.equal(mods.fromNexus(request),true,JSON.stringify(request));
+  // A download that began on another site and only ended up on a file server is not Nexus Mods' own.
+  for(const url of ['https://short.example/x','http://www.nexusmods.com/x','https://nexusmods.com/x','https://users.nexusmods.com/x','https://www.nexusmods.com.example.com/x','https://example.com/www.nexusmods.com/x','http://supporter-files.nexus-cdn.com/x','not an address','',42,undefined])
+    assert.equal(mods.fromNexus({url,finalUrl:CDN}),false,String(url));
   // The page that started a download proves nothing: any page, Nexus Mods' own included, can link to a file kept anywhere.
   for(const request of [null,undefined,'x',5,{},{url:''},{url:42},{url:'https://mirror.example/x.zip'},
     {url:'https://new-server.example/x.zip',referrer:'https://www.nexusmods.com/'},{url:'https://new-server.example/x.zip',pageUrl:FILE_URL},{url:'https://new-server.example/x.zip',referrer:FILE_URL,pageUrl:FILE_URL},
@@ -613,6 +657,7 @@ test('the label follows a Nexus Mods download through the review and into the qu
   const [shown]=bridge.snapshot().captures;
   assert.equal(shown.status,'ready');assert.deepEqual(shown.mod,LABEL);assert.equal(shown.name,FILE_NAME);assert.equal(shown.modFolder,'Mods › Skyrim Special Edition');
   assert.equal(new URL(shown.address).hostname,'supporter-files.nexus-cdn.com','the review still shows where the file really comes from');
+  assert.equal(shown.address,CDN.split('?')[0],'the signed part of the link is not sent to the window');
   assert.equal(events.queued.length,0,'nothing downloads until you choose');
   const result=await bridge.action({id:decision.id,action:'download'});
   assert.equal(result.added,1);assert.equal(events.queued.length,1);
@@ -644,8 +689,11 @@ test('a label on a file that does not come from Nexus Mods’ file servers is dr
   // The address the browser ended up at decides, not the one the download started from.
   const ended=await take({url:CDN,finalUrl:'https://mirror.example/SkyUI.7z',filename:'SkyUI.7z',mod:LABEL});
   assert.equal(shown(ended.id).mod,null);
-  const through=await take({url:'https://short.example/x',finalUrl:NEWER_CDN,filename:FILE_NAME,mod:LABEL});
+  const through=await take({url:'https://www.nexusmods.com/x',finalUrl:NEWER_CDN,filename:FILE_NAME,mod:LABEL});
   assert.deepEqual(shown(through.id).mod,LABEL);
+  // But one that began on another site is not labelled: "Download in browser instead" would open that first address.
+  const began=await take({url:'https://short.example/x',finalUrl:NEWER_CDN,filename:'Other File.7z',mod:LABEL});
+  assert.equal(shown(began.id).status,'ready');assert.equal(shown(began.id).mod,null);assert.equal(shown(began.id).modFolder,'');
 });
 
 test('a Nexus Mods link that leads on to another site loses its label',async t=>{
@@ -662,6 +710,7 @@ test('a Nexus Mods link that leads on to another site loses its label',async t=>
   const stays=await within.take({url:CDN,filename:FILE_NAME,mod:LABEL});
   await within.bridge.action({id:stays.id,action:'download'});
   assert.deepEqual(within.events.queued[0].mod,LABEL);assert.equal(within.events.queued[0].url,NEWER_CDN);
+  assert.equal(within.events.queued[0].sourceUrl,CDN,'the address the browser asked for is kept beside the one the file is fetched from');
   // An unencrypted last step is not a file server's address either.
   const plain=bridgeFor(t,{inspect:checked(NEWER_CDN.replace('https:','http:'),{status:'manual',insecure:true})});
   const downgraded=await plain.take({url:CDN,filename:FILE_NAME,mod:LABEL});
@@ -830,7 +879,8 @@ test('a mod file is fetched from its own link and nowhere else: Ravenshelf never
   await q.finished();
   const reopened=await q.reopen();requests.length=0;lookups.length=0;
   const [keptMod,keptPlain]=reopened.downloads.slice(2);
-  assert.equal(keptMod.headersNeedRefresh,true,'this test queue has no vault, so the header was not kept');assert.deepEqual(keptMod.headers,{});
+  // This test queue has no vault, so neither header was kept. Only the ordinary download is marked to be checked again.
+  assert.deepEqual(keptMod.headers,{});assert.equal(Object.hasOwn(keptMod,'headersNeedRefresh'),false);
   assert.equal(keptPlain.headersNeedRefresh,true);
   reopened.action(keptMod.id,'resume');
   for(let i=0;i<3000&&(reopened.running.size||reopened.downloads.some(d=>['queued','downloading'].includes(d.status)));i++)await tick(5);
@@ -847,19 +897,21 @@ test('a mod file is fetched from its own link and nowhere else: Ravenshelf never
 
 test('a finished mod file keeps only the plain address of its link',async t=>{
   const server=fileServer(3072),q=queueFor(t,server),ordinary='https://cdn.example/game.zip?token=1';
-  q.manager.add({links:[modLink()],gameTitle:mods.modFolder(LABEL),group:mods.MODS_FOLDER});
-  q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip'})],gameTitle:'Browser downloads'});
+  q.manager.add({links:[modLink({referer:FILE_URL})],gameTitle:mods.modFolder(LABEL),group:mods.MODS_FOLDER});
+  q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip',referer:'https://page.example/'})],gameTitle:'Browser downloads'});
   await q.finished();
   const [mod,plain]=q.manager.downloads,address=CDN.split('?')[0];
+  assert.equal(server.requests[0].referer,FILE_URL);
   assert.equal(mod.status,'completed',mod.error);assert.equal(plain.status,'completed',plain.error);
   assert.equal(server.requests[0].url,CDN,'the whole link is what was fetched');
   // The part after "?" is a signed pass with the account's number in it. It was needed to fetch the file, and is not kept after that.
   assert.equal(mod.url,address);assert.equal(mod.sourceUrl,address);
+  assert.deepEqual(mod.headers,{},'nor is the page address that went with the request');
   assert.equal(q.manager.state().downloads[0].url,address,'so the window does not show it');
   const saved=fs.readFileSync(q.options.stateFile,'utf8');
   assert.ok(saved.includes(address));assert.doesNotMatch(saved,/user_id|md5=|expires=/,'and it is not left on disk');
   // Other downloads keep their address as it was.
-  assert.equal(plain.url,ordinary);assert.equal(plain.sourceUrl,ordinary);
+  assert.equal(plain.url,ordinary);assert.equal(plain.sourceUrl,ordinary);assert.deepEqual(plain.headers,{Referer:'https://page.example/'});
   // A mod download that has not finished keeps its link: it needs it to carry on.
   const refusing=queueFor(t,{fetch:async()=>new Response('busy',{status:500,headers:{'content-type':'text/html'}})});
   refusing.manager.add({links:[modLink()],gameTitle:mods.modFolder(LABEL),group:mods.MODS_FOLDER});await refusing.finished();
@@ -1031,4 +1083,250 @@ test('mod files of any type can be cleaned up, but only from Ravenshelf’s own 
   for(const d of [inGameFolder,noLabel,otherSite,notBrowser,directlyInMods])assert.equal(fs.readFileSync(path.join(d.folder,d.name),'utf8'),'keep',d.id);
   assert.equal(fs.readFileSync(path.join(game,'untracked.esp'),'utf8'),'keep','files Ravenshelf did not download are never touched');
   assert.equal(fs.existsSync(path.join(game,plugin.name)),false);assert.equal(fs.existsSync(path.join(game,tool.name+'.atlas-part')),false);
+});
+
+// ---------- 0.7.1 ----------
+const PLACE=Object.freeze({gameTitle:mods.modFolder(LABEL),group:mods.MODS_FOLDER});
+const MOVED='Nexus Mods sent this download on to another site, so Ravenshelf stopped it. Start the download again from the mod’s page.';
+const DROPPED='Ravenshelf does not keep the link of a cancelled Nexus Mods download. Start the download again from the mod’s page.';
+
+test('a mod download that a file server sends on to another site is stopped before that site is contacted',async t=>{
+  assert.equal(mods.LINK_MOVED_NOTE,MOVED);
+  assert.equal(mods.assertFileServer('https://cf-files.nexus-cdn.com/1/2/a.7z?x=1'),undefined);assert.equal(mods.assertFileServer('https://NEXUS-CDN.com/a'),undefined);
+  for(const address of ['https://files.example.com/a.7z','http://files.nexus-cdn.com/a.7z','https://nexus-cdn.com.example.com/a.7z','https://notnexus-cdn.com/a.7z','https://www.nexusmods.com/a.7z','not an address','',undefined])
+    assert.throws(()=>mods.assertFileServer(address),error=>error.message===MOVED,String(address));
+  // What the queue fetches with: like the real one, it asks before it follows a hand-over.
+  const server=fileServer(3072),asked=[];let onward='';
+  const fetcher=async(url,options={})=>{
+    asked.push(typeof options.checkRedirect);
+    if(!onward)return server.fetch(url,options);
+    if(options.checkRedirect)options.checkRedirect(onward);
+    return server.fetch(onward,options);
+  };
+  const q=queueFor(t,{fetch:fetcher});
+  const start=(name,extra={},where=PLACE)=>{const url=cdnFile(name);const {ids}=q.manager.add({links:[modLink({url,sourceUrl:url,filename:name,...extra})],...where});return q.manager.downloads.find(d=>d.id===ids[0]);};
+  // Another of Nexus Mods' file servers is fine.
+  onward='https://cf-files.nexus-cdn.com/1704/12604/a.7z?md5=n&expires=9&user_id=2';
+  const within=start('a.7z');await q.finished();
+  assert.equal(within.status,'completed',within.error);assert.deepEqual(server.requests.map(request=>request.url),[onward]);
+  // Anywhere else: the download stops, and that address is never asked for.
+  for(const [i,elsewhere] of ['https://files.example.com/b.7z','http://files.nexus-cdn.com/b.7z','https://nexus-cdn.com.example.com/b.7z','https://www.nexusmods.com/b.7z'].entries()){
+    onward=elsewhere;server.requests.length=0;
+    const d=start(`b${i}.7z`);await q.finished();
+    assert.equal(d.status,'error',elsewhere);assert.equal(d.error,MOVED,elsewhere);assert.deepEqual(server.requests,[],elsewhere);
+    assert.deepEqual(d.mod,LABEL);assert.deepEqual(fs.readdirSync(d.folder).filter(name=>name.startsWith(`b${i}`)),[],elsewhere);
+    assert.equal(q.manager.state().downloads.find(item=>item.id===d.id).error,MOVED,'the window is given the sentence as it is');
+  }
+  assert.ok(asked.length>=5&&asked.every(kind=>kind==='function'),'every request for a mod file carries the rule');
+  // The rule is for mod files only: an ordinary download is followed wherever it leads, as before.
+  onward='https://files.example.com/c.7z';server.requests.length=0;asked.length=0;
+  const plain=start('c.7z',{mod:undefined},{gameTitle:'Browser downloads'});await q.finished();
+  assert.equal(plain.status,'completed',plain.error);assert.deepEqual(asked,['undefined']);assert.deepEqual(server.requests.map(request=>request.url),[onward]);
+});
+
+test('a mod file is the same file when its path on the file servers and its saved name are the same',async t=>{
+  const server=fileServer(3072);let refusing=false;
+  const fetcher=async(url,options)=>refusing?new Response('no',{status:403,headers:{'content-type':'text/html'}}):server.fetch(url,options);
+  const q=queueFor(t,{fetch:fetcher});
+  const at=(host,name,expires)=>`https://${host}.nexus-cdn.com/1704/12604/${encodeURIComponent(name)}?md5=abc&expires=${expires}&user_id=2`;
+  const link=(host,name,expires,extra={})=>{const url=at(host,name,expires);return modLink({url,sourceUrl:url,filename:name,...extra});};
+  const add=entry=>q.manager.add({links:[entry],...PLACE});
+  const failing=async entry=>{refusing=true;const {ids}=add(entry);await q.finished();refusing=false;const d=q.manager.downloads.find(item=>item.id===ids[0]);assert.equal(d.status,'error');return d;};
+  // The next click can name another of the file servers: it is still the same file.
+  const moved=await failing(link('supporter-files','moved.7z',1));
+  assert.deepEqual(add(link('cf-files','moved.7z',2)),{added:1,ids:[moved.id]},'the failed entry takes the link from the other server');
+  await q.finished();assert.equal(moved.status,'completed',moved.error);assert.equal(moved.name,'moved.7z');
+  assert.equal(add(link('files','moved.7z',3)).added,0,'and the finished file is known on any of them');
+  assert.equal(q.manager.downloads.length,1);
+  // The same path under another name is another download. Nothing is renamed, and nothing is saved under a name that was not checked.
+  const named=await failing(link('supporter-files','tool.7z',1));
+  const other=add(link('supporter-files','tool.7z',2,{filename:'tool.exe'}));
+  assert.equal(other.added,1);assert.notEqual(other.ids[0],named.id);
+  assert.equal(named.status,'error');assert.equal(named.name,'tool.7z');assert.equal(named.url,at('supporter-files','tool.7z',1));
+  await q.finished();
+  const second=q.manager.downloads.find(d=>d.id===other.ids[0]);
+  assert.equal(second.status,'completed',second.error);assert.equal(second.name,'tool.exe');assert.equal(named.status,'error');
+  // A name that was in use got a copy number: the entry is still that file.
+  fs.writeFileSync(path.join(moved.folder,'again.7z'),'a file that was already there');
+  const copy=await failing(link('supporter-files','again.7z',1));
+  assert.equal(copy.name,'again (1).7z');
+  assert.deepEqual(add(link('cf-files','again.7z',2)),{added:1,ids:[copy.id]});
+  await q.finished();assert.equal(copy.status,'completed',copy.error);assert.equal(copy.name,'again (1).7z');
+  assert.equal(add(link('files','again.7z',3)).added,0);
+  // Only the name itself, or the name with a real copy number, counts.
+  const variants=[[s=>`${s}.7z`,true],[s=>`${s} (1).7z`,true],[s=>`${s} (12).7z`,true],[s=>`${s} (0).7z`,false],[s=>`${s} (01).7z`,false],[s=>`${s} (1) .7z`,false],[s=>`${s}(1).7z`,false],
+    [s=>`${s} (1).7z.bak`,false],[s=>`${s} (x).7z`,false],[s=>`${s} ().7z`,false],[s=>`x${s} (1).7z`,false],[s=>`${s} (1).zip`,false],[s=>`${s} (1)`,false],
+    [s=>`${'z'.repeat(s.length)} (1).7z`,false],[s=>`${s} (1).7q`,false],[s=>`${s}_(1).7z`,false],[s=>`${s} (1].7z`,false],[s=>`${s} [1).7z`,false],[s=>`${s} (1)).7z`,false],[s=>`${s}x (1).7z`,false]];
+  for(const [i,[rename,same]] of variants.entries()){
+    const stem=`odd${i}`,held=await failing(link('supporter-files',`${stem}.7z`,1));
+    held.name=rename(stem);
+    const result=add(link('cf-files',`${stem}.7z`,2));
+    assert.equal(result.added,1,held.name);assert.equal(result.ids[0]===held.id,same,held.name);
+    await q.finished();
+  }
+  // The same name at another place on the file servers is another file: it gets the copy number, and is known by it from then on.
+  const elsewhere=name=>{const url=`https://supporter-files.nexus-cdn.com/1704/777/${name}?md5=abc&expires=1&user_id=2`;return modLink({url,sourceUrl:url,filename:name});};
+  assert.equal(add(link('files','moved.7z',4)).added,0);
+  const twin=add(elsewhere('moved.7z'));assert.equal(twin.added,1);await q.finished();
+  assert.equal(q.manager.downloads.find(d=>d.id===twin.ids[0]).name,'moved (1).7z');
+  assert.equal(add(elsewhere('moved.7z')).added,0);assert.equal(add(link('cf-files','moved.7z',5)).added,0);
+  // A download with a label and one without are never one file by this rule; they are compared by address, as in 0.7.0.
+  const unlabelled=`https://supporter-files.nexus-cdn.com/1704/12604/mixed.7z?token=1`;
+  assert.equal(q.manager.add({links:[modLink({mod:undefined,url:unlabelled,sourceUrl:unlabelled,filename:'mixed.7z'})],...PLACE}).added,1);await q.finished();
+  assert.equal(add(link('supporter-files','mixed.7z',1)).added,1,'same path and name, but the entry in the list has no label');await q.finished();
+  const labelled=await failing(link('supporter-files','mixed2.7z',1));
+  const second2=q.manager.add({links:[modLink({mod:undefined,url:at('supporter-files','mixed2.7z',2),sourceUrl:at('supporter-files','mixed2.7z',2),filename:'mixed2.7z'})],...PLACE});
+  assert.equal(second2.added,1,'same path and name, but the new link has no label');assert.notEqual(second2.ids[0],labelled.id);assert.equal(labelled.status,'error');await q.finished();
+  // A name without an ending works the same way.
+  const bare=await failing(link('supporter-files','README',1));bare.name='README (3)';
+  assert.deepEqual(add(link('cf-files','README',2)),{added:1,ids:[bare.id]});await q.finished();
+  // The address the browser first asked for does not matter. Two files of a mod can start from one page address...
+  assert.equal(add(link('files','one.7z',1,{sourceUrl:FILE_URL})).added,1);
+  assert.equal(add(link('files','two.7z',1,{sourceUrl:`${PAGE_URL}?tab=files&file_id=735026`})).added,1,'another file that was started from the same page');
+  // ...and one file can be reached from two.
+  assert.equal(add(link('files','one.7z',2,{sourceUrl:CDN})).added,0);
+  await q.finished();
+  const viaPage=await failing(link('files','three.7z',1,{sourceUrl:FILE_URL}));
+  assert.deepEqual(add(link('cf-files','three.7z',2,{sourceUrl:`${PAGE_URL}?tab=files`})),{added:1,ids:[viaPage.id]});
+  await q.finished();assert.equal(viaPage.status,'completed',viaPage.error);
+  assert.equal(viaPage.url,at('cf-files','three.7z',2).split('?')[0]);
+});
+
+test('a cancelled mod download gives up its link at once, and takes a new one from the mod’s page',async t=>{
+  assert.equal(mods.LINK_DROPPED_NOTE,DROPPED);
+  const size=3*MiB,server=fileServer(size),q=queueFor(t,server),address=CDN.split('?')[0];
+  const {ids:[id]}=q.manager.add({links:[modLink({size,referer:FILE_URL})],...PLACE});
+  q.manager.action(id,'pause');await q.finished();
+  const d=q.manager.downloads[0];
+  assert.equal(d.status,'paused');assert.equal(d.url,CDN,'a paused download keeps its link: it needs it to carry on');assert.deepEqual(d.headers,{Referer:FILE_URL});
+  // Part of the file had arrived.
+  fs.writeFileSync(path.join(d.folder,d.name+'.atlas-part'),server.payload.subarray(0,MiB));Object.assign(d,{received:MiB,total:size,etag:'"v1"'});
+  q.manager.action(id,'cancel');
+  assert.equal(d.status,'cancelled');assert.equal(d.url,address);assert.equal(d.sourceUrl,address);assert.deepEqual(d.headers,{});assert.equal(d.needsNewLink,true);
+  assert.doesNotMatch(fs.readFileSync(q.options.stateFile,'utf8'),/user_id|md5=|expires=|file_id/,'nothing of the link or of the page address is left on disk');
+  // Retry and Resume cannot bring the link back. They say what to do, and ask nothing of the file server.
+  server.requests.length=0;
+  for(const action of ['retry','resume','retry']){
+    q.manager.action(id,action);await q.finished();
+    assert.equal(d.status,'error',action);assert.equal(d.error,DROPPED,action);assert.deepEqual(server.requests,[],action);
+  }
+  assert.equal(q.manager.state().downloads[0].error,DROPPED,'the window is given the sentence as it is');
+  // The download button on the mod's page again: the entry takes the new link and carries on where it stopped.
+  const fresh=cdnFile(FILE_NAME,'md5=new&expires=9&user_id=2');
+  assert.deepEqual(q.manager.add({links:[modLink({url:fresh,sourceUrl:fresh,size,referer:PAGE_URL})],...PLACE}),{added:1,ids:[id]});
+  assert.equal(Object.hasOwn(d,'needsNewLink'),false);
+  await q.finished();
+  assert.equal(d.status,'completed',d.error);
+  assert.deepEqual(server.requests.map(request=>[request.url,request.range,request.referer]),[[fresh,`bytes=${MiB}-`,PAGE_URL]]);
+  assert.ok(fs.readFileSync(path.join(d.folder,d.name)).equals(server.payload));
+  assert.equal(d.url,address);assert.deepEqual(d.headers,{});
+  // Cancelled while it runs, or after it failed: the same.
+  const running=cdnFile('running.7z');
+  const {ids:[runningId]}=q.manager.add({links:[modLink({url:running,sourceUrl:running,filename:'running.7z',size})],...PLACE});
+  q.manager.action(runningId,'cancel');
+  const stopped=q.manager.downloads.find(item=>item.id===runningId);
+  assert.equal(stopped.url,running.split('?')[0],'at once, not when the transfer has wound down');assert.equal(stopped.needsNewLink,true);
+  await q.finished();
+  assert.equal(stopped.status,'cancelled');assert.equal(fs.existsSync(path.join(stopped.folder,'running.7z')),false);
+  const refusing=queueFor(t,{fetch:async()=>new Response('no',{status:500,headers:{'content-type':'text/html'}})});
+  const {ids:[failedId]}=refusing.manager.add({links:[modLink()],...PLACE});await refusing.finished();
+  const failed=refusing.manager.downloads[0];
+  assert.equal(failed.status,'error');assert.equal(failed.url,CDN,'a failed download keeps its link: Retry may still work');assert.equal(Object.hasOwn(failed,'needsNewLink'),false);
+  // Retry on a failed download asks again with the link it has.
+  const again=[];
+  refusing.manager.fetcher=async url=>{again.push(String(url));return new Response('no',{status:500,headers:{'content-type':'text/html'}});};
+  refusing.manager.action(failedId,'retry');await refusing.finished();
+  assert.deepEqual(again,[CDN]);assert.equal(failed.status,'error');assert.match(failed.error,/HTTP 500/);
+  refusing.manager.action(failedId,'cancel');
+  assert.equal(failed.url,address);assert.equal(failed.needsNewLink,true);
+  // A finished one cannot be cancelled, and is not marked.
+  q.manager.action(id,'cancel');assert.equal(d.status,'completed');assert.equal(Object.hasOwn(d,'needsNewLink'),false);
+  // An ordinary download is not touched by any of this: cancelled, it keeps its address and can be retried.
+  const ordinary='https://cdn.example/game.zip?token=1';
+  const {ids:[plainId]}=q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip',size,referer:'https://page.example/'})],gameTitle:'Browser downloads'});
+  q.manager.action(plainId,'pause');await q.finished();q.manager.action(plainId,'cancel');
+  const plain=q.manager.downloads.find(item=>item.id===plainId);
+  assert.equal(plain.status,'cancelled');assert.equal(plain.url,ordinary);assert.deepEqual(plain.headers,{Referer:'https://page.example/'});assert.equal(Object.hasOwn(plain,'needsNewLink'),false);
+  q.manager.action(plainId,'retry');await q.finished();
+  assert.equal(plain.status,'completed',plain.error);assert.equal(plain.url,ordinary);
+});
+
+test('what Ravenshelf 0.7.0 still kept of a finished or cancelled mod download’s link is dropped when the app starts',async t=>{
+  let manager=null;
+  const root=scratch(t,async()=>{await manager?.stop();}),stateFile=path.join(root,'state.json'),downloadDir=path.join(root,'downloads');
+  const folder=path.join(downloadDir,'Mods','Skyrim Special Edition'),plainAddress=name=>cdnFile(name).split('?')[0];
+  const entry=(name,status,extra={})=>({id:`id-${name}`,url:cdnFile(name),sourceUrl:cdnFile(name),name,gameTitle:'Skyrim Special Edition',folder,status,received:0,total:0,speed:0,error:'',etag:null,lastModified:null,
+    headers:{Referer:FILE_URL},connectionMode:'single',activeConnections:0,connectionNote:'',createdAt:'2026-11-11T00:00:00.000Z',origin:'browser',markOfTheWeb:true,mod:{...LABEL},...extra});
+  const ordinary=(name,status)=>{const {mod,...rest}=entry(name,status);return {...rest,url:`https://cdn.example/${name}?token=1`,sourceUrl:`https://cdn.example/${name}?token=1`,folder:path.join(downloadDir,'Browser downloads')};};
+  const stored=[entry('cancelled.7z','cancelled'),entry('done.7z','completed',{url:plainAddress('done.7z'),sourceUrl:plainAddress('done.7z')}),entry('paused.7z','paused'),entry('failed.7z','error',{error:'Host returned HTTP 500. Check the source link or retry.'}),
+    ordinary('plain.zip','cancelled'),ordinary('plain-done.zip','completed'),entry('elsewhere.7z','cancelled',{mod:{...LABEL,site:'elsewhere'}}),entry('tidy.7z','cancelled',{url:plainAddress('tidy.7z'),sourceUrl:plainAddress('tidy.7z'),headers:{},needsNewLink:true})];
+  fs.writeFileSync(stateFile,JSON.stringify({settings:{},downloads:stored}));
+  const before=fs.statSync(stateFile).mtimeMs;
+  manager=new DownloadManager({stateFile,downloadDir,fetcher:async()=>{throw new Error('This test uses no network.');}});
+  const now=Object.fromEntries(manager.downloads.map(d=>[d.name,d]));
+  // Cancelled: the signed link and the page address go, and the entry is marked as needing a new link.
+  assert.equal(now['cancelled.7z'].url,plainAddress('cancelled.7z'));assert.equal(now['cancelled.7z'].sourceUrl,plainAddress('cancelled.7z'));
+  assert.deepEqual(now['cancelled.7z'].headers,{});assert.equal(now['cancelled.7z'].needsNewLink,true);
+  // Finished: 0.7.0 had already dropped the link, but kept the page address.
+  assert.equal(now['done.7z'].url,plainAddress('done.7z'));assert.deepEqual(now['done.7z'].headers,{});assert.equal(Object.hasOwn(now['done.7z'],'needsNewLink'),false);
+  // Paused or failed: still needed.
+  for(const name of ['paused.7z','failed.7z']){assert.equal(now[name].url,cdnFile(name),name);assert.deepEqual(now[name].headers,{Referer:FILE_URL},name);assert.equal(Object.hasOwn(now[name],'needsNewLink'),false,name);}
+  // Anything that is not a Nexus Mods file from the browser is left as it was.
+  for(const name of ['plain.zip','plain-done.zip'])assert.equal(now[name].url,`https://cdn.example/${name}?token=1`,name);
+  assert.equal(now['elsewhere.7z'].url,cdnFile('elsewhere.7z'));assert.equal(Object.hasOwn(now['elsewhere.7z'],'needsNewLink'),false);
+  // And it is written back at once, not at some later change.
+  const saved=Object.fromEntries(JSON.parse(fs.readFileSync(stateFile,'utf8')).downloads.map(d=>[d.name,d]));
+  assert.equal(saved['cancelled.7z'].url,plainAddress('cancelled.7z'));assert.equal(saved['cancelled.7z'].needsNewLink,true);
+  assert.equal(saved['paused.7z'].url,cdnFile('paused.7z'));
+  assert.doesNotMatch(JSON.stringify([saved['cancelled.7z'],saved['done.7z']]),/user_id|md5=|expires=|file_id|Referer/);
+  assert.ok(fs.statSync(stateFile).mtimeMs>=before);
+  // The cancelled entry now behaves like one that 0.7.1 cancelled.
+  manager.action('id-cancelled.7z','retry');
+  assert.equal(now['cancelled.7z'].status,'error');assert.equal(now['cancelled.7z'].error,DROPPED);
+  // The mark means nothing on a download that is not a Nexus Mods file: Retry starts it, as always.
+  now['plain.zip'].needsNewLink=true;manager.action('id-plain.zip','retry');
+  assert.ok(['queued','downloading'].includes(now['plain.zip'].status),now['plain.zip'].status);
+  for(let i=0;i<600&&manager.running.size;i++)await tick(5);
+  assert.notEqual(now['plain.zip'].error,DROPPED);
+  // It is written back even when nothing else in the state needs it.
+  await manager.stop();manager=null;
+  fs.writeFileSync(stateFile,JSON.stringify({settings:{},downloads:[entry('late.7z','cancelled',{headers:{}})]}));
+  manager=new DownloadManager({stateFile,downloadDir,fetcher:async()=>{throw new Error('This test uses no network.');}});
+  assert.equal(JSON.parse(fs.readFileSync(stateFile,'utf8')).downloads[0].url,plainAddress('late.7z'));
+  // A state that needs nothing is not rewritten for this.
+  await manager.stop();manager=null;
+  fs.writeFileSync(stateFile,JSON.stringify({settings:{},downloads:[stored.at(-1)]}));
+  const marker=fs.readFileSync(stateFile,'utf8');
+  manager=new DownloadManager({stateFile,downloadDir,fetcher:async()=>{throw new Error('This test uses no network.');}});
+  assert.equal(fs.readFileSync(stateFile,'utf8'),marker,'nothing to drop, nothing written');
+  assert.equal(manager.downloads[0].needsNewLink,true);
+});
+
+test('a mod download is never the reason for the warning about sign-in details that could not be saved',async t=>{
+  // These queues have no vault: no header can be sealed.
+  const server=fileServer(3072),q=queueFor(t,server);
+  const {ids:[id]}=q.manager.add({links:[modLink({referer:FILE_URL})],...PLACE});q.manager.action(id,'pause');await q.finished();
+  assert.equal(q.manager.state().headerStorageWarning,'');
+  const saved=JSON.parse(fs.readFileSync(q.options.stateFile,'utf8')).downloads[0];
+  assert.deepEqual(saved.headers,{});assert.equal(Object.hasOwn(saved,'headersNeedRefresh'),false);assert.equal(Object.hasOwn(saved,'sealedHeaders'),false);
+  // An ordinary download whose header cannot be sealed still raises it.
+  const ordinary='https://cdn.example/game.zip?token=1';
+  const {ids:[plainId]}=q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip',referer:'https://page.example/'})],gameTitle:'Browser downloads'});
+  q.manager.action(plainId,'pause');await q.finished();
+  assert.match(q.manager.state().headerStorageWarning,/could not be saved securely/);
+  q.manager.action(plainId,'cancel');q.manager.quiescing.add(plainId);q.manager.removeFromList([plainId]);
+  assert.equal(q.manager.state().headerStorageWarning,'');
+  // A state written by 0.7.0 can carry the mark on a mod entry. It is not a reason for the warning either.
+  let manager=null;
+  const root=scratch(t,async()=>{await manager?.stop();}),stateFile=path.join(root,'state.json');
+  fs.writeFileSync(stateFile,JSON.stringify({settings:{},downloads:[{...q.manager.downloads[0],headers:{},headersNeedRefresh:true}]}));
+  const {headers,...withoutHeaders}=q.manager.downloads[0];
+  fs.writeFileSync(stateFile,JSON.stringify({settings:{},downloads:[{...q.manager.downloads[0],headers:{},headersNeedRefresh:true},{...withoutHeaders,id:'sealed',name:'sealed.7z',sealedHeaders:'cannot-be-opened-here'}]}));
+  manager=new DownloadManager({stateFile,downloadDir:path.join(root,'downloads'),fetcher:server.fetch});
+  assert.equal(manager.state().headerStorageWarning,'');
+  manager.updateSettings({defenderScan:false});
+  assert.equal(manager.state().headerStorageWarning,'');
+  // A sealed header that cannot be opened here (another PC or Windows account) is dropped, and the mod entry is not marked.
+  const sealed=manager.downloads.find(d=>d.id==='sealed');
+  assert.deepEqual(sealed.headers,{});assert.equal(Object.hasOwn(sealed,'sealedHeaders'),false);assert.equal(Object.hasOwn(sealed,'headersNeedRefresh'),false);
 });

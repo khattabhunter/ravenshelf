@@ -450,11 +450,15 @@ test('the Nexus Mods note survives the browser putting the extension to sleep',a
 test('Firefox labels Nexus Mods downloads the same way',async()=>{
   const b=fakeBrowser({firefox:true,native:()=>({ok:true,action:'take'})});
   await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
-  b.api.downloads.onCreated.emit({id:1,...CDN_ITEM,filename:`/home/p/Downloads/${MOD_FILE.replace('.7z','(1).7z')}`,incognito:false});await tick();
+  // An address without the game and mod numbers in it: only the file's name can find the page.
+  const unnumbered=`https://files.nexus-cdn.com/8f14e45f-ceea-467f-9a36-dedd4bea2543/${encodeURIComponent(MOD_FILE)}?md5=abc&expires=1&user_id=2`;
+  b.api.downloads.onCreated.emit({id:1,...CDN_ITEM,url:unnumbered,filename:`/home/p/Downloads/${MOD_FILE.replace('.7z','(1).7z')}`,incognito:false});await tick();
   assert.deepEqual(captures(b)[0].mod,MOD_LABEL,'Firefox’s "(1)" for a second copy does not hide the file name');
-  b.api.downloads.onCreated.emit({id:2,...CDN_ITEM,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
-  assert.deepEqual(captures(b)[1].mod,MOD_LABEL,'matched by the game and mod numbers in the address when the name differs');
-  assert.deepEqual(b.calls.filter(call=>['pause','cancel','resume'].includes(call[0])),[['pause',1],['cancel',1],['pause',2],['cancel',2]]);
+  b.api.downloads.onCreated.emit({id:2,...CDN_ITEM,url:unnumbered,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
+  assert.equal(captures(b)[1].mod,undefined,'a name no page showed, at an address without numbers: no label');
+  b.api.downloads.onCreated.emit({id:3,...CDN_ITEM,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
+  assert.deepEqual(captures(b)[2].mod,(({fileId,fileName,...rest})=>rest)(MOD_LABEL),'the game and mod numbers in an older address name the mod, not the file');
+  assert.deepEqual(b.calls.filter(call=>['pause','cancel','resume'].includes(call[0])),[['pause',1],['cancel',1],['pause',2],['cancel',2],['pause',3],['cancel',3]]);
 });
 
 test('an older Ravenshelf that does not know about mods still gets the download',async()=>{

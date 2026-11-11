@@ -25,21 +25,15 @@ const REQUESTS_PER_MINUTE=240;
 const hostOf=value=>{try{return new URL(value).hostname.toLowerCase();}catch{return '';}};
 const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||host.endsWith('.'+root));};
 const baseName=value=>String(value||'').split(/[\\/]/).filter(Boolean).at(-1)?.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240)||undefined;
-// The name a download would be saved under. The checks judge this form and the
-// review shows it, so a name cannot pass as one thing and be saved as another
-// (full-width letters, for example, are saved as plain ones). One cleaning can
-// leave something for the next: a name that Windows reserves gets a "_" in
-// front, which can push a long name over the limit, so that cleaning it again
-// cuts its ending. The queue cleans every name once more before it saves, so
-// the cleaning is repeated here until the name no longer changes. Every pass
-// that changes a name shortens it or adds that one "_", so 400 passes are more
-// than any name can need; the plain fallback name only keeps that certain.
-function savedName(value){
-  if(!value)return undefined;
-  let name=safeName(value);
-  for(let pass=0;pass<400;pass++){const again=safeName(name);if(again===name)return name;name=again;}
-  return safeName('');
-}
+// The name a download is saved under. The queue cleans the name it is handed
+// once, with safeName(), before it saves the file. So the checks here judge,
+// and the review shows, safeName() of the very name that is handed over: the
+// name that was checked is the name that is saved (full-width letters, for
+// example, are saved as plain ones).
+const savedAs=value=>value?safeName(value):undefined;
+// An address without what follows the "?": enough to show where a file comes
+// from. A signed link has no business in the window.
+const plainAddress=value=>{try{const url=new URL(value);url.search='';url.hash='';return url.href;}catch{return '';}};
 const https=value=>{try{return new URL(value).protocol==='https:'?value:undefined;}catch{return undefined;}};
 
 async function writeJSONAtomic(file,value){
@@ -136,7 +130,9 @@ class BrowserBridge extends EventEmitter{
   // Quick blocks are recorded here; the extension shows their notification.
   receive(browser,message){
     this.expire();
-    const request={url:message.url,finalUrl:message.finalUrl,referrer:message.referrer,pageUrl:message.pageUrl,filename:savedName(baseName(message.filename)),mime:message.mime,totalBytes:message.totalBytes};
+    // `given` is the browser's name for the file as it arrived; `filename` is that name as it would be saved.
+    const given=baseName(message.filename);
+    const request={url:message.url,finalUrl:message.finalUrl,referrer:message.referrer,pageUrl:message.pageUrl,filename:savedAs(given),given,mime:message.mime,totalBytes:message.totalBytes};
     // The extension's game-and-mod label is kept only for a file from Nexus Mods' own file servers.
     if(message.mod&&fromNexus(request))request.mod={...message.mod};
     const source=message.type==='send'?message.kind:'download';
@@ -156,9 +152,9 @@ class BrowserBridge extends EventEmitter{
     }
     const target=request.finalUrl||request.url;
     if(new URL(target).protocol==='http:'){
-      const verdict=assessDownload({filename:request.filename||savedName(nameFromURL(target)),insecure:true});
+      const verdict=assessDownload({filename:request.filename||safeName(nameFromURL(target)),insecure:true});
       if(verdict.level==='blocked'){
-        const capture=this.record(browser,source,request,{status:'blocked',verdict,filename:request.filename||savedName(nameFromURL(target))});
+        const capture=this.record(browser,source,request,{status:'blocked',verdict,filename:request.filename||safeName(nameFromURL(target))});
         return {action:'block',id:capture.id,reason:verdict.reasons.find(item=>item.level==='blocked').message};
       }
       return {action:'browser'};
@@ -175,7 +171,7 @@ class BrowserBridge extends EventEmitter{
   }
   record(browser,source,request,fields){
     const capture={id:crypto.randomUUID(),createdAt:this.now(),browser,source,request,status:'checking',verdict:null,chain:[],virusTotal:[],filename:request.filename,size:request.totalBytes||0,message:'',entry:null,...fields};
-    capture.displayName=capture.filename||savedName(nameFromURL(request.finalUrl||request.url));
+    capture.displayName=capture.filename||safeName(nameFromURL(request.finalUrl||request.url));
     this.captures.set(capture.id,capture);this.emit('change');return capture;
   }
   pendingCount(){return [...this.captures.values()].filter(capture=>['checking','ready','manual'].includes(capture.status)).length;}
@@ -213,7 +209,10 @@ class BrowserBridge extends EventEmitter{
         else if(report.reason==='limit'){virusTotal.push(report);break;}
       }
     }
-    const filename=savedName(baseName(result.filename))||request.filename||savedName(nameFromURL(start));
+    // The name as it arrived: the server's, else the browser's, else the one in the address.
+    // The queue is handed exactly this, and saves it as safeName() of it.
+    const given=baseName(result.filename)||request.given||nameFromURL(start);
+    const filename=safeName(given);
     const verdict=assessDownload({filename,sniffed:result.sniffed,chain:result.chain,insecure:Boolean(result.insecure),virusTotal});
     Object.assign(capture,{filename,displayName:filename,size:Number(result.size)||request.totalBytes||0,message:String(result.message||'').slice(0,300),verdict,virusTotal,
       chain:result.chain.map(hop=>({host:hop.host,listed:hop.listed?{category:hop.listed.category,label:hop.listed.label}:null}))});
@@ -221,7 +220,7 @@ class BrowserBridge extends EventEmitter{
     capture.status=['ready','manual','unavailable'].includes(result.status)?result.status:'manual';
     if(capture.status==='ready'){
       const referer=result.provider?result.referer:https(request.referrer)||https(request.pageUrl);
-      capture.entry={...(result.provider?{headers:result.headers&&typeof result.headers==='object'?{...result.headers}:{}}:{}),status:'ready',url:result.url,sourceUrl:start,filename,size:capture.size,host:hostOf(result.url),...(referer?{referer}:{}),...(request.mod?{mod:{...request.mod}}:{})};
+      capture.entry={...(result.provider?{headers:result.headers&&typeof result.headers==='object'?{...result.headers}:{}}:{}),status:'ready',url:result.url,sourceUrl:start,filename:given,size:capture.size,host:hostOf(result.url),...(referer?{referer}:{}),...(request.mod?{mod:{...request.mod}}:{})};
     }
   }
   alertBlocked(capture){
@@ -264,7 +263,7 @@ class BrowserBridge extends EventEmitter{
       // The queue skips a link it already holds (finished, failed or paused),
       // so say so instead of reporting a download that will never start.
       if(added)capture.status='queued';
-      else{capture.status='duplicate';capture.message='This file is already in your Downloads list. Use Retry there, or remove the old entry and download it again.';}
+      else{capture.status='duplicate';capture.message='This file is already in your Downloads list. Resume or retry it there, or remove the old entry and download it again.';}
       this.emit('change');
       return {...this.snapshot(),added};
     }
@@ -290,7 +289,7 @@ class BrowserBridge extends EventEmitter{
     this.expire();
     const captures=[...this.captures.values()].sort((a,b)=>b.createdAt-a.createdAt).slice(0,MAX_PENDING).map(capture=>({
       id:capture.id,createdAt:new Date(capture.createdAt).toISOString(),browser:capture.browser,source:capture.source,status:capture.status,
-      name:capture.displayName,size:capture.size,address:capture.request.finalUrl||capture.request.url,pageHost:hostOf(capture.request.pageUrl||capture.request.referrer||''),
+      name:capture.displayName,size:capture.size,address:plainAddress(capture.request.finalUrl||capture.request.url),pageHost:hostOf(capture.request.pageUrl||capture.request.referrer||''),
       chain:capture.chain.map(hop=>({...hop})),verdict:capture.verdict?{level:capture.verdict.level,reasons:capture.verdict.reasons.map(item=>({...item}))}:null,
       virusTotal:capture.virusTotal.map(item=>({kind:item.kind,subject:item.subject,status:item.status,reason:item.reason,malicious:item.malicious,suspicious:item.suspicious,harmless:item.harmless,undetected:item.undetected,link:item.link})),
       message:capture.message,mod:capture.request.mod?{...capture.request.mod}:null,
@@ -300,4 +299,4 @@ class BrowserBridge extends EventEmitter{
     return {running:Boolean(this.server),contact:this.contact?{...this.contact}:null,pending:this.pendingCount(),captures};
   }
 }
-module.exports={BrowserBridge,PROVIDER_ROOTS,MAX_PENDING,isProvider,baseName,savedName};
+module.exports={BrowserBridge,PROVIDER_ROOTS,MAX_PENDING,isProvider,baseName};

@@ -92,15 +92,20 @@
     return Number.isSafeInteger(number) && number >= 1 && number <= NEXUS_MAX_ID ? number : undefined;
   }
   // Text a page showed, made safe to pass on: control characters, invisible,
-  // blank and text-direction characters, private-use characters and broken
-  // character pairs removed, spaces collapsed, length limited without cutting
-  // a character in half. Empty gives undefined. The app refuses the same
-  // characters (src/mods.cjs).
+  // blank and text-direction characters, private-use and unassigned characters
+  // and broken character pairs removed, spaces collapsed, length limited
+  // without cutting a character in half. Accents and other marks that sit on
+  // the letter before them are kept, but no more than three in a row, and none
+  // at the very start, where one would sit on whatever stands in front of the
+  // name. Empty gives undefined. The app refuses what is removed here
+  // (src/mods.cjs).
   function nexusText(value, max) {
     if (typeof value !== 'string') return undefined;
     const text = value.slice(0, 4000)
-      .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffd]/gu, ' ')
-      .replace(/\s+/g, ' ').trim().slice(0, max).replace(/[\ud800-\udbff]$/, '').trim();
+      .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffc\ufffd]/gu, ' ')
+      .replace(/(\p{M}{3})\p{M}+/gu, '$1')
+      .replace(/\s+/g, ' ').trim().slice(0, max).replace(/[\ud800-\udbff]$/, '').trim()
+      .replace(/^[\p{M} ]+/u, '');
     return text || undefined;
   }
   // The game and mod a Nexus Mods address is about: /{game}/mods/{number},
@@ -165,7 +170,8 @@
   }
   // Which mod a browser download belongs to, or null. Only a file that comes
   // from Nexus Mods' own file servers can be labelled: a page on the site can
-  // link to files kept anywhere. Then the evidence is, in this order: the
+  // link to files kept anywhere, and a download that began on another site is
+  // not the site's own either. Then the evidence is, in this order: the
   // file's name is one a Nexus Mods page showed in the last half hour; the
   // download was started from a mod's own address; or the file's address
   // carries the game and mod numbers of such a page. Evidence that points at
@@ -174,6 +180,10 @@
     if (!item || typeof item !== 'object' || !Array.isArray(pages)) return null;
     const target = typeof item.finalUrl === 'string' && item.finalUrl ? item.finalUrl : item.url;
     if (schemeOf(target) !== 'https:' || !onHosts(hostOf(target), NEXUS_FILE_ROOTS)) return null;
+    // The address the browser first asked for has to be Nexus Mods' too: a file
+    // server, or the site itself. A download that began somewhere else and only
+    // ended up on a file server is not labelled. The app checks the same.
+    if (schemeOf(item.url) !== 'https:' || !(onHosts(hostOf(item.url), NEXUS_FILE_ROOTS) || hostOf(item.url) === NEXUS_HOST)) return null;
     const recent = pages.filter(page => page && typeof page === 'object' && page.game && page.modId && Array.isArray(page.files) && Number.isFinite(page.at) && now - page.at >= 0 && now - page.at < NEXUS_PAGE_MS).sort((a, b) => b.at - a.at);
     const sameMod = (a, b) => a.game === b.game && a.modId === b.modId;
     // Older files sit at /{game number}/{mod number}/{file name} on the file servers.
@@ -198,13 +208,17 @@
       return nexusMod(chosen[0], fileIn(chosen[0], key));
     }
     if (address) {
-      const same = recent.filter(page => sameMod(page, address) && agrees(page));
+      const same = recent.filter(page => sameMod(page, address));
+      // A note of that very page whose game number is not the one in the file's
+      // address: the file belongs to another game's mod of the same number.
+      if (!same.every(agrees)) return null;
       const file = address.fileId && same.length ? same[0].files.find(candidate => candidate && candidate.fileId === address.fileId) : null;
       return nexusMod(same[0] || address, file || address);
     }
     if (numbers) {
+      // The numbers name the mod. They do not say which of its files this is.
       const page = recent.find(candidate => candidate.gameId === numbers.gameId && candidate.modId === numbers.modId);
-      if (page) return nexusMod(page, page.files.length === 1 ? page.files[0] : null);
+      if (page) return nexusMod(page, null);
     }
     return null;
   }

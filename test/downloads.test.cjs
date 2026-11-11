@@ -365,6 +365,53 @@ test('safe filenames remove path separators, reserved devices, and trailing Wind
   assert.equal(/[. ]$/.test(safeName('a'.repeat(179) + '.more')), false, 'truncation must not leave a trailing dot');
 });
 
+test('the cleaning of file names is pinned, name by name: it has not changed since 0.6.1', () => {
+  const wide=text=>text.split('').map(char=>char==='.'?char:String.fromCharCode(char.charCodeAt(0)+0xfee0)).join('');
+  const cases=[['a .','a'],['a. . .','a'],['part01.rar .','part01.rar'],['  spaced.zip  ','spaced.zip'],['x.rar. ','x.rar'],['x'.repeat(179)+' y','x'.repeat(179)],['a'.repeat(200),'a'.repeat(180)],
+    ['../../outside.rar','.._.._outside.rar'],['a\\b.rar','a_b.rar'],['a/b:c*d?e"f<g>h|i.rar','a_b_c_d_e_f_g_h_i.rar'],['tab'+String.fromCharCode(9)+'here.zip','tab_here.zip'],
+    ['CON','_CON'],['con.txt','_con.txt'],['COM1.rar','_COM1.rar'],['lpt9','_lpt9'],['NUL.tar.gz','_NUL.tar.gz'],['aux','_aux'],['prn.','_prn'],['conx','conx'],['com10.txt','com10.txt'],
+    ['.','download'],['..','download'],['...','download'],['','download'],[' ','download'],
+    [wide('setup.exe'),'setup.exe'],['photo.jpg'+String.fromCharCode(0xff0e)+'exe','photo.jpg.exe'],['game.zip','game.zip'],['My Mod v1.2-12604-1-2.7z','My Mod v1.2-12604-1-2.7z']];
+  for(const [input,expected] of cases)assert.equal(safeName(input),expected,JSON.stringify(input));
+  assert.equal(safeName(undefined),'download');assert.equal(safeName(null),'download');
+  assert.equal(safeName('','Imported files'),'Imported files');assert.equal(safeName('..','Imported files'),'Imported files');assert.equal(safeName('Game: Title','Imported files'),'Game_ Title');
+});
+
+test('the queue cleans every file name it is handed, so no name can put a file outside its folder', async t => {
+  const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
+  const unsafe=['../../escaped.rar','..'+String.fromCharCode(92,46,46,92)+'escaped2.rar','a'+String.fromCharCode(92)+'b.rar','sub/dir/file.rar','CON','x.rar. ','C:'+String.fromCharCode(92)+'Windows'+String.fromCharCode(92)+'evil.dll','nul.7z','..','wide'+String.fromCharCode(0xff0e,0xff45,0xff58,0xff45)];
+  const {ids}=manager.add({gameTitle:'Game',links:unsafe.map((filename,index)=>link(`unsafe-${index}`,filename))});
+  assert.equal(ids.length,unsafe.length);
+  for(const [index,id] of ids.entries()){
+    const d=manager.downloads.find(item=>item.id===id),label=JSON.stringify(unsafe[index]);
+    assert.equal(d.name,safeName(unsafe[index]),label);
+    assert.equal(path.dirname(path.resolve(d.folder,d.name)),d.folder,label);
+    assert.doesNotMatch(d.name,/[\\/:]/,label);assert.doesNotMatch(d.name,/[. ]$/,label);assert.doesNotMatch(d.name,/^(con|nul)(?:\.|$)/i,label);
+  }
+  assert.deepEqual(manager.downloads.slice(0,4).map(d=>d.name),['.._.._escaped.rar','.._.._escaped2.rar','a_b.rar','sub_dir_file.rar']);
+  assert.equal(manager.downloads.at(-1).name,'wide.exe','and it is the cleaned name that gets the file');
+  // With no name at all, the name comes from the address and is cleaned the same way.
+  const {ids:[bare]}=manager.add({gameTitle:'Game',links:[{status:'ready',url:'https://files.example.com/dir/aux'}]});
+  assert.equal(manager.downloads.find(item=>item.id===bare).name,'_aux');
+  await finished(manager);
+  const folder=manager.downloads[0].folder;
+  assert.deepEqual(fs.readdirSync(path.dirname(folder)),[path.basename(folder)],'nothing was written beside the game folder');
+});
+
+test('an ordinary download is known by the address it was found at, not by the direct address behind it', async t => {
+  const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
+  const first={status:'ready',url:'https://files.example.com/direct-1',sourceUrl:'https://host.example.com/page',filename:'part01.rar'};
+  assert.equal(manager.add({gameTitle:'Game',links:[first]}).added,1);
+  assert.equal(manager.add({gameTitle:'Game',links:[{...first,url:'https://files.example.com/direct-2'}]}).added,0,'the same page, with a new direct address');
+  assert.equal(manager.add({gameTitle:'Game',links:[{...first,sourceUrl:'https://host.example.com/other-page',filename:'part02.rar'}]}).added,1,'the same direct address, found at another page');
+  // A link that has no address of its own page is known by its own address.
+  const plain={status:'ready',url:'https://files.example.com/plain',filename:'plain.rar'};
+  assert.equal(manager.add({gameTitle:'Game',links:[plain]}).added,1);assert.equal(manager.add({gameTitle:'Game',links:[plain]}).added,0);
+  assert.equal(manager.add({gameTitle:'Game',links:[{...plain,sourceUrl:'https://host.example.com/page'}]}).added,0,'and that address is the first one again');
+  assert.equal(manager.downloads.length,3);
+  await finished(manager);
+});
+
 test('a partial created during a network wait is never truncated or overwritten', async t => {
   let release,requested=false,cancelled=false;
   const gate=new Promise(resolve=>{release=resolve;});

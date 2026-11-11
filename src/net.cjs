@@ -48,7 +48,7 @@ const fileDispatcher = new Agent({ connect, allowH2:false });
 async function safeFetch(value, options={}) {
   let url=safeURL(String(value));
   const originalUrl=url.href;
-  let {timeoutMs=30000,maxBytes,http1=false, ...init}=options;
+  let {timeoutMs=30000,maxBytes,http1=false,checkRedirect, ...init}=options;
   const signal = timeoutMs>0 ? (init.signal ? AbortSignal.any([init.signal,AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)) : init.signal;
   const headers = new Headers(init.headers || {});
   if(!headers.has('User-Agent')) headers.set('User-Agent','Mozilla/5.0 Ravenshelf/0.3');
@@ -61,6 +61,8 @@ async function safeFetch(value, options={}) {
     if(!location) throw new Error('Host returned a redirect without a destination.');
     const next=safeURL(new URL(location,url).href);
     assertFastRedirect(originalUrl,next.href);
+    // The caller can refuse a destination, such as one outside a site's own file servers.
+    if(checkRedirect) checkRedirect(next.href);
     if(next.origin!==url.origin) { headers.delete('authorization'); headers.delete('cookie'); }
     if(res.status===303 || ((res.status===301||res.status===302)&&method==='POST')) {
       method='GET'; body=undefined; headers.delete('content-type'); headers.delete('content-length');

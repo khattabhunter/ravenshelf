@@ -8,10 +8,14 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const protocol=require('../src/browser-protocol.cjs');
 const setup=require('../src/browser-setup.cjs');
-const {BrowserBridge,MAX_PENDING,isProvider,baseName,savedName}=require('../src/browser-bridge.cjs');
+const {BrowserBridge,MAX_PENDING,isProvider,baseName}=require('../src/browser-bridge.cjs');
+const {DownloadManager}=require('../src/downloads.cjs');
 
 const CHROME=`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`,FIREFOX=`firefox:${protocol.FIREFOX_EXTENSION_ID}`;
-const temp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-bridge-'));
+// Scratch folders of this file; they are removed when its tests have finished.
+const made=[];
+const temp=()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-bridge-'));made.push(dir);return dir;};
+test.after(()=>{for(const dir of made)fs.rmSync(dir,{recursive:true,force:true});});
 async function until(predicate,label='condition'){const end=Date.now()+3000;while(!predicate()){if(Date.now()>end)throw new Error('Timed out waiting for '+label);await new Promise(resolve=>setTimeout(resolve,5));}}
 
 // ---------- protocol ----------
@@ -354,10 +358,10 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   assert.equal(byId[dotted].name,'setup.exe');assert.equal(byId[dotted].verdict.level,'warning');
   await assert.rejects(bridge.action({id,action:'download'}),/Confirm that you understand/);
   await bridge.action({id,action:'download',acknowledgeRisk:true});
-  assert.equal(events.queued[0].filename,'SkyUI patch.exe');
-  assert.equal(safeName(events.queued[0].filename),events.queued[0].filename,'the queue saves it under exactly this name');
+  assert.equal(events.queued[0].filename,FULLWIDTH_EXE,'the queue is handed the name as it arrived');
+  assert.equal(safeName(events.queued[0].filename),'SkyUI patch.exe','and cleans it once: that is the name that was judged and shown');
   // With no name from the browser or the server, the name comes from the address, and is judged in its saved form too.
-  decision=decide({url:`http://plain.example/${encodeURIComponent('tool.\uff45\uff58\uff45')}`});
+  decision=decide({url:`http://plain.example/${encodeURIComponent('tool.'+FULLWIDTH_EXE.slice(-3))}`});
   assert.equal(decision.action,'block','a program over plain HTTP whose name is only in the address');
   assert.equal(bridge.snapshot().captures.find(capture=>capture.id===decision.id).name,'tool.exe');
   const bare=bridgeFixture(t,{inspect:async url=>({status:'ready',url,sourceUrl:url,size:5,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'windows-program'})});
@@ -366,37 +370,23 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   await until(()=>bare.bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'inspection');
   const [named]=bare.bridge.snapshot().captures;
   assert.equal(named.id,taken.id);assert.equal(named.name,'SkyUI patch.exe');assert.equal(named.verdict.level,'warning');
-  // Every name the review can show is already in its saved form.
-  for(const capture of bridge.snapshot().captures)assert.equal(safeName(capture.name),capture.name,capture.name);
-  // Cleaning a name can uncover something to clean again. The judged name is the one that no longer
-  // changes, because the queue cleans every name once more before it saves the file.
-  const LONG_DEVICE='con.'+'a'.repeat(171)+'.exex';
-  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE).slice(-5),'.exex','cleaned once, it still looks harmless');
-  assert.equal(safeName(safeName(LONG_DEVICE)).slice(-4),'.exe','cleaned again, as the queue would, it is a program');
-  assert.equal(savedName(LONG_DEVICE),'_con.'+'a'.repeat(171)+'.exe');
-  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id;
-  decide({url:'https://cdn.example/d',filename:'run.bat'+'\ufeff.'.repeat(3)});
-  assert.match(events.notes.at(-1).body,/^run\.bat was sent from your browser/,'layers of invisible characters and dots are gone from the first moment');
+  await bare.bridge.action({id:named.id,action:'download',acknowledgeRisk:true});
+  assert.equal(safeName(bare.events.queued[0].filename),'SkyUI patch.exe');
+  // The queue cleans a name once. What is judged and shown is that one cleaning of that very name, also for a
+  // name that a second cleaning would change: a Windows device name gets a "_" in front, which makes it longer.
+  const LONG_DEVICE='con.'+'a'.repeat(171)+'.exex',LONG_PROGRAM='con.'+'x'.repeat(172)+'.exe';
+  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE),'_'+LONG_DEVICE);assert.notEqual(safeName(safeName(LONG_DEVICE)),safeName(LONG_DEVICE),'cleaned twice, its ending would be cut');
+  assert.equal(LONG_PROGRAM.length,180);assert.equal(safeName(LONG_PROGRAM),'_'+LONG_PROGRAM);
+  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id,program=decide({url:`https://cdn.example/${LONG_PROGRAM}`}).id;
   await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'more inspections');
   const later=Object.fromEntries(bridge.snapshot().captures.map(capture=>[capture.id,capture]));
-  assert.equal(later[device].name,'_con.'+'a'.repeat(171)+'.exe');assert.equal(later[device].verdict.level,'warning');
-  assert.ok(later[device].verdict.reasons.some(reason=>reason.code==='program'),JSON.stringify(later[device].verdict));
-  await bridge.action({id:device,action:'download',acknowledgeRisk:true});
-  assert.equal(events.queued.at(-1).filename,later[device].name);assert.equal(safeName(events.queued.at(-1).filename),later[device].name,'saved under the judged name');
-  assert.equal(savedName('run.bat'+'\ufeff.'.repeat(3)),'run.bat');assert.equal(savedName('a'+'\ufeff.'.repeat(119)),'a','however deep the layers go');
-  assert.equal(savedName(''),undefined);assert.equal(savedName(undefined),undefined);assert.equal(savedName('game.zip'),'game.zip');
-  // The same holds for names made of the awkward pieces in any order, and ordinary names are not touched.
-  const pieces=['con','NUL','com1','.','..',' ','a','.exe','.bat','x','\ufeff','\u2028','\u1680','\u00a0','\u3000','\uff0e','\uff23\uff2f\uff2e','\ud83d\ude00','_',':','/','*','\t','\u200b','e\u0301','\ufdfa','\ufeff.'];
-  let seed=20261111,unsettled=0,uncovered=0;const pick=n=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed%n;};
-  for(let i=0;i<20000;i++){
-    let odd='';for(let j=1+pick(6);j>0;j--){const piece=pieces[pick(pieces.length)];odd+=pick(4)?piece:piece.repeat(1+pick(190));}
-    const name=savedName(odd);
-    if(name===undefined){assert.equal(odd,'');continue;}
-    if(safeName(name)!==name)unsettled++;
-    if(safeName(odd)!==name)uncovered++;
-  }
-  assert.equal(unsettled,0,'every judged name is saved unchanged');assert.ok(uncovered>50,`${uncovered} of these names needed more than one cleaning`);
-  for(const plain of ['game.zip','Setup (1).exe','My Mod v1.2-12604-1-2.7z','\u0633\u0643\u0627\u064a.rar','archive.part01.rar'])assert.equal(savedName(plain),safeName(plain));
+  assert.equal(later[device].name,'_'+LONG_DEVICE);assert.equal(later[device].verdict.level,'ok','it is saved with the ending .exex, which is no program');
+  assert.equal(later[program].name,'_'+LONG_PROGRAM);assert.equal(later[program].verdict.level,'warning');
+  assert.ok(later[program].verdict.reasons.some(reason=>reason.code==='program'),JSON.stringify(later[program].verdict));
+  await bridge.action({id:device,action:'download'});
+  assert.equal(events.queued.at(-1).filename,LONG_DEVICE);assert.equal(safeName(events.queued.at(-1).filename),later[device].name);
+  await bridge.action({id:program,action:'download',acknowledgeRisk:true});
+  assert.equal(events.queued.at(-1).filename,LONG_PROGRAM);assert.equal(safeName(events.queued.at(-1).filename),later[program].name,'saved as the program it was shown to be');
   // Folder names: cut to 100 characters, and still without a trailing dot or space after the cut.
   assert.equal(folderName('a'.repeat(97)+'\u2026b'),'a'.repeat(97));
   assert.equal(folderName('\u2025'.repeat(50)+'x'),'Imported files');
@@ -414,4 +404,48 @@ test('a name is judged in the form it will be saved in, and the review shows tha
 test('file names from the browser are reduced to a safe base name',()=>{
   assert.equal(baseName('C:\\Users\\Player\\Downloads\\game.zip'),'game.zip');
   assert.equal(baseName('/home/user/file.rar'),'file.rar');assert.equal(baseName('name\u0007.zip'),'name.zip');assert.equal(baseName(''),undefined);assert.equal(baseName(undefined),undefined);
+});
+
+test('the name the review shows is the name the queue then saves the file under',async t=>{
+  // The real queue behind the real bridge. Its downloads fail at once: only their names matter here.
+  const root=temp(),folder=path.join(root,'downloads','Browser downloads');
+  const manager=new DownloadManager({stateFile:path.join(root,'state.json'),downloadDir:path.join(root,'downloads'),fetcher:async()=>new Response('no',{status:500,headers:{'content-type':'text/html'}})});
+  manager.updateSettings({concurrency:2,defenderScan:false});
+  let served;
+  const bridge=new BrowserBridge({hostDir:temp(),threatLists:null,openExternal:async()=>{},
+    inspect:async url=>({status:'ready',url,sourceUrl:url,...(served===undefined?{}:{filename:served}),size:5,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'unknown'}),
+    queueDownload:async entry=>manager.add({links:[entry],gameTitle:'Browser downloads'})});
+  t.after(async()=>{await bridge.stop();await manager.stop();});
+  const wide=text=>text.split('').map(char=>char==='.'?char:String.fromCharCode(char.charCodeAt(0)+0xfee0)).join('');
+  const slash=String.fromCharCode(92);
+  // [the server's name, the browser's name, the last part of the address]
+  const cases=[
+    ['../../escaped.rar'],[`..${slash}..${slash}escaped2.rar`],[`C:${slash}Windows${slash}evil.dll`],['sub/dir/inner.rar'],['CON'],['nul.7z'],['x.rar. '],['  spaced name.zip  '],['colon:and?marks*.zip'],
+    [wide('setup.exe')],['con.'+'x'.repeat(172)+'.exe'],['con.'+'a'.repeat(171)+'.exex'],['a'.repeat(260)+'.bat'],['dots...'],['.hidden'],['..'],['archive.part01.rar'],
+    [undefined,'from-browser.zip'],[undefined,wide('browser.exe')],[undefined,`C:${slash}Users${slash}Someone${slash}Downloads${slash}kept.7z`],[undefined,undefined,'from-address.zip'],[undefined,undefined,encodeURIComponent('aux')],
+    [undefined,undefined,encodeURIComponent(wide('address.scr'))],['server-wins.zip','browser-loses.exe','address-loses.bat'],['',"browser's.zip",'ignored.bat']];
+  let warned=0;
+  for(const [index,[fromServer,fromBrowser,fromAddress]] of cases.entries()){
+    served=fromServer;
+    const message={v:1,type:'capture',url:`https://cdn.example/${index}/${fromAddress||'file'}`,...(fromBrowser?{filename:fromBrowser}:{})};
+    const decision=bridge.receive('chromium',protocol.validateRequest(message)),label=JSON.stringify(cases[index]).slice(0,80);
+    assert.equal(decision.action,'take',label);
+    await until(()=>bridge.snapshot().captures.find(capture=>capture.id===decision.id).status!=='checking','the check of '+label);
+    const shown=bridge.snapshot().captures.find(capture=>capture.id===decision.id);
+    assert.equal(shown.status,'ready',label);
+    if(shown.verdict.level==='warning')warned++;
+    const result=await bridge.action({id:decision.id,action:'download',acknowledgeRisk:true});
+    assert.equal(result.added,1,label);
+    const saved=manager.downloads.at(-1);
+    assert.equal(saved.name,shown.name,label);
+    assert.equal(saved.folder,folder,label);assert.equal(path.dirname(path.resolve(saved.folder,saved.name)),folder,label);
+    assert.doesNotMatch(saved.name,/[<>:"/|?*]/,label);assert.equal(saved.name.includes(slash),false,label);assert.doesNotMatch(saved.name,/[. ]$/,label);
+    await bridge.action({id:decision.id,action:'dismiss'});
+  }
+  assert.deepEqual(manager.downloads.slice(0,6).map(d=>d.name),['escaped.rar','escaped2.rar','evil.dll','inner.rar','_CON','_nul.7z']);
+  assert.equal(manager.downloads[9].name,'setup.exe');assert.equal(manager.downloads[10].name,'_con.'+'x'.repeat(172)+'.exe');assert.equal(manager.downloads[12].name.length,180);
+  assert.equal(manager.downloads.at(-2).name,'server-wins.zip');assert.equal(manager.downloads.at(-1).name,"browser's.zip");
+  assert.equal(warned,4,'setup.exe, the long .exe, browser.exe and address.scr were shown with their warning');
+  for(let i=0;i<600&&manager.running.size;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.deepEqual(fs.readdirSync(path.join(root,'downloads')),['Browser downloads'],'nothing was written beside the folder');
 });

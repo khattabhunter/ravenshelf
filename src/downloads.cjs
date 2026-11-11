@@ -13,7 +13,7 @@ const {DEFAULT_SCHEDULE,normalizeSchedule,scheduleSnapshot}=require('./download-
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
 const {MEDIA_FOLDER,QUALITIES,VIDEO_ID,canonicalUrl,cleanTitle}=require('./youtube.cjs');
 const {removeMediaWorkspace}=require('./media-downloads.cjs');
-const {SITE:MOD_SITE,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED}=require('./mods.cjs');
+const {SITE:MOD_SITE,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED,assertFileServer}=require('./mods.cjs');
 const {safeName,folderName:safeFolderName}=require('./safe-name.cjs');
 const APP_VERSION=require('../package.json').version;
 // YouTube jobs waiting or running at once; more are refused until some finish.
@@ -34,6 +34,28 @@ function networkFailure(error){for(let cause=error,depth=0;cause&&depth<4;cause=
 const withoutQuery=value=>{try{const url=new URL(value);url.search='';url.hash='';return url.href;}catch{return value;}};
 const isModFile=item=>item.origin==='browser'&&item.mod?.site===MOD_SITE;
 const linkIdentity=item=>isModFile(item)?withoutQuery(item.sourceUrl||item.url):item.sourceUrl||item.url;
+const filePath=value=>{try{return new URL(value).pathname;}catch{return String(value);}};
+// True when `name` is `original`, or `original` with the " (1)" that a name
+// already in use is given.
+function sameSavedName(name,original){
+  if(name===original)return true;
+  const ext=path.extname(original),stem=original.slice(0,original.length-ext.length);
+  const number=name.slice(stem.length,name.length-ext.length);
+  return /^ \([1-9][0-9]*\)$/.test(number)&&name===stem+number+ext;
+}
+// Whether a link is for a file the list already holds. Nexus Mods signs a new
+// link for every click, and the link can name another of its file servers, so
+// two mod downloads are the same file when they have the same path on those
+// servers and are saved under the same name. Everything else is compared by
+// its address, as before.
+const sameFile=(held,link,name)=>isModFile(held)&&isModFile(link)
+  ?filePath(held.url)===filePath(link.url)&&sameSavedName(held.name,name)
+  :linkIdentity(held)===linkIdentity(link);
+// A Nexus Mods link is signed for one click and can include the account's
+// number. It is dropped as soon as it is no longer needed, when the file has
+// finished or the download is cancelled: only the plain address of the file
+// stays, and the page address that was sent with the request goes too.
+function dropModLink(d){d.url=withoutQuery(d.url);d.sourceUrl=withoutQuery(d.sourceUrl);d.headers={};}
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
 function atomicJSON(file,data) {
   fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -59,7 +81,7 @@ class DownloadManager extends EventEmitter {
     try{this.settings.downloadSchedule=normalizeSchedule(this.settings.downloadSchedule||DEFAULT_SCHEDULE);}catch{this.settings.downloadSchedule=normalizeSchedule();}
     this.bandwidthLimiter=bandwidthLimiter||new BandwidthLimiter({bytesPerSecond:this.settings.maxDownloadBytesPerSecond});
     this.downloads=Array.isArray(stored.downloads)?stored.downloads:[];
-    let plainHeaders=false;
+    let plainHeaders=false,tidied=false;
     for(const d of this.downloads){
       if(['queued','downloading'].includes(d.status))d.status='paused';d.speed=0;d.activeConnections=0;
       this.hostBackoff.restore(d.url,{retryAt:d.retryAt,status:d.retryStatus,failures:d.retryCount});
@@ -67,13 +89,19 @@ class DownloadManager extends EventEmitter {
         // Headers that cannot be opened (another Windows account or PC) are dropped;
         // the job then refreshes its link from the source page when it resumes.
         const opened=this.vault?.open(d.sealedHeaders);
-        d.headers=opened||{};if(!opened)d.headersNeedRefresh=true;delete d.sealedHeaders;
+        d.headers=opened||{};if(!opened&&!isModFile(d))d.headersNeedRefresh=true;delete d.sealedHeaders;
       }else if(d.headers&&typeof d.headers==='object'&&Object.keys(d.headers).length)plainHeaders=true;
       if(!d.headers||typeof d.headers!=='object'||Array.isArray(d.headers))d.headers={};
+      // A mod download that Ravenshelf 0.7.0 finished or cancelled: drop what that version still kept of its link.
+      if(isModFile(d)&&['completed','cancelled'].includes(d.status)){
+        const kept=JSON.stringify([d.url,d.sourceUrl,d.headers,d.needsNewLink]);
+        dropModLink(d);if(d.status==='cancelled')d.needsNewLink=true;
+        if(kept!==JSON.stringify([d.url,d.sourceUrl,d.headers,d.needsNewLink]))tidied=true;
+      }
     }
     // Remove legacy plaintext even when encryption is unavailable. Working
     // credentials remain in memory, but only sealed credentials go to disk.
-    if(plainHeaders||this.downloads.some(d=>d.headersNeedRefresh))this.save();
+    if(plainHeaders||tidied||this.downloads.some(d=>d.headersNeedRefresh&&!isModFile(d)))this.save();
     // Scans interrupted by closing the app run again on the next start.
     for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
     if(this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
@@ -95,11 +123,13 @@ class DownloadManager extends EventEmitter {
     const {headers,sealedHeaders,headersNeedRefresh,...rest}=d;
     if(!headers||!Object.keys(headers).length)return {...rest,headers:{},...(headersNeedRefresh?{headersNeedRefresh:true}:{})};
     let sealed=null;try{sealed=this.vault?.seal(headers);}catch{}
-    return sealed?{...rest,sealedHeaders:sealed}:{...rest,headers:{},headersNeedRefresh:true};
+    // What a mod download sends is its page's address, not a sign-in, and its link
+    // is never looked up again: nothing needs to be checked again for it.
+    return sealed?{...rest,sealedHeaders:sealed}:{...rest,headers:{},...(isModFile(d)?{}:{headersNeedRefresh:true})};
   }
   save(){
     const downloads=this.downloads.map(d=>this.persisted(d));
-    this.headerStorageWarning=downloads.some(d=>d.headersNeedRefresh)?HEADER_STORAGE_WARNING:'';
+    this.headerStorageWarning=downloads.some(d=>d.headersNeedRefresh&&!isModFile(d))?HEADER_STORAGE_WARNING:'';
     atomicJSON(this.stateFile,{settings:this.settings,downloads});
   }
   changed(){this.emit('state',this.state());}
@@ -183,21 +213,22 @@ class DownloadManager extends EventEmitter {
     for(const link of links){
       if(link.status!=='ready')continue;
       safeURL(link.url);
-      const held=this.downloads.find(d=>linkIdentity(d)===linkIdentity(link)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled');
+      const original=safeName(link.filename || new URL(link.url).pathname.split('/').pop());
+      const held=this.downloads.find(d=>sameFile(d,link,original)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled');
       if(held){
         // A Nexus Mods link stops working after a while. Downloading the same file
         // again from its page brings a new link: a failed entry for that file takes
         // it and starts again from where it stopped, instead of staying stuck.
         if(held.status==='error'&&isModFile(held)&&isModFile(link)&&!this.quiescing.has(held.id)){
           const headers={...link.headers};if(link.referer)headers.Referer=safeURL(link.referer).href;
-          delete held.headersNeedRefresh;delete held.pauseReason;delete held.scheduleRequested;
+          delete held.headersNeedRefresh;delete held.pauseReason;delete held.scheduleRequested;delete held.needsNewLink;
           // From here on it is the same as pressing Retry, with the new link.
           Object.assign(held,{url:link.url,sourceUrl:link.sourceUrl||link.url,headers,mod:{...link.mod},status:'queued',error:'',retryCount:0,networkRetries:0,speed:0,activeConnections:0});
           added.push(held.id);
         }
         continue;
       }
-      const name=this.availableName(folder,safeName(link.filename || new URL(link.url).pathname.split('/').pop()));
+      const name=this.availableName(folder,original);
       const requestHeaders={...link.headers};if(link.referer)requestHeaders.Referer=safeURL(link.referer).href;
       const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};
       // A download taken over from a browser keeps the browser's internet-zone mark.
@@ -240,7 +271,14 @@ class DownloadManager extends EventEmitter {
     }
     if(['pause','cancel','resume','retry'].includes(action)){delete d.pauseReason;delete d.scheduleRequested;}
     if(action==='pause'&&['queued','downloading'].includes(d.status)){d.status='paused';this.running.get(id)?.abort();}
-    else if(action==='cancel'&&!['completed','cancelled'].includes(d.status)){d.status='cancelled';this.running.get(id)?.abort();}
+    else if(action==='cancel'&&!['completed','cancelled'].includes(d.status)){
+      d.status='cancelled';this.running.get(id)?.abort();
+      if(isModFile(d)){dropModLink(d);d.needsNewLink=true;}
+    }
+    // A cancelled mod download has no link left to carry on with, and Ravenshelf
+    // asks nothing of the file server without one. It says how to get a new link,
+    // and then takes it like any failed mod download.
+    else if(['resume','retry'].includes(action)&&d.needsNewLink&&isModFile(d)&&['error','cancelled'].includes(d.status)){d.status='error';d.error=MOD_LINK_DROPPED;}
     else if(['resume','retry'].includes(action)&&['paused','error','cancelled'].includes(d.status)){d.status='queued';d.error='';d.retryCount=0;d.networkRetries=0;}
     d.speed=0;if(d.status!=='downloading')d.activeConnections=0;this.save();this.changed();this.pump();return this.state();
   }
@@ -295,7 +333,8 @@ class DownloadManager extends EventEmitter {
       if(d.headersNeedRefresh){if(d.mod)delete d.headersNeedRefresh;else{await refreshHeaders();signal.throwIfAborted();}}
       const originalUrl=d.url;
       this.hostBackoff.assertAvailable(originalUrl);
-      let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0,http1:true});
+      // A mod file may be handed on only among Nexus Mods' own file servers.
+      let res=await this.fetcher(originalUrl,{headers:{...d.headers,'Accept-Encoding':'identity',...extraHeaders},signal,timeoutMs:0,http1:true,...(isModFile(d)?{checkRedirect:assertFileServer}:{})});
       lastActivity=Date.now();
       if([401,403,404,410].includes(res.status)&&this.resolveLink&&d.sourceUrl!==d.url&&!d.mod){
         await res.body?.cancel();
@@ -330,7 +369,7 @@ class DownloadManager extends EventEmitter {
       }
       d.total=d.received;d.status='completed';d.completedAt=new Date().toISOString();
       // A finished mod file no longer needs its signed link: only the plain address is kept.
-      if(d.mod){d.url=withoutQuery(d.url);d.sourceUrl=withoutQuery(d.sourceUrl);}
+      if(isModFile(d))dropModLink(d);
       if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
       try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
     };
