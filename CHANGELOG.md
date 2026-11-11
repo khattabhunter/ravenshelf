@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 — PC specs, and Nexus Mods downloads filed by game
+
+- New **PC specs** page: the processor (cores, threads, clock speed), each graphics adapter (which one games use, its real graphics memory even above 4 GB, DirectX support, driver version), memory installed and usable, drives with their type and free space, the display and the Windows version. Ravenshelf asks Windows when you open the page, in about a second, keeps the answer in memory and sends it nowhere.
+- The hardware check is a fixed, read-only script that asks Windows only for the model names, sizes and capability levels it shows: never serial numbers, the computer's name, user names, volume labels or network addresses. A test holds the script to lists of everything it may contain. The answer is never part of the app's saved state, its logs or anything the browser extension can reach.
+- The page leaves out what it cannot be sure of. An adapter is called a graphics card or built-in graphics only when that is certain, graphics memory is shown only from a source that means memory of the card's own, and a card with a missing or broken driver says so instead of repeating what Windows recorded earlier.
+- **Nexus Mods downloads filed by game** (browser extension): a file you download on Nexus Mods is recognised. The review shows the mod, the game and the folder the file will go to, **Download** saves the file in `Mods\<game>` in your download folder, and the Downloads page shows the mod's and the game's names.
+- Mod files download over one connection, whatever **Connections per file** says, because that is how Nexus Mods serves free accounts. The site's waiting time and sign-in are untouched, and no Nexus Mods account, API key or browser cookie is used.
+- Nexus Mods' download links expire. When one is no longer accepted, the download says so instead of showing a bare error number. Start it again from the mod's page and the failed entry takes the new link and carries on. Ravenshelf does not look an old link up again by itself: for a mod file it only ever asks for the file, at the link your click produced. A mod file that is already in your list is not added twice.
+- The extension's new page script on www.nexusmods.com only reads the page (game, mod, file name and number): it adds nothing, presses nothing and makes no requests. What it reads stays in the browser's memory unless you download a file from Nexus Mods, and pages in private windows are never read. The toolbar button has a new **Sort Nexus Mods files by game** switch.
+- A label is attached only to a file that comes from Nexus Mods' own file servers, never to a file a page merely links to, and Ravenshelf checks every part of it again before it names a folder or appears on screen. When it is not clear which mod a file belongs to, the file is treated as an ordinary browser download.
+- A finished mod file keeps only the plain address of its link. The signed part, which includes your Nexus Mods account number, is dropped.
+- A file's name is now judged in exactly the form it is saved under, so a name written with look-alike characters, or one that turns into a program's name only when it is shortened, cannot pass a check under one name and be saved under another.
+- The folder for a new game with a very long title no longer ends in a space or a dot, which Windows Explorer cannot open. A game that already has a folder from an earlier version keeps it, so its files stay together.
+
+See [the release notes](docs/RELEASE-0.7.0.md).
+
 ## 0.6.1 — Much faster YouTube setup and downloads
 
 - The one-time YouTube setup downloads the helper programs (about 168 MB) in 2 MB parts over up to eight connections, and replaces a connection that is far slower than the others. On a connection where GitHub's download servers had slowed setup to more than an hour, it took about a minute. Each part must be exactly the part requested, and the finished files must still match the sizes and SHA-256 values recorded in Ravenshelf before anything is installed.

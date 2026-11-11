@@ -25,6 +25,8 @@ The public Windows release is built on GitHub-hosted Windows machines from the t
 | Protection lists (extension connected) | About every 12 hours, GitHub's raw file host (or jsDelivr, or malware-filter's GitLab and Cloudflare Pages mirrors as fallbacks) receives requests for four list files. Ravenshelf downloads each list whole and matches addresses on your PC, so list providers learn nothing about the sites you visit. |
 | VirusTotal (optional, your own key) | With a key saved: VirusTotal receives your key, up to three site names per browser download, and the SHA-256 fingerprint of each finished browser download. Never files, full web addresses or downloads that did not come from the browser. Results are cached for a day. YouTube videos are never looked up. |
 | YouTube downloads (0.6.0, optional) | The extension sends only the video's ID (from its address) and your quality choice to Ravenshelf on the same PC. yt-dlp then requests the video from YouTube and Google's video servers directly from your PC, as watching it does, without your browser cookies or YouTube sign-in. |
+| Nexus Mods downloads (0.7.0, optional) | On www.nexusmods.com the extension reads which game, mod and file the open page is about. That stays in the browser unless you start a download that comes from Nexus Mods' file servers; then it goes with the download to Ravenshelf on the same PC. Ravenshelf checks and downloads the file from Nexus Mods' file server itself, over one connection, with the address your browser was given and without your browser cookies or Nexus Mods sign-in. It makes no other request to Nexus Mods. |
+| PC specs (0.7.0) | Nothing leaves your computer. Ravenshelf asks Windows for hardware details when you open the page and keeps the answer in memory. |
 | YouTube helper programs | Only when you choose **Set up**: GitHub's release download hosts receive requests for the pinned yt-dlp, Deno and FFmpeg files. The programs never check for or download updates themselves. |
 
 Those Internet services can see the connection's public IP and normal HTTP information. Depending on the request, they may also receive a user-agent, referrer, cookies or a game search term. Ravenshelf's own application code has no analytics endpoint or automatic upload of the installed-games scan. That does not make external websites anonymous or prevent their own logging.
@@ -53,9 +55,21 @@ On www.youtube.com the extension adds its player button. The script reads the pa
 
 The YouTube helper programs are stored in `%LOCALAPPDATA%\Ravenshelf\media-tools`, with yt-dlp's and Deno's caches (YouTube player data, no personal data). Each YouTube download uses its own temporary folder there, removed when the download ends, and a private working folder next to the file, removed when it finishes. Videos waiting for setup are kept in memory only, for up to an hour.
 
-Firefox asks extensions to declare the data they transmit. Ravenshelf's extension declares browsing activity, because download and page addresses go to the Ravenshelf app on your PC; nothing goes to the developer or any other service.
+On www.nexusmods.com the extension's page script only reads: the page's address, the game and mod names in the page's title lines, the address the page gives for itself, the game's and the mod's numbers and, on a file's page, the file's name and number. It adds nothing to the page, presses nothing and makes no requests, and it does not read your account, your sign-in or anything else on the page. The extension keeps what it read for each open tab in the browser's session storage (in memory, for at most 50 tabs, cleared when the browser closes). It forgets a tab's note when the tab closes, leaves Nexus Mods or moves to a page that is not about a mod, stops using a note after half an hour, and forgets all notes when you turn off **Sort Nexus Mods files by game**. Nexus Mods pages in private windows are never read.
+
+A mod file you download is saved under `Mods\<game>` in your download folder, and its queue entry records the game's and mod's names and numbers. A Nexus Mods download link carries a short-lived signature and your Nexus Mods account number. The queue entry keeps that link on your PC while the download is waiting or unfinished, because it is needed to continue. Once the file has finished, only the plain address of the file is kept.
+
+Firefox asks extensions to declare the data they transmit. Ravenshelf's extension declares browsing activity, because download and page addresses go to the Ravenshelf app on your PC, and website content, because the game, mod and file names that a Nexus Mods page showed go there with a mod file you download. Nothing goes to the developer or any other service.
 
 Local game suggestions use existing saved/completed-game genre information. Adaptive accents sample an already loaded cover locally. Neither feature sends a preference model or image pixels to an additional service. Normal catalogue and cover requests still occur.
+
+### PC specs
+
+The **PC specs** page shows the processor, graphics adapters, memory, drives, display and Windows version. Ravenshelf reads them only when you open the page or choose **Check again**, by running a fixed, read-only script with Windows PowerShell. The script asks Windows only for the model names, sizes and capability levels it prints. It never asks for serial numbers, the computer's name, user names, volume labels or network addresses. A graphics adapter's device path is looked at only to pick out its maker and model numbers and how it is connected; the rest of the path is not kept.
+
+The answer stays in Ravenshelf's memory until you close the app. It is not written to the profile or any file, not included in logs, not sent to any site or service, and not shared with the browser extension. A drive's model name is whatever Windows calls the drive, which is normally its maker's model and can be a name someone gave it.
+
+One exception is outside Ravenshelf: if an administrator has turned on PowerShell transcription for the PC (a Windows policy used in some workplaces), Windows itself records what PowerShell prints, including this answer, in that transcript.
 
 ### Optional clipboard recognition
 
