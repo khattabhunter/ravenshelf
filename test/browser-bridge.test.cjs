@@ -238,7 +238,7 @@ test('downloading a link the queue already holds says so instead of claiming it 
   const result=await bridge.action({id:decision.id,action:'download'});
   assert.equal(result.added,0);assert.equal(events.queued.length,1);
   const capture=bridge.snapshot().captures[0];
-  assert.equal(capture.status,'duplicate');assert.match(capture.message,/already in your Downloads list/);
+  assert.equal(capture.status,'duplicate');assert.equal(capture.message,'This file is already in your Downloads list. Resume or retry it there, or remove the old entry and download it again.');
   assert.equal(bridge.snapshot().pending,0,'a duplicate no longer waits for a decision');
   await assert.rejects(bridge.action({id:decision.id,action:'download'}),/cannot download/);
 });

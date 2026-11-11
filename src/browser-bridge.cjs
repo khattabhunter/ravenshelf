@@ -44,10 +44,10 @@ async function writeJSONAtomic(file,value){
 }
 
 class BrowserBridge extends EventEmitter{
-  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
+  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
     super();
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
-    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,queueMedia,openExternal,reveal,notify,setReputation,appVersion,now,platform,listenPath});
+    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,openExternal,reveal,notify,setReputation,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
     this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
   }
@@ -293,8 +293,9 @@ class BrowserBridge extends EventEmitter{
       chain:capture.chain.map(hop=>({...hop})),verdict:capture.verdict?{level:capture.verdict.level,reasons:capture.verdict.reasons.map(item=>({...item}))}:null,
       virusTotal:capture.virusTotal.map(item=>({kind:item.kind,subject:item.subject,status:item.status,reason:item.reason,malicious:item.malicious,suspicious:item.suspicious,harmless:item.harmless,undetected:item.undetected,link:item.link})),
       message:capture.message,mod:capture.request.mod?{...capture.request.mod}:null,
-      // Where a mod file would be saved inside the download folder, named exactly as the queue names it.
-      modFolder:capture.request.mod?`${folderName(MODS_FOLDER)} › ${folderName(gameFolder(capture.request.mod))}`:''
+      // Where a mod file would be saved inside the download folder, named exactly as the queue names it,
+      // from the title the queue files that game's mods under.
+      modFolder:capture.request.mod?`${folderName(MODS_FOLDER)} › ${folderName(this.modTitle(capture.request.mod))}`:''
     }));
     return {running:Boolean(this.server),contact:this.contact?{...this.contact}:null,pending:this.pendingCount(),captures};
   }

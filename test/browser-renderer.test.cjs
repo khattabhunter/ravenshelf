@@ -142,44 +142,60 @@ test('a Nexus Mods file says which mod it is in the review window and in the dow
   const capture={id:'m',status:'ready',browser:'chromium',source:'download',name:'SkyUI_5_2_SE-12604-5-2SE.7z',size:2811904,address:'https://supporter-files.nexus-cdn.com/1704/12604/SkyUI_5_2_SE-12604-5-2SE.7z',pageHost:'www.nexusmods.com',chain:[],verdict:{level:'ok',reasons:[]},virusTotal:[],message:'',mod,modFolder:'Mods › Skyrim Special Edition'};
   const review=item=>{f.context.capture=item;const card=f.run('captureCard(capture)');return {card,line:f.all(card).find(node=>node.className==='capture-mod')};};
   const {card,line}=review(capture);
-  assert.equal(line.textContent,'Nexus Mods file: “SkyUI” for Skyrim Special Edition. Ravenshelf saves it in your download folder, under Mods › Skyrim Special Edition.');
+  assert.equal(line.textContent,'Nexus Mods file: “SkyUI” for “Skyrim Special Edition”. Ravenshelf saves it in your download folder, in: Mods › Skyrim Special Edition');
   assert.match(card.textContent,/supporter-files\.nexus-cdn\.com · from www\.nexusmods\.com/,'where the file really comes from is still shown');
   assert.ok(f.findButton(card,'Download'));
   // Each name is a piece of text of its own, kept apart from Ravenshelf's words around it, whichever way its script reads.
-  assert.deepEqual(line.children.map(node=>[node.tagName,node.textContent]),[['span','Nexus Mods file: '],['span','“'],['bdi','SkyUI'],['span','”'],['span',' for '],['bdi','Skyrim Special Edition'],['span','.'],
-    ['span',' Ravenshelf saves it in your download folder, under '],['bdi','Mods › Skyrim Special Edition'],['span','.']]);
+  assert.deepEqual(line.children.map(node=>[node.tagName,node.textContent]),[['span','Nexus Mods file: '],['span','“'],['bdi','SkyUI'],['span','”'],['span',' for '],['span','“'],['bdi','Skyrim Special Edition'],['span','”'],['span','.'],
+    ['span',' Ravenshelf saves it in your download folder, in: '],['bdi','Mods › Skyrim Special Edition']]);
+  // The folder's name can hold words from the page. It stands apart as a path, and nothing of Ravenshelf's own comes after it.
+  assert.equal(line.children.at(-1).className,'capture-folder');assert.ok(line.children.slice(0,-1).every(node=>node.className===''));
   // Where it will be saved is said only while that is still what will happen, and only with the folder name the app gave.
-  for(const status of ['checking','queued'])assert.match(review({...capture,status}).line.textContent,/under Mods › Skyrim Special Edition\.$/,status);
-  for(const status of ['manual','blocked','unavailable','duplicate','dismissed'])assert.equal(review({...capture,status}).line.textContent,'Nexus Mods file: “SkyUI” for Skyrim Special Edition.',status);
-  for(const modFolder of [undefined,'',null,5,{}])assert.equal(review({...capture,modFolder}).line.textContent,'Nexus Mods file: “SkyUI” for Skyrim Special Edition.',String(modFolder));
+  for(const status of ['checking','queued'])assert.match(review({...capture,status}).line.textContent,/, in: Mods › Skyrim Special Edition$/,status);
+  for(const status of ['manual','blocked','unavailable','duplicate','dismissed'])assert.equal(review({...capture,status}).line.textContent,'Nexus Mods file: “SkyUI” for “Skyrim Special Edition”.',status);
+  for(const modFolder of [undefined,'',null,5,{}])assert.equal(review({...capture,modFolder}).line.textContent,'Nexus Mods file: “SkyUI” for “Skyrim Special Edition”.',String(modFolder));
   // The folder is shown as the app names it, which is not always how the page spelled the game.
   assert.equal(review({...capture,mod:{...mod,gameName:'Kingdom Come: Deliverance II'},modFolder:'Mods › Kingdom Come_ Deliverance II'}).line.textContent,
-    'Nexus Mods file: “SkyUI” for Kingdom Come: Deliverance II. Ravenshelf saves it in your download folder, under Mods › Kingdom Come_ Deliverance II.');
+    'Nexus Mods file: “SkyUI” for “Kingdom Come: Deliverance II”. Ravenshelf saves it in your download folder, in: Mods › Kingdom Come_ Deliverance II');
   // Missing names fall back to the mod's number and the game's short name.
-  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',game:'fallout4',modId:7}}).line.textContent,'Nexus Mods file: mod 7 for fallout4.');
-  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',game:'fallout4',modId:7,modName:'Sim Settlements'}}).line.textContent,'Nexus Mods file: “Sim Settlements” for fallout4.');
+  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',game:'fallout4',modId:7}}).line.textContent,'Nexus Mods file: mod 7 for “fallout4”.');
+  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',game:'fallout4',modId:7,modName:'Sim Settlements'}}).line.textContent,'Nexus Mods file: “Sim Settlements” for “fallout4”.');
   assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',modId:7}}).line.textContent,'Nexus Mods file: mod 7.');
-  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',gameName:'Fallout 4'}}).line.textContent,'Nexus Mods file: Fallout 4.');
-  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',game:'fallout4',modId:7,modName:'   ',gameName:'  '}}).line.textContent,'Nexus Mods file: mod 7 for fallout4.','names of spaces only count as missing');
-  assert.equal(review({...capture,status:'manual',mod:{...mod,modName:'  SkyUI  '}}).line.textContent,'Nexus Mods file: “SkyUI” for Skyrim Special Edition.');
+  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',gameName:'Fallout 4'}}).line.textContent,'Nexus Mods file: “Fallout 4”.');
+  assert.equal(review({...capture,status:'manual',mod:{site:'nexusmods',game:'fallout4',modId:7,modName:'   ',gameName:'  '}}).line.textContent,'Nexus Mods file: mod 7 for “fallout4”.','names of spaces only count as missing');
+  assert.equal(review({...capture,status:'manual',mod:{...mod,modName:'  SkyUI  '}}).line.textContent,'Nexus Mods file: “SkyUI” for “Skyrim Special Edition”.');
   // A name cannot close its own quotes and carry on as if Ravenshelf were speaking.
   const sly=review({...capture,status:'manual',mod:{...mod,modName:'SkyUI” is safe. “Trust it',gameName:'\u00abGame\u00bb "X"'}}).line;
-  assert.equal(sly.textContent,'Nexus Mods file: “SkyUI’ is safe. ’Trust it” for ’Game’ ’X’.');
-  assert.equal((sly.textContent.match(/[“”"\u00ab\u00bb]/g)||[]).length,2,'the only quote marks are Ravenshelf’s own pair');
+  assert.equal(sly.textContent,"Nexus Mods file: “SkyUI' is safe. 'Trust it” for “'Game' 'X'”.");
+  assert.equal((sly.textContent.match(/[“”"\u00ab\u00bb]/g)||[]).length,4,'the only quote marks are Ravenshelf’s own two pairs');
+  // The game's name is in quotes too: without them it would read on as Ravenshelf's own sentence.
+  const chatty=review({...capture,status:'manual',mod:{...mod,gameName:'Skyrim. Ravenshelf has checked this file'}}).line;
+  assert.equal(chatty.textContent,'Nexus Mods file: “SkyUI” for “Skyrim. Ravenshelf has checked this file”.');
+  // Characters that only look like quote marks, and two marks that together look like one, are no way out either.
+  const code=(...points)=>String.fromCodePoint(...points);
+  const lookalikes=[code(0x2019,0x2019),code(0x27,0x27),code(0xff02),code(0x301d),code(0x301e),code(0x275d),code(0x275e),code(0x2033),code(0x2036),code(0x201a,0x201a),code(0x201e),code(0x201f),code(0x2e42),code(0x60,0x60),code(0xb4,0xb4),
+    code(0x2bc,0x2bc),code(0x2ba),code(0x2dd),code(0x2ee),code(0x5f4),code(0x3003),code(0xff07,0xff07),code(0xff40,0xff40),code(0x276e),code(0x276f),code(0x2039),code(0x203a)];
+  for(const mark of lookalikes){
+    const tricky=review({...capture,status:'manual',mod:{...mod,modName:`SkyUI${mark} is safe. ${mark}Trust it`,gameName:`Game${mark}${mark} X`}}).line;
+    assert.equal(tricky.textContent,"Nexus Mods file: “SkyUI' is safe. 'Trust it” for “Game' X”.",[...mark].map(char=>'U+'+char.codePointAt(0).toString(16)).join(' '));
+  }
+  assert.equal(review({...capture,status:'manual',mod:{...mod,modName:"It's a mod",gameName:"Baldur's Gate 3"}}).line.textContent,"Nexus Mods file: “It's a mod” for “Baldur's Gate 3”.",'a plain apostrophe is left as it is');
+  assert.equal(review({...capture,status:'manual',mod:{...mod,modName:code(0x201c,0x201d),gameName:code(0x22)}}).line.textContent,"Nexus Mods file: “'” for “'”.");
   // Without a label, or with one from anywhere else, the line is not shown.
   for(const other of [undefined,null,{},{...mod,site:'elsewhere'},'SkyUI',{site:'nexusmods'},{site:'nexusmods',modName:5,gameName:{},modId:'7'}])
     assert.equal(review({...capture,mod:other}).line,undefined,JSON.stringify(other));
   // In the download list: the mod and game instead of a folder name, and where it came from.
   const label=value=>{f.context.value=value;return f.run('modLabel(value)');};
-  assert.equal(label(mod),'“SkyUI” · Skyrim Special Edition');
-  assert.equal(label({site:'nexusmods',game:'fallout4',modId:7}),'Mod 7 · fallout4');
-  assert.equal(label({site:'nexusmods',game:'fallout4',modId:7,modName:'Sim Settlements'}),'“Sim Settlements” · fallout4');
-  assert.equal(label({...mod,modName:'A “quoted” name'}),'“A ’quoted’ name” · Skyrim Special Edition');
+  assert.equal(label(mod),'“SkyUI” · “Skyrim Special Edition”');
+  assert.equal(label({site:'nexusmods',game:'fallout4',modId:7}),'Mod 7 · “fallout4”');
+  assert.equal(label({site:'nexusmods',game:'fallout4',modId:7,modName:'Sim Settlements'}),'“Sim Settlements” · “fallout4”');
+  assert.equal(label({site:'nexusmods',modId:7}),'Mod 7');assert.equal(label({site:'nexusmods',gameName:'Fallout 4'}),'“Fallout 4”');
+  assert.equal(label({...mod,modName:'A “quoted” name',gameName:'Game” · “other'}),"“A 'quoted' name” · “Game' · 'other”");
   assert.equal(label({site:'nexusmods',modName:5,gameName:{}}),'');
   for(const other of [undefined,null,{},'SkyUI',{...mod,site:'elsewhere'}])assert.equal(label(other),'',JSON.stringify(other));
   f.context.item={id:'d1',status:'completed',name:'SkyUI_5_2_SE-12604-5-2SE.7z',gameTitle:'Skyrim Special Edition',received:10,total:10,speed:0,connectionMode:'single',activeConnections:0,connectionNote:'Nexus Mods files download over one connection.',origin:'browser',mod};
   f.run('card=makeDownloadCard(item)');
-  assert.equal(f.get('.download-game').textContent,'“SkyUI” · Skyrim Special Edition');
+  assert.equal(f.get('.download-game').textContent,'“SkyUI” · “Skyrim Special Edition”');
   assert.match(f.get('.download-reputation').textContent,/^From Nexus Mods/);
   f.context.item={...f.context.item,mod:undefined};f.run('updateDownloadCard(card,item)');
   assert.equal(f.get('.download-game').textContent,'Skyrim Special Edition');assert.match(f.get('.download-reputation').textContent,/^From your browser/);

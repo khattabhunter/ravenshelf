@@ -151,7 +151,7 @@ test('a download is labelled only when it comes from Nexus Mods’ file servers 
   assert.deepEqual(P.nexusMatch({url:'https://www.nexusmods.com/Core/Libs/Common/Widgets/DownloadPopUp?id=735025',finalUrl:CDN,filename:FILE_NAME},pages,NOW),LABEL,'a download that began on the site and was handed to a file server');
   assert.deepEqual(P.nexusMatch({url:NEWER_CDN,finalUrl:CDN,filename:FILE_NAME},pages,NOW),LABEL,'or was handed from one file server to another');
   // A download that began on another site and only ended up on a file server is not labelled.
-  for(const first of ['https://short.example/x','http://www.nexusmods.com/x','https://nexusmods.com/x','https://users.nexusmods.com/x','https://www.nexusmods.com.example.com/x','https://example.com/www.nexusmods.com/x','http://supporter-files.nexus-cdn.com/x',42,undefined,''])
+  for(const first of ['https://short.example/x','http://www.nexusmods.com/x','https://nexusmods.com/x','https://users.nexusmods.com/x','https://evilwww.nexusmods.com/x','https://a.www.nexusmods.com/x','https://www.nexusmods.com.example.com/x','https://example.com/www.nexusmods.com/x','http://supporter-files.nexus-cdn.com/x',42,undefined,''])
     assert.equal(P.nexusMatch({url:first,finalUrl:CDN,filename:FILE_NAME},pages,NOW),null,String(first));
   assert.deepEqual(P.nexusMatch({url:CDN,filename:FILE_NAME},pages,NOW),LABEL,'which page started it does not matter');
   assert.deepEqual([...P.NEXUS_FILE_ROOTS],['nexus-cdn.com']);
@@ -618,7 +618,7 @@ test('only a file fetched from Nexus Mods’ file servers can carry a label',()=
     {url:'https://www.nexusmods.com/x',finalUrl:CDN},{url:'https://WWW.NEXUSMODS.COM/x?y=1',finalUrl:NEWER_CDN},{url:NEWER_CDN,finalUrl:CDN},{url:CDN,finalUrl:CDN},
     {url:CDN,referrer:'https://evil.example/'},{url:CDN,pageUrl:'https://evil.example/'}])assert.equal(mods.fromNexus(request),true,JSON.stringify(request));
   // A download that began on another site and only ended up on a file server is not Nexus Mods' own.
-  for(const url of ['https://short.example/x','http://www.nexusmods.com/x','https://nexusmods.com/x','https://users.nexusmods.com/x','https://www.nexusmods.com.example.com/x','https://example.com/www.nexusmods.com/x','http://supporter-files.nexus-cdn.com/x','not an address','',42,undefined])
+  for(const url of ['https://short.example/x','http://www.nexusmods.com/x','https://nexusmods.com/x','https://users.nexusmods.com/x','https://evilwww.nexusmods.com/x','https://a.www.nexusmods.com/x','https://www.nexusmods.com.example.com/x','https://example.com/www.nexusmods.com/x','http://supporter-files.nexus-cdn.com/x','not an address','',42,undefined])
     assert.equal(mods.fromNexus({url,finalUrl:CDN}),false,String(url));
   // The page that started a download proves nothing: any page, Nexus Mods' own included, can link to a file kept anywhere.
   for(const request of [null,undefined,'x',5,{},{url:''},{url:42},{url:'https://mirror.example/x.zip'},
@@ -639,7 +639,7 @@ function bridgeFor(t,options={}){
   const dir=scratch(t,()=>bridge.stop()),events={queued:[],notes:[]};
   const bridge=new BrowserBridge({hostDir:dir,threatLists:null,appVersion:'0.7.0',
     inspect:options.inspect||(async url=>({status:'ready',url,sourceUrl:url,filename:decodeURIComponent(new URL(url).pathname.split('/').pop()),size:3072,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'7z'})),
-    resolveProvider:options.resolveProvider||null,
+    resolveProvider:options.resolveProvider||null,...(options.modTitle?{modTitle:options.modTitle}:{}),
     queueDownload:async entry=>{events.queued.push(entry);return {added:1};},openExternal:async()=>{},reveal(){},notify:note=>events.notes.push(note)});
   const take=async message=>{
     const decision=bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',...message}));
@@ -942,10 +942,12 @@ test('the same mod file again is recognised by its address, whatever the signed 
   assert.equal(paused.status,'paused');
   assert.equal(q.manager.add({links:[signed('Paused-12604-1-0.7z','md5=new&expires=9&user_id=2')],...place}).added,0);
   assert.equal(paused.status,'paused');assert.ok(paused.url.endsWith('?md5=abc&expires=1&user_id=2'));
-  // One that was cancelled does not count, as for any download.
+  // A cancelled one has given up its link, and takes the new one: it starts again, and there is no second copy.
   q.manager.action(pausedId,'cancel');
-  assert.equal(q.manager.add({links:[signed('Paused-12604-1-0.7z','md5=new&expires=9&user_id=2')],...place}).added,1);
+  assert.deepEqual(q.manager.add({links:[signed('Paused-12604-1-0.7z','md5=new&expires=9&user_id=2')],...place}),{added:1,ids:[pausedId]});
   await q.finished();
+  assert.equal(paused.status,'completed',paused.error);assert.equal(paused.name,'Paused-12604-1-0.7z');
+  assert.equal(q.manager.downloads.filter(d=>d.name.startsWith('Paused')).length,1);
   // Ordinary downloads are compared by their whole address, as before.
   const plain=token=>modLink({mod:undefined,url:`https://cdn.example/a.zip?token=${token}`,sourceUrl:`https://cdn.example/a.zip?token=${token}`,filename:'a.zip'});
   assert.equal(q.manager.add({links:[plain(1)],gameTitle:'Browser downloads'}).added,1);
@@ -1014,6 +1016,11 @@ test('only a failed mod entry takes a new link; every other entry is left as it 
   const labelled=await failing(signed('d.7z',1));
   assert.equal(q.manager.add({links:[modLink({mod:undefined,url:bare('d.7z'),sourceUrl:bare('d.7z'),filename:'d.7z'})],...place}).added,0);
   untouched(labelled,signed('d.7z',1).url);assert.deepEqual(labelled.mod,LABEL);
+  // Nor does it restart one that was cancelled: a cancelled entry counts only for a link that has a label too.
+  const dropped=await failing(signed('e.7z',1));q.manager.action(dropped.id,'cancel');
+  const beside=q.manager.add({links:[modLink({mod:undefined,url:bare('e.7z'),sourceUrl:bare('e.7z'),filename:'e.7z'})],...place});
+  assert.equal(beside.added,1);assert.notEqual(beside.ids[0],dropped.id);assert.equal(dropped.status,'cancelled');
+  await q.finished();
   // The same file for another game's folder is a download of its own.
   const elsewhere=q.manager.add({links:[signed('d.7z',2)],gameTitle:'Another game',group:mods.MODS_FOLDER});
   assert.equal(elsewhere.added,1);assert.notEqual(elsewhere.ids[0],labelled.id);untouched(labelled,signed('d.7z',1).url);
@@ -1032,22 +1039,23 @@ test('only a failed mod entry takes a new link; every other entry is left as it 
 });
 
 test('the review names the folder exactly as the queue then makes it',async t=>{
-  const {bridge,events,take,shown}=bridgeFor(t),q=queueFor(t,fileServer(64));
+  const q=queueFor(t,fileServer(64)),{bridge,events,take,shown}=bridgeFor(t,{modTitle:mod=>q.manager.modTitle(mod)});
   const games=['Skyrim Special Edition','Kingdom Come: Deliverance II','..','CON','a/b\\c','trailing dots...','<script>','x'.repeat(100),'\u0633\u0643\u0627\u064a\u0631\u064a\u0645','\uff33\uff4b\uff59rim',undefined];
   const said=[];
   for(const [index,gameName] of games.entries()){
-    const label={...LABEL,gameName};if(gameName===undefined)delete label.gameName;
+    // Each its own game, so that each is named afresh.
+    const label={...LABEL,game:index?`game${index}`:GAME,gameName};if(gameName===undefined)delete label.gameName;
     const decision=await take({url:cdnFile(`file-${index}.zip`),filename:`file-${index}.zip`,mod:label});
     said.push(shown(decision.id).modFolder);
     await bridge.action({id:decision.id,action:'download'});
     // What the app does with a download the review hands over (src/browser-integration.cjs).
-    const entry=events.queued.at(-1),{ids}=q.manager.add({links:[entry],gameTitle:mods.modFolder(entry.mod),group:mods.MODS_FOLDER});
+    const entry=events.queued.at(-1),{ids}=q.manager.add({links:[entry],gameTitle:q.manager.modTitle(entry.mod),group:mods.MODS_FOLDER});
     const d=q.manager.downloads.find(item=>item.id===ids[0]);
     assert.equal(said.at(-1),`${path.basename(path.dirname(d.folder))} › ${path.basename(d.folder)}`,JSON.stringify(gameName));
     assert.equal(path.dirname(path.dirname(d.folder)),q.options.downloadDir);
   }
   assert.deepEqual(said.slice(0,7),['Mods › Skyrim Special Edition','Mods › Kingdom Come_ Deliverance II','Mods › Imported files','Mods › _CON','Mods › a_b_c','Mods › trailing dots','Mods › _script_']);
-  assert.equal(said[9],'Mods › Skyrim');assert.equal(said[10],'Mods › skyrimspecialedition','without a game name, the game’s short name from the address');
+  assert.equal(said[9],'Mods › Skyrim');assert.equal(said[10],'Mods › game10','without a game name, the game’s short name from the address');
   await q.finished();
   for(const d of q.manager.downloads)assert.equal(d.status,'completed',d.error);
   assert.equal(shown((await take({url:'https://cdn.example/game.zip',filename:'game.zip'})).id).modFolder,'','a download without a label has no such folder');
@@ -1228,6 +1236,14 @@ test('a cancelled mod download gives up its link at once, and takes a new one fr
   assert.equal(stopped.url,running.split('?')[0],'at once, not when the transfer has wound down');assert.equal(stopped.needsNewLink,true);
   await q.finished();
   assert.equal(stopped.status,'cancelled');assert.equal(fs.existsSync(path.join(stopped.folder,'running.7z')),false);
+  // The download button again, without pressing Retry first: the cancelled entry itself starts again. One that is being removed is left alone.
+  const renewed=cdnFile('running.7z','md5=again&expires=7&user_id=2'),restart=()=>q.manager.add({links:[modLink({url:renewed,sourceUrl:renewed,filename:'running.7z',size})],...PLACE});
+  q.manager.quiescing.add(runningId);
+  assert.equal(restart().added,0);assert.equal(stopped.status,'cancelled');
+  q.manager.quiescing.delete(runningId);
+  assert.deepEqual(restart(),{added:1,ids:[runningId]});
+  await q.finished();
+  assert.equal(stopped.status,'completed',stopped.error);assert.equal(Object.hasOwn(stopped,'needsNewLink'),false);assert.equal(stopped.name,'running.7z');
   const refusing=queueFor(t,{fetch:async()=>new Response('no',{status:500,headers:{'content-type':'text/html'}})});
   const {ids:[failedId]}=refusing.manager.add({links:[modLink()],...PLACE});await refusing.finished();
   const failed=refusing.manager.downloads[0];
@@ -1247,6 +1263,9 @@ test('a cancelled mod download gives up its link at once, and takes a new one fr
   q.manager.action(plainId,'pause');await q.finished();q.manager.action(plainId,'cancel');
   const plain=q.manager.downloads.find(item=>item.id===plainId);
   assert.equal(plain.status,'cancelled');assert.equal(plain.url,ordinary);assert.deepEqual(plain.headers,{Referer:'https://page.example/'});assert.equal(Object.hasOwn(plain,'needsNewLink'),false);
+  // Downloading it again while it is cancelled makes a second entry, as it always did.
+  const twice=q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip',size})],gameTitle:'Browser downloads'});
+  assert.equal(twice.added,1);assert.notEqual(twice.ids[0],plainId);assert.equal(q.manager.downloads.find(item=>item.id===twice.ids[0]).name,'game (1).zip');
   q.manager.action(plainId,'retry');await q.finished();
   assert.equal(plain.status,'completed',plain.error);assert.equal(plain.url,ordinary);
 });
@@ -1329,4 +1348,66 @@ test('a mod download is never the reason for the warning about sign-in details t
   // A sealed header that cannot be opened here (another PC or Windows account) is dropped, and the mod entry is not marked.
   const sealed=manager.downloads.find(d=>d.id==='sealed');
   assert.deepEqual(sealed.headers,{});assert.equal(Object.hasOwn(sealed,'sealedHeaders'),false);assert.equal(Object.hasOwn(sealed,'headersNeedRefresh'),false);
+});
+
+test('mod files of one game stay in one folder, whichever name they arrive with',async t=>{
+  const server=fileServer(3072),q=queueFor(t,server),modsRoot=path.join(q.options.downloadDir,'Mods');
+  const named={...LABEL},bare=(({gameName,...rest})=>rest)(LABEL);
+  // What the app does with a mod download (src/browser-integration.cjs).
+  const addMod=(name,mod)=>{const url=cdnFile(name);return q.manager.add({links:[modLink({url,sourceUrl:url,filename:name,mod})],gameTitle:q.manager.modTitle(mod),group:mods.MODS_FOLDER});};
+  const entry=result=>q.manager.downloads.find(d=>d.id===result.ids[0]);
+  // A game the list does not know yet goes by its label: the name the page showed, else the short name from the address.
+  assert.equal(q.manager.modTitle(named),'Skyrim Special Edition');assert.equal(q.manager.modTitle(bare),GAME);
+  const first=entry(addMod('first.7z',named));await q.finished();
+  assert.equal(first.folder,path.join(modsRoot,'Skyrim Special Edition'));
+  // The next file of that game arrives without the game's name: same folder, same title.
+  assert.equal(q.manager.modTitle(bare),'Skyrim Special Edition');
+  const second=entry(addMod('second.7z',bare));await q.finished();
+  assert.equal(second.folder,first.folder);assert.equal(second.gameTitle,'Skyrim Special Edition');assert.equal(second.status,'completed',second.error);
+  assert.equal(addMod('first.7z',bare).added,0,'and the first file is known there, so it is not downloaded twice');
+  assert.deepEqual(fs.readdirSync(modsRoot),['Skyrim Special Edition']);
+  // The other way round: a game first seen without its name keeps the folder it got.
+  const fallout={site:'nexusmods',game:'fallout4',modId:7};
+  const plainFirst=entry(addMod('f4-one.7z',fallout));await q.finished();
+  assert.equal(path.basename(plainFirst.folder),'fallout4');
+  const later=entry(addMod('f4-two.7z',{...fallout,gameName:'Fallout 4'}));await q.finished();
+  assert.equal(later.folder,plainFirst.folder);assert.equal(later.gameTitle,'fallout4');
+  assert.deepEqual(fs.readdirSync(modsRoot).sort(),['Skyrim Special Edition','fallout4']);
+  // A cancelled entry still says where the game's files are.
+  q.manager.action(later.id,'cancel');
+  assert.equal(q.manager.modTitle({...fallout,gameName:'Something else'}),'fallout4');
+  // When 0.7.0 left a game with two folders, the one used last is used from now on.
+  const stray=entry(q.manager.add({links:[modLink({url:cdnFile('stray.7z'),sourceUrl:cdnFile('stray.7z'),filename:'stray.7z',mod:bare})],gameTitle:GAME,group:mods.MODS_FOLDER}));await q.finished();
+  assert.equal(path.basename(stray.folder),GAME);assert.equal(q.manager.modTitle(named),GAME);
+  // The folder is matched without regard to letter case, as Windows does.
+  stray.folder=path.join(q.options.downloadDir.toUpperCase(),'MODS',GAME);
+  assert.equal(q.manager.modTitle(named),GAME);
+  // Only mod files in Ravenshelf's Mods folder count: not an ordinary download, not a label for another site, not a file kept elsewhere.
+  const other={site:'nexusmods',game:'othergame',modId:1,gameName:'Other Game'};
+  q.manager.add({links:[modLink({mod:undefined,url:'https://cdn.example/o.zip',sourceUrl:'https://cdn.example/o.zip',filename:'o.zip'})],gameTitle:'othergame',group:mods.MODS_FOLDER});
+  q.manager.add({links:[modLink({mod:{...other,site:'elsewhere'},url:'https://cdn.example/p.zip',sourceUrl:'https://cdn.example/p.zip',filename:'p.zip'})],gameTitle:'othergame',group:mods.MODS_FOLDER});
+  q.manager.add({links:[modLink({mod:other,url:cdnFile('q.7z'),sourceUrl:cdnFile('q.7z'),filename:'q.7z'})],gameTitle:'Kept elsewhere'});
+  await q.finished();
+  assert.equal(q.manager.modTitle(other),'Other Game');
+  // After the download folder was moved, files in the old place do not decide where new ones go.
+  q.manager.updateSettings({downloadDir:path.join(q.root,'moved')});
+  assert.equal(q.manager.modTitle(bare),GAME);
+});
+
+test('the review names the folder a game already has',async t=>{
+  const q=queueFor(t,fileServer(3072)),{bridge,events,take,shown}=bridgeFor(t,{modTitle:mod=>q.manager.modTitle(mod)});
+  const bare=(({gameName,...rest})=>rest)(LABEL);
+  const one=await take({url:cdnFile('one.7z'),filename:'one.7z',mod:bare});
+  assert.equal(shown(one.id).modFolder,'Mods › skyrimspecialedition');
+  await bridge.action({id:one.id,action:'download'});
+  q.manager.add({links:[events.queued[0]],gameTitle:q.manager.modTitle(events.queued[0].mod),group:mods.MODS_FOLDER});
+  // The next file's page did show the game's name. It is still saved with the first, and the review says so.
+  const two=await take({url:cdnFile('two.7z'),filename:'two.7z',mod:LABEL});
+  assert.equal(shown(two.id).modFolder,'Mods › skyrimspecialedition');
+  assert.deepEqual(shown(two.id).mod,LABEL,'the label itself is shown as it arrived');
+  await q.finished();
+  // Without the queue's word, the bridge goes by the label alone, and still names the folder as the queue would make it.
+  const alone=bridgeFor(t);
+  const three=await alone.take({url:cdnFile('three.7z'),filename:'three.7z',mod:{...LABEL,gameName:'Kingdom Come: Deliverance II'}});
+  assert.equal(alone.shown(three.id).modFolder,'Mods › Kingdom Come_ Deliverance II');
 });

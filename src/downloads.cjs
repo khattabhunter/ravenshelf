@@ -13,7 +13,7 @@ const {DEFAULT_SCHEDULE,normalizeSchedule,scheduleSnapshot}=require('./download-
 const {MIN_PARALLEL_SIZE,normalizeConnections,workspaceFor,readState,downloadRanges,removeWorkspace,validatorFor}=require('./parallel-download.cjs');
 const {MEDIA_FOLDER,QUALITIES,VIDEO_ID,canonicalUrl,cleanTitle}=require('./youtube.cjs');
 const {removeMediaWorkspace}=require('./media-downloads.cjs');
-const {SITE:MOD_SITE,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED,assertFileServer}=require('./mods.cjs');
+const {SITE:MOD_SITE,MODS_FOLDER,modFolder,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED,assertFileServer}=require('./mods.cjs');
 const {safeName,folderName:safeFolderName}=require('./safe-name.cjs');
 const APP_VERSION=require('../package.json').version;
 // YouTube jobs waiting or running at once; more are refused until some finish.
@@ -198,6 +198,15 @@ class DownloadManager extends EventEmitter {
     this.downloads=this.downloads.filter(d=>!set.has(d.id));for(const id of selected)this.quiescing.delete(id);
     this.save();this.changed();return {removed:selected.length,ids:selected};
   }
+  // The title that the folder for a mod's game is made from, inside Mods. The
+  // game's name comes from the page and is not always known. So a game that
+  // already has mod files in the list keeps the title they were filed under,
+  // whichever name this file arrives with: one folder for each game.
+  modTitle(mod){
+    const root=path.join(this.settings.downloadDir,safeFolderName(MODS_FOLDER)).toLowerCase();
+    const held=this.downloads.findLast(d=>isModFile(d)&&d.mod.game===mod.game&&path.dirname(d.folder).toLowerCase()===root);
+    return held?held.gameTitle:modFolder(mod);
+  }
   // `group` puts the folder one level down, such as Mods\<game> for mod files.
   add({links,gameTitle,group}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
@@ -214,12 +223,14 @@ class DownloadManager extends EventEmitter {
       if(link.status!=='ready')continue;
       safeURL(link.url);
       const original=safeName(link.filename || new URL(link.url).pathname.split('/').pop());
-      const held=this.downloads.find(d=>sameFile(d,link,original)&&d.folder.toLowerCase()===folder.toLowerCase()&&d.status!=='cancelled');
+      // A cancelled download does not count as the same file, except a mod file's: see below.
+      const held=this.downloads.find(d=>sameFile(d,link,original)&&d.folder.toLowerCase()===folder.toLowerCase()&&(d.status!=='cancelled'||(isModFile(d)&&isModFile(link))));
       if(held){
-        // A Nexus Mods link stops working after a while. Downloading the same file
-        // again from its page brings a new link: a failed entry for that file takes
-        // it and starts again from where it stopped, instead of staying stuck.
-        if(held.status==='error'&&isModFile(held)&&isModFile(link)&&!this.quiescing.has(held.id)){
+        // A Nexus Mods link stops working after a while, and a cancelled mod download
+        // gives its link up. Downloading the same file again from its page brings a
+        // new link: a failed or cancelled entry for that file takes it and carries
+        // on from where it stopped, instead of staying stuck beside a second copy.
+        if(['error','cancelled'].includes(held.status)&&isModFile(held)&&isModFile(link)&&!this.quiescing.has(held.id)){
           const headers={...link.headers};if(link.referer)headers.Referer=safeURL(link.referer).href;
           delete held.headersNeedRefresh;delete held.pauseReason;delete held.scheduleRequested;delete held.needsNewLink;
           // From here on it is the same as pressing Retry, with the new link.

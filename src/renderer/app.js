@@ -1404,19 +1404,22 @@ function captureStateLabel(item) {
   return { checking: 'Checking', manual: 'Needs your browser', unavailable: 'Unavailable', blocked: 'Blocked', queued: 'Added', duplicate: 'Already in Downloads', 'sent-to-browser': 'Sent to browser' }[item.status] || 'Waiting';
 }
 // Names that a Nexus Mods page showed are that site's words, not Ravenshelf's.
-// They are shown in quotes, and quote marks inside them are replaced, so a
-// name cannot close the quotes and read on as if Ravenshelf were speaking.
-function modText(value) { return typeof value === 'string' ? value.replace(/["\u201c\u201d\u201e\u201f\u00ab\u00bb\u2039\u203a]/g, '’').trim() : ''; }
+// They are shown in quotes. Every quote mark in them, and every character
+// that looks like one, becomes a plain apostrophe, and several in a row become
+// one. So a name cannot close the quotes and read on as if Ravenshelf were
+// speaking, not even with two marks that look like one closing quote.
+const QUOTE_LIKE = /[\p{Pi}\p{Pf}"'`\u00b4\u02ba\u02bb\u02bc\u02dd\u02ee\u05f3\u05f4\u201a\u201e\u2032-\u2037\u275b-\u275e\u276e\u276f\u2e42\u3003\u301d-\u301f\uff02\uff07\uff40]+/gu;
+function modText(value) { return typeof value === 'string' ? value.replace(QUOTE_LIKE, "'").trim() : ''; }
 function modParts(mod) {
   if (!mod || mod.site !== 'nexusmods') return null;
   const name = modText(mod.modName), game = modText(mod.gameName) || modText(mod.game);
   return { name, number: Number.isSafeInteger(mod.modId) && mod.modId > 0 ? mod.modId : 0, game };
 }
-// A file downloaded on Nexus Mods, in one line: “mod name” · game.
+// A file downloaded on Nexus Mods, in one line: “mod name” · “game”.
 function modLabel(mod) {
   const parts = modParts(mod);
   if (!parts) return '';
-  return [parts.name ? `“${parts.name}”` : parts.number ? `Mod ${parts.number}` : '', parts.game].filter(Boolean).join(' · ');
+  return [parts.name ? `“${parts.name}”` : parts.number ? `Mod ${parts.number}` : '', parts.game ? `“${parts.game}”` : ''].filter(Boolean).join(' · ');
 }
 // The same for the review window, where it sits beside Ravenshelf's own words:
 // each name is its own piece of text, kept apart from the sentence around it.
@@ -1427,11 +1430,13 @@ function modLine(item) {
   line.append(el('span', '', 'Nexus Mods file: '));
   if (parts.name) line.append(el('span', '', '“'), el('bdi', '', parts.name), el('span', '', '”'));
   else if (parts.number) line.append(el('span', '', `mod ${parts.number}`));
-  if (parts.game) line.append(el('span', '', (parts.name || parts.number) ? ' for ' : ''), el('bdi', '', parts.game));
+  if (parts.game) line.append(el('span', '', (parts.name || parts.number) ? ' for ' : ''), el('span', '', '“'), el('bdi', '', parts.game), el('span', '', '”'));
   line.append(el('span', '', '.'));
   // Where it will be saved is said only while that is still what will happen.
-  // The folder's name comes from the app, which is what names the folder.
-  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' Ravenshelf saves it in your download folder, under '), el('bdi', '', item.modFolder), el('span', '', '.'));
+  // The folder's name comes from the app, which is what names the folder. It
+  // can hold words from the page, so it stands apart as a path, and nothing of
+  // Ravenshelf's own follows it.
+  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' Ravenshelf saves it in your download folder, in: '), el('bdi', 'capture-folder', item.modFolder));
   return line;
 }
 function captureCard(item) {
