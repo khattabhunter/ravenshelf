@@ -43,7 +43,10 @@ function render(state) {
   $('status').className = `status ${status.tone}-tone`;
   $('statusTitle').textContent = status.title;
   $('statusText').textContent = status.text(state);
-  for (const key of SWITCHES) $(key).checked = state[key] !== false;
+  // A switch that the running extension does not know is not shown: it could
+  // not act on it. That is an older copy, still running because the extension
+  // has not been reloaded since Ravenshelf was updated.
+  for (const key of SWITCHES) { $(key).checked = state[key] !== false; $(key).closest('label').hidden = !(key in state); }
   $('listInfo').textContent = state.listTotal > 0
     ? `${Number(state.listTotal).toLocaleString('en')} dangerous sites on the list${state.listSyncedAt ? ` · updated ${ago(state.listSyncedAt)}` : ''}.`
     : 'The lists arrive from Ravenshelf once it is connected.';

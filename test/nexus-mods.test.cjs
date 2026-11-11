@@ -290,7 +290,9 @@ function nexusPageScript({url=FILE_URL,top=true,enabled=true,visible=true,incogn
   const timers=new Map(),sent=[],listeners={document:{},window:{},storage:[]};
   const page={url,title:'SkyUI',site:'Nexus Mods :: Skyrim Special Edition',canonical:PAGE_URL,section:{'data-game-id':'1704','data-mod-id':'12604'},
     boxes:[{'file-id':'735025',filename:'Simplified Chinese Patch','file-uri':FILE_NAME,'game-id':'1704','game-name':'Skyrim Special Edition'}],
-    visible,prerendering:false,reply:{ok:true},reject:false,throws:false,orphaned:false};
+    visible,prerendering:false,reply:{ok:true},reject:false,throws:false,orphaned:false,
+    // `skew` moves the PC's own clock without any time passing for the page's timers or its steady clock.
+    skew:0};
   const element=attributes=>attributes?{getAttribute:name=>Object.hasOwn(attributes,name)?attributes[name]:null}:null;
   const reads=[];
   const document={
@@ -320,7 +322,7 @@ function nexusPageScript({url=FILE_URL,top=true,enabled=true,visible=true,incogn
   const window={addEventListener(type,listener){listeners.window[type]=listener;}};window.top=top?window:{};
   const location={get href(){return page.url;},get hostname(){return new URL(page.url).hostname;}};
   const context=vm.createContext({window,location,document,chrome:api,URL,
-    Date:{now:()=>now},
+    Date:{now:()=>now+page.skew},performance:{now:()=>now-NOW},
     setTimeout:(fn,ms)=>{timers.set(++sequence,{fn,at:now+ms});return sequence;},
     setInterval:(fn,ms)=>{timers.set(++sequence,{fn,at:now+ms,every:ms});return sequence;},
     clearTimeout:id=>timers.delete(id),clearInterval:id=>timers.delete(id)});
@@ -548,7 +550,7 @@ test('the toolbar window has a switch for every feature, Nexus Mods included',()
   assert.deepEqual(switches,['capture','protection','guard','youtube','nexus']);
   for(const key of switches)assert.match(html,new RegExp(`<input type="checkbox" id="${key}">`),key);
   // The switch says what it does, including that it reads the page.
-  assert.match(html,/<strong>Sort Nexus Mods files by game<\/strong><small>Reads the game and mod names on Nexus Mods pages, so files you download there are saved in a Mods folder for their game\.<\/small>/);
+  assert.match(html,/<strong>Sort Nexus Mods files by game<\/strong><small>Reads which game, mod and files a Nexus Mods page is about, so that a file you download there is saved in a Mods folder for its game\.<\/small>/);
   const background=read('background.js');
   assert.match(background,/\['capture', 'protection', 'guard', 'youtube', 'nexus'\]\.includes\(message\.key\)/,'the background accepts the same switches');
   for(const key of switches)assert.match(background,new RegExp(`\\b${key}: (?:true|current\\.${key})`),key);
@@ -1410,4 +1412,139 @@ test('the review names the folder a game already has',async t=>{
   const alone=bridgeFor(t);
   const three=await alone.take({url:cdnFile('three.7z'),filename:'three.7z',mod:{...LABEL,gameName:'Kingdom Come: Deliverance II'}});
   assert.equal(alone.shown(three.id).modFolder,'Mods › Kingdom Come_ Deliverance II');
+});
+
+// ---------- the page script: timing (0.7.1) ----------
+test('a page you keep in front of you sends its details again before the extension would stop using them',async()=>{
+  const MINUTE=60000;
+  assert.ok(20*MINUTE<P.NEXUS_PAGE_MS,'the extension uses a note for longer than a page waits before it repeats itself');
+  const s=nexusPageScript();
+  await s.advance(400);assert.equal(s.sent.length,1);
+  await s.advance(20*MINUTE-2500);assert.equal(s.sent.length,1,'not before twenty minutes are up');
+  await s.advance(5000);assert.equal(s.sent.length,2,'then once more, although nothing on the page changed');assert.deepEqual(s.sent[1],s.sent[0]);
+  await s.advance(20*MINUTE-3000);assert.equal(s.sent.length,2);
+  await s.advance(6000);assert.equal(s.sent.length,3,'and again twenty minutes later');
+  // To the millisecond: the first report went out, and was taken, 300 ms after the start. The look that falls
+  // exactly twenty minutes later sends the details again.
+  const exact=nexusPageScript();
+  await exact.advance(400);assert.equal(exact.sent.length,1);
+  await exact.advance(20*MINUTE-101);assert.equal(exact.sent.length,1,'one millisecond short of that look: not yet');
+  await exact.advance(1);assert.equal(exact.sent.length,2,'twenty minutes after the extension took them');
+  // A tab in the background is not read and sends nothing, however long. Brought back, it speaks up at once.
+  s.page.visible=false;const reads=s.reads.length;
+  await s.advance(45*MINUTE);assert.equal(s.sent.length,3);assert.equal(s.reads.length,reads);
+  s.page.visible=true;s.listeners.document.visibilitychange({isTrusted:true});
+  await s.advance(400);assert.equal(s.sent.length,4);
+  // A page that is not a mod's page has nothing to keep fresh... but says so again, so that the note stays gone.
+  const plain=nexusPageScript({url:'https://www.nexusmods.com/skyrimspecialedition'});
+  await plain.advance(400);assert.deepEqual(plain.sent,[{cmd:'nexus',page:null}]);
+  await plain.advance(19*MINUTE);assert.equal(plain.sent.length,1);
+});
+
+test('a PC clock that is changed, or a PC that slept, does not make the page fall silent',async()=>{
+  const HOUR=3600000;
+  const s=nexusPageScript();
+  await s.advance(400);assert.equal(s.sent.length,1);
+  // The clock is set back an hour. The extension drops notes "from the future", so the page has to say it again.
+  s.page.skew=-HOUR;
+  await s.advance(2400);assert.equal(s.sent.length,2,'at the next look');
+  await s.advance(60000);assert.equal(s.sent.length,2,'and then not again while nothing changes');
+  // Your click still keeps the note fresh after that.
+  await s.advance(20000);s.click();await s.advance(400);assert.equal(s.sent.length,3);
+  // A refused report is tried again after ten seconds as always...
+  s.page.reply={ok:false};s.page.title='Another title';
+  await s.advance(2400);assert.equal(s.sent.length,4);
+  await s.advance(6000);assert.equal(s.sent.length,4);
+  // ...and a clock set back in the meantime does not make it wait an hour and ten seconds.
+  s.page.skew=-2*HOUR;s.page.reply={ok:true};
+  await s.advance(2400);assert.equal(s.sent.length,5);assert.equal(s.sent[4].page.modName,'Another title');
+  await s.advance(60000);assert.equal(s.sent.length,5);
+  // The PC sleeps for 25 minutes: its own clock moves on, the steady one stands still. The note is too old to rely on.
+  s.page.skew+=25*60000;
+  await s.advance(2400);assert.equal(s.sent.length,6,'the longer of the two times counts');
+  // The clock is set forward by a few minutes only: nothing to do yet.
+  s.page.skew+=5*60000;
+  await s.advance(60000);assert.equal(s.sent.length,6);
+  // The clock is set back by less than the time that has gone by, so it does not look like "the future". The steady
+  // clock still knows how long it has been.
+  const back=nexusPageScript();
+  await back.advance(400);assert.equal(back.sent.length,1);
+  await back.advance(15*60000);back.page.skew=-10*60000;
+  await back.advance(5*60000-2500);assert.equal(back.sent.length,1,'the PC’s clock says five minutes, but it has been almost twenty');
+  await back.advance(5000);assert.equal(back.sent.length,2,'twenty minutes after the first report, whatever the clock says');
+});
+
+test('a refused report is tried again after ten seconds exactly, and at once when the page is brought back or the switch is turned on again',async()=>{
+  // The report goes out 300 ms after the start and is refused then.
+  const early=nexusPageScript();early.page.reply={ok:false};
+  await early.advance(400);assert.equal(early.sent.length,1);
+  await early.advance(9599);
+  early.listeners.document.visibilitychange({isTrusted:true});      // looks again at 9,999 ms + 300 ms: 9,999 ms after the refusal
+  await early.advance(300);assert.equal(early.sent.length,1,'one millisecond short of ten seconds: not yet');
+  const onTime=nexusPageScript();onTime.page.reply={ok:false};
+  await onTime.advance(400);assert.equal(onTime.sent.length,1);
+  await onTime.advance(9600);                                       // the look at 10,000 ms leads to a report at 10,300 ms: ten seconds after the refusal
+  assert.equal(onTime.sent.length,1);
+  await onTime.advance(300);assert.equal(onTime.sent.length,2,'ten seconds after the refusal');
+  // A page brought back from the browser's back-and-forward store reports at once, refusal or not.
+  const back=nexusPageScript();back.page.reply={ok:false};
+  await back.advance(400);assert.equal(back.sent.length,1);
+  back.page.reply={ok:true};back.listeners.window.pageshow({isTrusted:true,persisted:true});
+  await back.advance(400);assert.equal(back.sent.length,2);
+  // So does a page after the switch was turned off and on again.
+  const toggled=nexusPageScript();toggled.page.reply={ok:false};
+  await toggled.advance(400);assert.equal(toggled.sent.length,1);
+  toggled.page.reply={ok:true};toggled.setEnabled(false);toggled.setEnabled(true);
+  await toggled.advance(400);assert.equal(toggled.sent.length,2);
+  // And a page that was loaded ahead of time, when it is shown.
+  const ahead=nexusPageScript();ahead.page.reply={ok:false};
+  await ahead.advance(400);assert.equal(ahead.sent.length,1);
+  ahead.page.reply={ok:true};ahead.listeners.document.prerenderingchange({isTrusted:true});
+  await ahead.advance(400);assert.equal(ahead.sent.length,2);
+  // Once the extension has taken a report, an earlier refusal holds nothing back any more, whatever the PC's clock
+  // does afterwards. Here the clock is set forward during the wait, so the second try goes out early, and then back.
+  const moved=nexusPageScript();moved.page.reply={ok:false};
+  await moved.advance(400);assert.equal(moved.sent.length,1);
+  await moved.advance(4000);assert.equal(moved.sent.length,1);
+  moved.page.skew=10000;moved.page.reply={ok:true};
+  await moved.advance(2000);assert.equal(moved.sent.length,2,'by the PC’s clock the ten seconds are over');
+  moved.page.skew=0;moved.page.title='Another mod';
+  await moved.advance(2400);assert.equal(moved.sent.length,3,'the page changed: reported at the next look, eight seconds after the old refusal');
+  assert.equal(moved.sent[2].page.modName,'Another mod');
+});
+
+test('a report that never gets an answer does not block the page for good',async()=>{
+  const s=nexusPageScript();s.page.hold=true;
+  await s.advance(400);assert.equal(s.sent.length,1);
+  const first=s.page.release;
+  s.page.title='Changed';s.page.hold=false;
+  // The first report went out 300 ms after the start. The look that falls exactly half a minute later gives it up.
+  await s.advance(29899);assert.equal(s.sent.length,1,'while the first report waits for its answer, nothing else is sent');
+  await s.advance(1);assert.equal(s.sent.length,2,'after half a minute it is given up');assert.equal(s.sent[1].page.modName,'Changed');
+  // The answer that comes after all is ignored: it neither counts as taken nor as refused.
+  first({ok:false});
+  s.page.title='Changed again';
+  await s.advance(2400);assert.equal(s.sent.length,3,'no ten-second wait because of it');
+  // A page that is brought back does not wait for an answer to what it sent before it was put away.
+  const back=nexusPageScript();back.page.hold=true;
+  await back.advance(400);assert.equal(back.sent.length,1);
+  const held=back.page.release;back.page.hold=false;back.page.title='Other';
+  back.listeners.window.pageshow({isTrusted:true,persisted:true});
+  await back.advance(400);assert.equal(back.sent.length,2);assert.equal(back.sent[1].page.modName,'Other');
+  held({ok:true});
+  await back.advance(60000);assert.equal(back.sent.length,2,'the old answer does not stand in for the new report');
+  // Nor does an answer that arrives at the very moment the page is brought back, before it has reported afresh.
+  // While the page was put away, the tab may have shown another page, and the extension noted that one.
+  const quick=nexusPageScript();quick.page.hold=true;
+  await quick.advance(400);assert.equal(quick.sent.length,1);
+  const late=quick.page.release;quick.page.hold=false;
+  quick.listeners.window.pageshow({isTrusted:true,persisted:true});
+  late({ok:true});
+  await quick.advance(400);assert.equal(quick.sent.length,2,'taken before the page was put away is not taken now');
+  const turned=nexusPageScript();turned.page.hold=true;
+  await turned.advance(400);assert.equal(turned.sent.length,1);
+  const no=turned.page.release;turned.page.hold=false;
+  turned.listeners.window.pageshow({isTrusted:true,persisted:true});
+  no({ok:false});
+  await turned.advance(400);assert.equal(turned.sent.length,2,'and a refusal of the old report does not hold the new one back');
 });

@@ -120,10 +120,11 @@ test('extension files are local, script-free in markup, and never contact the ne
 const own=value=>value===undefined?value:JSON.parse(JSON.stringify(value));
 function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),matched=[]}={}){
   const event=()=>{const listeners=[];return {listeners,addListener:fn=>listeners.push(fn),emit:(...args)=>listeners.map(fn=>fn(...args))};};
-  const calls=[],store={local:{},session:{}},dynamic=new Map();
+  const calls=[],store={local:{},session:{}},dynamic=new Map(),hang={session:false};
   const onChanged=event();
   const area=name=>({
-    get:async keys=>{const out={};for(const key of [].concat(keys))if(key in store[name])out[key]=structuredClone(store[name][key]);return out;},
+    // With `hang` set, the browser never answers a read of that store.
+    get:async keys=>{if(hang[name])await new Promise(()=>{});const out={};for(const key of [].concat(keys))if(key in store[name])out[key]=structuredClone(store[name][key]);return out;},
     set:async values=>{Object.assign(store[name],structuredClone(values));onChanged.emit(values,name);}
   });
   const origin=firefox?'moz-extension://uuid/':'chrome-extension://ccgeallihglgkgpokepckdejgbfojcnh/';
@@ -148,7 +149,7 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
   vm.runInContext(read('policy.js'),context,{filename:'policy.js'});
   vm.runInContext(read('background.js'),context,{filename:'background.js'});
   const message=async(msg,url=origin+'popup.html',tab)=>new Promise(resolve=>{const handled=api.runtime.onMessage.emit(msg,{id:'self',url,tab},value=>resolve(own(value)))[0];if(handled!==true)resolve(undefined);});
-  return {api,calls,store,dynamic,message,of:kind=>calls.filter(call=>call[0]===kind)};
+  return {api,calls,store,dynamic,hang,message,of:kind=>calls.filter(call=>call[0]===kind)};
 }
 
 test('Chrome: Ravenshelf takes, blocks or leaves each download, and an unanswered one stays in the browser',async()=>{
@@ -488,6 +489,8 @@ test('only Ravenshelf’s own script on a Nexus Mods page can leave a note, and 
   assert.equal(await fromNexus(b,note,{frameId:2}),undefined,'frames inside the page are ignored');
   assert.equal(await fromNexus(b,note,{url:'https://www.nexusmods.com.evil.example/skyrimspecialedition/mods/12604'}),undefined);
   assert.equal(await fromNexus(b,note,{url:'https://evil.example/'}),undefined);
+  assert.equal(await fromNexus(b,note,{url:'https://evil.example/?next=https://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined,'an address that only contains the site’s address');
+  assert.equal(await fromNexus(b,note,{url:'https://evil.example/https://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined);
   assert.equal(await fromNexus(b,note,{url:'http://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined);
   assert.equal(await fromNexus(b,note,{tab:null}),undefined,'only a page in a tab');
   assert.equal(await fromNexus(b,note,{id:'another-extension'}),undefined,'only this extension’s own script');
@@ -635,4 +638,79 @@ test('what the browser kept while the extension slept is still there after the f
   const off=asleep();
   await off.message({cmd:'set',key:'nexus',value:false});await tick(150);
   assert.deepEqual(off.store.session.modPages,{});assert.equal(off.store.session.tabInfo[5].host,'fuckingfast.co');
+});
+
+// ---------- 0.7.1 ----------
+test('a download never waits for the browser’s storage, except a Nexus Mods file, and that one only briefly',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  // The browser does not answer the read of its session store, where the notes of Nexus Mods pages are kept.
+  b.hang.session=true;
+  assert.equal(await startDownload(b,{id:1,url:'https://cdn.example/game.zip',filename:'game.zip'}),0,'an ordinary download is decided at once');
+  assert.equal(captures(b).length,1);
+  assert.equal(await startDownload(b,{id:2,url:'https://mirror.example/x.7z',referrer:MOD_URL,filename:'x.7z'}),0,'also one that was started on a Nexus Mods page but is kept elsewhere');
+  assert.equal(captures(b).length,2);
+  assert.equal(await startDownload(b,{id:3,url:'https://short.example/x',finalUrl:CDN_ITEM.url,filename:MOD_FILE}),0,'and one that only ended up on a file server');
+  assert.equal(captures(b).length,3);
+  // With the switch off, a Nexus Mods file has no use for the notes either.
+  await b.api.storage.local.set({nexus:false});
+  assert.equal(await startDownload(b,{id:4,...CDN_ITEM}),0);
+  assert.equal(captures(b).length,4);assert.equal(captures(b)[3].mod,undefined);
+  await b.api.storage.local.set({nexus:true});
+  // A Nexus Mods file waits for the notes, but not for long. It is then sent as it is, without a label.
+  const started=Date.now();
+  b.api.downloads.onDeterminingFilename.emit({id:5,...CDN_ITEM},()=>{});
+  await tick(1000);
+  assert.equal(captures(b).length,4,'still waiting after a second');
+  for(let i=0;i<120&&captures(b).length<5;i++)await tick(20);
+  assert.equal(captures(b).length,5,'sent after a second and a half');assert.ok(Date.now()-started<3000);
+  assert.equal(captures(b)[4].mod,undefined);assert.equal(captures(b)[4].url,CDN_ITEM.url);
+  assert.deepEqual(b.of('cancel').map(call=>call[1]),[1,2,3,4,5],'each was taken by Ravenshelf');
+  // When the store does answer, nothing waits.
+  const quick=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  await fromNexus(quick,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  const before=Date.now();
+  assert.equal(await startDownload(quick,{id:1,...CDN_ITEM}),0);
+  assert.deepEqual(captures(quick)[0].mod,MOD_LABEL);assert.ok(Date.now()-before<500);
+});
+
+test('notes that are too old are dropped as soon as another note arrives',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  const page=P.nexusPage(MOD_PAGE,P.nexusAddress(MOD_URL)),other=P.nexusPage({gameId:'1151',gameName:'Fallout 4',modName:'Another Mod',files:[]},P.nexusAddress('https://www.nexusmods.com/fallout4/mods/77'));
+  // What the browser kept from before it put the extension to sleep: one note that is too old, one from a clock that was since set back, one that is fresh.
+  b.store.session.modPages={3:{...page,at:Date.now()-P.NEXUS_PAGE_MS-1000},4:{...page,at:Date.now()+60000},5:{...page,at:Date.now()-60000}};
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:'https://www.nexusmods.com/fallout4/mods/77',page:{gameId:'1151',gameName:'Fallout 4',modName:'Another Mod',files:[]}},{url:'https://www.nexusmods.com/fallout4/mods/77',tab:{id:9,incognito:false}}),{ok:true});
+  await tick(150);
+  assert.deepEqual(Object.keys(b.store.session.modPages).sort(),['5','9'],'only the fresh note and the new one are kept, with no download in between');
+  assert.equal(b.store.session.modPages[9].modName,other.modName);
+});
+
+test('the toolbar window hides a switch that the running extension does not know',async()=>{
+  const SWITCHES=['capture','protection','guard','youtube','nexus'];
+  const state={version:'0.7.1',browser:'chromium',status:'connected',appVersion:'0.7.1',capture:true,protection:true,guard:false,youtube:true,nexus:true,pausedUntil:0,listTotal:5,listSyncedAt:0};
+  // popup.js against a page that only records what is done to it.
+  const open=async reply=>{
+    const elements=new Map(),sent=[];
+    const element=id=>{
+      if(!elements.has(id)){const label={hidden:false};elements.set(id,{id,label,checked:false,hidden:false,disabled:false,textContent:'',className:'',listeners:{},addEventListener(type,fn){this.listeners[type]=fn;},closest(selector){assert.equal(selector,'label');return label;}});}
+      return elements.get(id);
+    };
+    const api={runtime:{sendMessage:async message=>{sent.push(message);return typeof reply==='function'?reply(message):reply;}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{url:'https://example.com/',incognito:false}]}};
+    const context=vm.createContext({chrome:api,document:{getElementById:element},Date,Number});
+    vm.runInContext(read('policy.js'),context,{filename:'policy.js'});vm.runInContext(read('popup.js'),context,{filename:'popup.js'});
+    await tick(30);
+    return {element,sent};
+  };
+  const current=await open({ok:true,state});
+  for(const key of SWITCHES){assert.equal(current.element(key).label.hidden,false,key);assert.equal(current.element(key).checked,state[key],key);}
+  // A copy from before 0.7.0 is still running: it has never heard of the Nexus Mods switch, and would refuse it.
+  const {nexus,...earlier}=state;
+  const older=await open({ok:true,state:earlier});
+  assert.equal(older.element('nexus').label.hidden,true);
+  for(const key of SWITCHES.filter(key=>key!=='nexus'))assert.equal(older.element(key).label.hidden,false,key);
+  // A switch that is merely off is still shown.
+  const off=await open({ok:true,state:{...state,nexus:false,youtube:false}});
+  assert.equal(off.element('nexus').label.hidden,false);assert.equal(off.element('nexus').checked,false);assert.equal(off.element('youtube').checked,false);
+  // Turning a switch tells the extension, with the key and the new value.
+  off.element('nexus').listeners.change({target:{checked:true}});await tick(20);
+  assert.deepEqual(JSON.parse(JSON.stringify(off.sent.at(-1))),{cmd:'set',key:'nexus',value:true});
 });

@@ -110,9 +110,17 @@ async function decide(item, plan) {
   }
   return 'continue';
 }
+// How long a Nexus Mods file waits for the notes of open pages to be read back,
+// after the browser had put the extension to sleep.
+const NOTES_WAIT_MS = 1500;
 // The browser's download, the switches, and what open Nexus Mods pages said.
+// Only a file from Nexus Mods' file servers has any use for those notes: every
+// other download is decided as soon as the switches are read, and never waits
+// for the notes.
 async function planFor(item) {
-  const [current] = await Promise.all([settings(), restore()]);
+  const current = await settings();
+  if (current.nexus === false || !P.nexusFile(item)) return P.downloadPlan(item, current);
+  await Promise.race([restore(), new Promise(resolve => setTimeout(resolve, NOTES_WAIT_MS))]);
   const now = Date.now();
   return P.downloadPlan(item, current, { pages: modNotes(now), now });
 }
@@ -527,8 +535,11 @@ async function handleNexus(message, sender) {
   if (message.page === null) { if (modPages.delete(sender.tab.id)) persist(); return { ok: true }; }
   const page = P.nexusPage(message.page, P.nexusAddress(message.url) || P.nexusAddress(sender.url));
   if (!page) return { ok: false };
+  // Notes that are too old go now, not only when the next download starts.
+  const now = Date.now();
+  modNotes(now);
   modPages.delete(sender.tab.id);
-  modPages.set(sender.tab.id, { ...page, at: Date.now() });
+  modPages.set(sender.tab.id, { ...page, at: now });
   persist();
   return { ok: true };
 }

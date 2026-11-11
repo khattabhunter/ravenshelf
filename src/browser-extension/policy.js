@@ -168,6 +168,17 @@
     if (file && file.fileName) mod.fileName = file.fileName;
     return mod;
   }
+  // Whether a download can be a Nexus Mods file at all. It is fetched from one
+  // of the site's file servers, and the address the browser first asked for is
+  // Nexus Mods' too: a file server, or the site itself. A download that began
+  // somewhere else and only ended up on a file server is not the site's own.
+  // The app checks the same (src/mods.cjs).
+  function nexusFile(item) {
+    if (!item || typeof item !== 'object') return false;
+    const target = typeof item.finalUrl === 'string' && item.finalUrl ? item.finalUrl : item.url;
+    if (schemeOf(target) !== 'https:' || !onHosts(hostOf(target), NEXUS_FILE_ROOTS)) return false;
+    return schemeOf(item.url) === 'https:' && (onHosts(hostOf(item.url), NEXUS_FILE_ROOTS) || hostOf(item.url) === NEXUS_HOST);
+  }
   // Which mod a browser download belongs to, or null. Only a file that comes
   // from Nexus Mods' own file servers can be labelled: a page on the site can
   // link to files kept anywhere, and a download that began on another site is
@@ -177,13 +188,8 @@
   // carries the game and mod numbers of such a page. Evidence that points at
   // more than one mod gives no label.
   function nexusMatch(item, pages, now) {
-    if (!item || typeof item !== 'object' || !Array.isArray(pages)) return null;
+    if (!nexusFile(item) || !Array.isArray(pages)) return null;
     const target = typeof item.finalUrl === 'string' && item.finalUrl ? item.finalUrl : item.url;
-    if (schemeOf(target) !== 'https:' || !onHosts(hostOf(target), NEXUS_FILE_ROOTS)) return null;
-    // The address the browser first asked for has to be Nexus Mods' too: a file
-    // server, or the site itself. A download that began somewhere else and only
-    // ended up on a file server is not labelled. The app checks the same.
-    if (schemeOf(item.url) !== 'https:' || !(onHosts(hostOf(item.url), NEXUS_FILE_ROOTS) || hostOf(item.url) === NEXUS_HOST)) return null;
     const recent = pages.filter(page => page && typeof page === 'object' && page.game && page.modId && Array.isArray(page.files) && Number.isFinite(page.at) && now - page.at >= 0 && now - page.at < NEXUS_PAGE_MS).sort((a, b) => b.at - a.at);
     const sameMod = (a, b) => a.game === b.game && a.modId === b.modId;
     // Older files sit at /{game number}/{mod number}/{file name} on the file servers.
@@ -294,7 +300,7 @@
     if (/forbidden/i.test(text)) return 'not-allowed';
     return 'unavailable';
   }
-  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusMatch };
+  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusFile, nexusMatch };
   if (typeof module === 'object' && module.exports) module.exports = policy;
   else root.RavenshelfPolicy = Object.freeze(policy);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
