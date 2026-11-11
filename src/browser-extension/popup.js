@@ -10,6 +10,7 @@ const STATUS = Object.freeze({
   unavailable: { tone: 'warn', title: 'Ravenshelf did not respond', text: () => 'Try again in a moment.' },
   unknown: { tone: 'muted', title: 'Checking…', text: () => '' }
 });
+const SWITCHES = Object.freeze(['capture', 'protection', 'guard', 'youtube', 'nexus']);
 let activeTab = null;
 let current = null;
 
@@ -42,7 +43,7 @@ function render(state) {
   $('status').className = `status ${status.tone}-tone`;
   $('statusTitle').textContent = status.title;
   $('statusText').textContent = status.text(state);
-  for (const key of ['capture', 'protection', 'guard', 'youtube']) $(key).checked = state[key] !== false;
+  for (const key of SWITCHES) $(key).checked = state[key] !== false;
   $('listInfo').textContent = state.listTotal > 0
     ? `${Number(state.listTotal).toLocaleString('en')} dangerous sites on the list${state.listSyncedAt ? ` · updated ${ago(state.listSyncedAt)}` : ''}.`
     : 'The lists arrive from Ravenshelf once it is connected.';
@@ -57,7 +58,7 @@ async function act(message) {
   if (reply.ok) render(reply.state);
   else showMessage('That did not work. Close this window and try again.', 'bad');
 }
-for (const key of ['capture', 'protection', 'guard', 'youtube']) $(key).addEventListener('change', event => { act({ cmd: 'set', key, value: event.target.checked }); });
+for (const key of SWITCHES) $(key).addEventListener('change', event => { act({ cmd: 'set', key, value: event.target.checked }); });
 $('pause').addEventListener('click', () => { act({ cmd: current && current.pausedUntil > Date.now() ? 'resume' : 'pause' }); });
 $('sendPage').addEventListener('click', async () => {
   if (!activeTab) return;
@@ -73,7 +74,7 @@ $('sendPage').addEventListener('click', async () => {
   else showMessage('Ravenshelf left this one to your browser.');
 });
 api.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && ['status', 'appVersion', 'listTotal', 'listSyncedAt', 'capture', 'protection', 'guard', 'youtube', 'pausedUntil'].some(key => key in changes)) send({ cmd: 'state' }).then(reply => { if (reply.ok) render(reply.state); });
+  if (area === 'local' && ['status', 'appVersion', 'listTotal', 'listSyncedAt', 'pausedUntil', ...SWITCHES].some(key => key in changes)) send({ cmd: 'state' }).then(reply => { if (reply.ok) render(reply.state); });
 });
 (async () => {
   try { [activeTab] = await api.tabs.query({ active: true, currentWindow: true }); } catch (error) { activeTab = null; }

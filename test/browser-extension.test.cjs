@@ -93,7 +93,7 @@ test('extension files are local, script-free in markup, and never contact the ne
   for(const browser of ['chromium','firefox']){
     const manifest=extensionManifest(browser,'1.2.3');
     assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
-    assert.deepEqual(manifest.content_scripts.map(script=>script.matches),[['https://www.youtube.com/*']],'only YouTube pages get a page script');
+    assert.deepEqual(manifest.content_scripts.map(script=>script.matches),[['https://www.youtube.com/*'],['https://www.nexusmods.com/*']],'only YouTube and Nexus Mods pages get a page script');
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
     for(const icon of Object.values(manifest.icons))assert.ok(EXTENSION_FILES.includes(icon),icon);
     for(const script of manifest.background.scripts||[manifest.background.service_worker])assert.ok(EXTENSION_FILES.includes(script),script);
@@ -397,4 +397,238 @@ test('the YouTube script uses only safe page APIs and acts only on real clicks',
   assert.doesNotMatch(source,/sendNativeMessage|storage\.local\.set|chrome\.tabs|location\.(?:assign|replace)|\.href\s*=/);
   assert.doesNotMatch(read('youtube.css'),/@import|url\(/,'the stylesheet loads nothing');
   for(const choice of P.PLAYER_CHOICES)assert.ok(P.MEDIA_QUALITIES.includes(choice.id));
+});
+
+// ---- Nexus Mods ----
+const MOD_URL='https://www.nexusmods.com/skyrimspecialedition/mods/12604?tab=files&file_id=735025';
+const MOD_FILE='Simplified Chinese Patch-12604-1-1-1774443884.7z';
+const MOD_PAGE=Object.freeze({gameId:'1704',gameName:'Skyrim Special Edition',modName:'SkyUI',files:[{fileId:'735025',fileName:'Simplified Chinese Patch',fileUri:MOD_FILE}]});
+const MOD_LABEL=Object.freeze({site:'nexusmods',game:'skyrimspecialedition',modId:12604,gameId:1704,fileId:735025,gameName:'Skyrim Special Edition',modName:'SkyUI',fileName:'Simplified Chinese Patch'});
+const CDN_ITEM=Object.freeze({url:`https://supporter-files.nexus-cdn.com/1704/12604/${encodeURIComponent(MOD_FILE)}?md5=abc&expires=1&user_id=2`,referrer:'https://www.nexusmods.com/',filename:MOD_FILE,totalBytes:3072});
+const fromNexus=(b,msg,{url=MOD_URL,frameId=0,tab={id:7,incognito:false},id='self'}={})=>new Promise(resolve=>{
+  const handled=b.api.runtime.onMessage.emit(msg,{id,url,tab,frameId},value=>resolve(own(value)))[0];
+  if(handled!==true)resolve(undefined);
+});
+const startDownload=async(b,item)=>{const suggested=[];b.api.downloads.onDeterminingFilename.emit(item,()=>suggested.push(true));await tick();return suggested.length;};
+const captures=b=>b.of('native').map(call=>call[1]).filter(message=>message.type==='capture');
+
+test('a file downloaded on Nexus Mods is sent to Ravenshelf with its game and mod',async()=>{
+  const b=fakeBrowser({native:message=>message.type==='capture'?{ok:true,action:'take',id:'c1'}:{ok:false,error:'invalid'}});
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE}),{ok:true});
+  assert.equal(b.of('native').length,0,'reading a page sends nothing to the app');
+  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),0,'Ravenshelf takes the download');
+  assert.deepEqual(captures(b),[{v:1,type:'capture',url:CDN_ITEM.url,incognito:false,referrer:'https://www.nexusmods.com/',filename:MOD_FILE,totalBytes:3072,mod:MOD_LABEL}]);
+  assert.doesNotThrow(()=>protocol.validateRequest(captures(b)[0]),'the app accepts the label the extension sends');
+  // The same file name from another site is not a Nexus Mods download, even when the mod's own page linked to it.
+  const mirror=`https://mirror.example/${encodeURIComponent(MOD_FILE)}`;
+  await startDownload(b,{id:2,url:mirror,referrer:'https://mirror.example/page',filename:MOD_FILE});
+  assert.equal(captures(b)[1].mod,undefined);
+  await startDownload(b,{id:3,url:mirror,referrer:MOD_URL,filename:MOD_FILE});
+  assert.deepEqual(captures(b)[2],{v:1,type:'capture',url:mirror,incognito:false,referrer:MOD_URL,filename:MOD_FILE});
+  // Other downloads are sent exactly as before.
+  await startDownload(b,{id:4,url:'https://cdn.example/game.zip',filename:'game.zip'});
+  assert.deepEqual(captures(b)[3],{v:1,type:'capture',url:'https://cdn.example/game.zip',incognito:false,filename:'game.zip'});
+  // The note lives in session storage only, which the browser clears when it closes.
+  await tick(150);
+  assert.equal(b.store.session.modPages[7].modName,'SkyUI');assert.equal(JSON.stringify(b.store.local).includes('SkyUI'),false,'nothing about the page is written to disk');
+  // Closing the tab forgets the page.
+  b.api.tabs.onRemoved.emit(7);await tick(150);
+  assert.deepEqual(b.store.session.modPages,{});
+  await startDownload(b,{id:5,...CDN_ITEM});
+  assert.equal(captures(b)[4].mod,undefined,'no page, no label');
+});
+
+test('the Nexus Mods note survives the browser putting the extension to sleep',async()=>{
+  const first=fakeBrowser();
+  await fromNexus(first,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});await tick(150);
+  const woken=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  Object.assign(woken.store.session,structuredClone(first.store.session));
+  await startDownload(woken,{id:1,...CDN_ITEM});
+  assert.deepEqual(captures(woken)[0].mod,MOD_LABEL);
+});
+
+test('Firefox labels Nexus Mods downloads the same way',async()=>{
+  const b=fakeBrowser({firefox:true,native:()=>({ok:true,action:'take'})});
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  b.api.downloads.onCreated.emit({id:1,...CDN_ITEM,filename:`/home/p/Downloads/${MOD_FILE.replace('.7z','(1).7z')}`,incognito:false});await tick();
+  assert.deepEqual(captures(b)[0].mod,MOD_LABEL,'Firefox’s "(1)" for a second copy does not hide the file name');
+  b.api.downloads.onCreated.emit({id:2,...CDN_ITEM,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
+  assert.deepEqual(captures(b)[1].mod,MOD_LABEL,'matched by the game and mod numbers in the address when the name differs');
+  assert.deepEqual(b.calls.filter(call=>['pause','cancel','resume'].includes(call[0])),[['pause',1],['cancel',1],['pause',2],['cancel',2]]);
+});
+
+test('an older Ravenshelf that does not know about mods still gets the download',async()=>{
+  const b=fakeBrowser({native:message=>message.type!=='capture'?{ok:false,error:'invalid'}:message.mod?{ok:false,error:'invalid'}:{ok:true,action:'take',id:'c1'}});
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),0);
+  assert.deepEqual(captures(b).map(message=>Boolean(message.mod)),[true,false],'sent again once, without the label');
+  assert.deepEqual(b.of('cancel'),[['cancel',1]]);
+  // An app that refuses the plain download too is not asked a third time.
+  const c=fakeBrowser({native:()=>({ok:false,error:'invalid'})});
+  await fromNexus(c,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  assert.equal(await startDownload(c,{id:1,...CDN_ITEM}),1,'the browser keeps the download');
+  assert.equal(captures(c).length,2);
+  // A download without a label is never sent twice.
+  assert.equal(await startDownload(c,{id:2,url:'https://cdn.example/a.zip'}),1);
+  assert.equal(captures(c).length,3);
+  // The second try is only for an app that refused the message itself, not for one that is closed.
+  const closed=fakeBrowser();
+  await fromNexus(closed,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  assert.equal(await startDownload(closed,{id:1,...CDN_ITEM}),1,'the browser keeps the download');
+  assert.equal(captures(closed).length,1);
+});
+
+test('only Ravenshelf’s own script on a Nexus Mods page can leave a note, and never from a private window',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  const note={cmd:'nexus',url:MOD_URL,page:MOD_PAGE};
+  assert.equal(await fromNexus(b,note,{frameId:2}),undefined,'frames inside the page are ignored');
+  assert.equal(await fromNexus(b,note,{url:'https://www.nexusmods.com.evil.example/skyrimspecialedition/mods/12604'}),undefined);
+  assert.equal(await fromNexus(b,note,{url:'https://evil.example/'}),undefined);
+  assert.equal(await fromNexus(b,note,{url:'http://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined);
+  assert.equal(await fromNexus(b,note,{tab:null}),undefined,'only a page in a tab');
+  assert.equal(await fromNexus(b,note,{id:'another-extension'}),undefined,'only this extension’s own script');
+  assert.deepEqual(await fromNexus(b,note,{tab:{id:9,incognito:true}}),{ok:false},'private windows are never noted');
+  assert.deepEqual(await fromNexus(b,note,{tab:{id:-1,incognito:false}}),{ok:false});
+  for(const id of [undefined,null,'7',1.5,NaN])assert.deepEqual(await fromNexus(b,note,{tab:{id,incognito:false}}),{ok:false},`tab number ${id}`);
+  for(const msg of [{cmd:'set',key:'capture',value:false},{cmd:'sendPage',url:'https://fuckingfast.co/x'},{cmd:'youtube',quality:'720'},{cmd:'nexus'},{cmd:'nexus',url:MOD_URL,page:'x'},null,
+    {cmd:'state',url:MOD_URL,page:MOD_PAGE},{cmd:'note',url:MOD_URL,page:MOD_PAGE},{url:MOD_URL,page:MOD_PAGE},{cmd:'NEXUS',url:MOD_URL,page:MOD_PAGE}])
+    assert.deepEqual(await fromNexus(b,msg),{ok:false},JSON.stringify(msg));
+  assert.equal(b.store.local.capture,undefined,'a page script cannot change settings');
+  // A page that is not about a mod leaves no note, whatever it says.
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:'https://www.nexusmods.com/skyrimspecialedition',page:MOD_PAGE},{url:'https://www.nexusmods.com/skyrimspecialedition'}),{ok:false});
+  await tick(150);
+  assert.deepEqual(b.store.session.modPages||{},{},'nothing was noted');
+  await startDownload(b,{id:1,...CDN_ITEM});
+  assert.equal(captures(b)[0].mod,undefined);
+  // Which game and mod a note is about comes from the page's address, not from what the page says.
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:{...MOD_PAGE,game:'fallout4',site:'evil'}});
+  await startDownload(b,{id:2,...CDN_ITEM});
+  assert.deepEqual(captures(b)[1].mod,MOD_LABEL);
+  // A page that itself says it is another mod's page is noted by its address alone: its names and files are not used.
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:{...MOD_PAGE,modId:'1'}});await tick(150);
+  assert.deepEqual({...b.store.session.modPages[7],at:0},{game:'skyrimspecialedition',modId:12604,files:[],at:0});
+  await startDownload(b,{id:3,...CDN_ITEM});
+  assert.equal(captures(b)[2].mod,undefined);
+  await startDownload(b,{id:4,...CDN_ITEM,referrer:MOD_URL});
+  assert.deepEqual(captures(b)[3].mod,{site:'nexusmods',game:'skyrimspecialedition',modId:12604,fileId:735025},'started from the mod’s own address: its numbers, and no names');
+  // The address the page script reports is the one noted. It must itself be a Nexus Mods mod page; otherwise the tab's own is used.
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:'https://www.nexusmods.com/fallout4/mods/77',page:MOD_PAGE}),{ok:true});await tick(150);
+  assert.equal(b.store.session.modPages[7].game,'fallout4');assert.equal(b.store.session.modPages[7].modId,77);
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:'https://evil.example/skyrimspecialedition/mods/999',page:MOD_PAGE}),{ok:true});await tick(150);
+  assert.equal(b.store.session.modPages[7].modId,12604);
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:'https://www.nexusmods.com/fallout4/mods/77',page:MOD_PAGE}),{ok:true});
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',page:MOD_PAGE}),{ok:true},'no address reported at all');await tick(150);
+  assert.equal(b.store.session.modPages[7].modId,12604);
+});
+
+test('the Nexus Mods switch turns the labels off and forgets what pages said',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});await tick(150);
+  assert.equal((await b.message({cmd:'state'})).state.nexus,true,'on unless switched off');
+  for(const [key,value] of [['capture',false],['youtube',false],['nexus',true],['capture',true],['youtube',true]])await b.message({cmd:'set',key,value});
+  await tick(150);assert.equal(b.store.session.modPages[7].modName,'SkyUI','other switches, and switching this one on, forget nothing');
+  const off=await b.message({cmd:'set',key:'nexus',value:false});
+  assert.equal(off.state.nexus,false);assert.equal(b.store.local.nexus,false);
+  await tick(150);assert.deepEqual(b.store.session.modPages,{});
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE}),{ok:false},'no notes while off');
+  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),0,'the download itself is still checked by Ravenshelf');
+  assert.equal(captures(b)[0].mod,undefined);
+  await b.message({cmd:'set',key:'nexus',value:true});
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  await startDownload(b,{id:2,...CDN_ITEM});
+  assert.deepEqual(captures(b)[1].mod,MOD_LABEL);
+  // Private-window downloads are never sent, labelled or not.
+  assert.equal(await startDownload(b,{id:3,...CDN_ITEM,incognito:true}),1);assert.equal(captures(b).length,2);
+});
+
+test('the extension keeps notes for a limited number of tabs',async()=>{
+  const b=fakeBrowser();
+  for(let tab=1;tab<=60;tab++)await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE},{tab:{id:tab,incognito:false}});
+  await tick(150);
+  const kept=Object.keys(b.store.session.modPages).map(Number).sort((x,y)=>x-y);
+  assert.equal(kept.length,50);assert.equal(kept[0],11,'the oldest notes are dropped first');
+  // A tab that reports again moves to the newest end.
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE},{tab:{id:11,incognito:false}});
+  for(let tab=61;tab<=63;tab++)await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE},{tab:{id:tab,incognito:false}});
+  await tick(150);
+  assert.ok(11 in b.store.session.modPages);assert.equal(12 in b.store.session.modPages,false);
+});
+
+test('a page that is no longer a mod’s page, or a tab that leaves Nexus Mods, is forgotten',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})}),nav=b.api.webNavigation;
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE},{tab:{id:8,incognito:false}});await tick(150);
+  assert.deepEqual(Object.keys(b.store.session.modPages).sort(),['7','8']);
+  // The site moved tab 7 to a page that is not about a mod, without reloading it.
+  const elsewhere={url:'https://www.nexusmods.com/skyrimspecialedition'};
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',page:null},elsewhere),{ok:true});await tick(150);
+  assert.deepEqual(Object.keys(b.store.session.modPages),['8'],'only that tab’s note goes');
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',page:null},elsewhere),{ok:true},'forgetting twice is harmless');
+  assert.equal(b.of('native').length,0,'none of this is sent to the app');
+  // Tab 8 loads other pages.
+  nav.onCommitted.emit({tabId:8,frameId:3,url:'https://ads.example/frame',transitionType:'auto_subframe',transitionQualifiers:[]});await tick(150);
+  assert.ok(8 in b.store.session.modPages,'a frame inside the page going elsewhere changes nothing');
+  nav.onCommitted.emit({tabId:8,frameId:0,url:'https://www.nexusmods.com/skyrimspecialedition/mods/1',transitionType:'link',transitionQualifiers:[]});await tick(150);
+  assert.ok(8 in b.store.session.modPages,'on another Nexus Mods page the note stays until that page reports');
+  nav.onCommitted.emit({tabId:9,frameId:0,url:'https://news.example/',transitionType:'typed',transitionQualifiers:[]});await tick(150);
+  assert.ok(8 in b.store.session.modPages,'another tab’s page is not this tab’s');
+  nav.onCommitted.emit({tabId:8,frameId:0,url:'https://users.nexusmods.com/auth/sign_in',transitionType:'link',transitionQualifiers:[]});await tick(150);
+  assert.deepEqual(b.store.session.modPages,{},'the tab has left www.nexusmods.com');
+  await startDownload(b,{id:1,...CDN_ITEM});
+  assert.equal(captures(b)[0].mod,undefined);
+  // "Forget" is taken only from where notes are taken.
+  await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',page:null},{tab:{id:7,incognito:true}}),{ok:false});
+  assert.deepEqual(await fromNexus(b,{cmd:'other',page:null}),{ok:false});assert.deepEqual(await fromNexus(b,{page:null}),{ok:false});
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus'}),{ok:false},'a report without a page forgets nothing');
+  assert.equal(await fromNexus(b,{cmd:'nexus',page:null},{frameId:2}),undefined);
+  assert.equal(await fromNexus(b,{cmd:'nexus',page:null},{url:'https://evil.example/'}),undefined);
+  await startDownload(b,{id:2,...CDN_ITEM});
+  assert.deepEqual(captures(b)[1].mod,MOD_LABEL,'the note is still there');
+});
+
+test('notes past their half hour are dropped for good, and the oldest go first when there are too many',async()=>{
+  const at=Date.now(),page=P.nexusPage(MOD_PAGE,P.nexusAddress(MOD_URL));
+  // What the browser kept while the extension slept: one fresh note, one too old, one from the future, two broken ones.
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  b.store.session.modPages={1:{...page,modName:'Fresh',at:at-60000},2:{...page,modName:'Old',at:at-P.NEXUS_PAGE_MS-1000},3:{...page,modName:'Future',at:at+600000},4:{...page,modName:'Undated'},5:null,6:{...page,modName:'Texted',at:String(at-1000)}};
+  await startDownload(b,{id:1,...CDN_ITEM});
+  assert.equal(captures(b)[0].mod.modName,'Fresh');
+  await tick(150);
+  assert.deepEqual(Object.keys(b.store.session.modPages),['1'],'gone from the browser’s store too, so setting the clock back cannot bring them back');
+  // Over the limit the oldest notes go, whichever tabs they belong to; a note without a time counts as oldest.
+  const c=fakeBrowser(),stored={62:{...page}};
+  for(let tab=1;tab<=60;tab++)stored[tab]={...page,at:at-(tab%2?tab:100+tab)*1000};
+  c.store.session.modPages=stored;
+  await fromNexus(c,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE},{tab:{id:61,incognito:false}});await tick(150);
+  const kept=Object.keys(c.store.session.modPages).map(Number).sort((x,y)=>x-y);
+  const expected=[];for(let tab=1;tab<=61;tab++)if(tab%2||tab<40)expected.push(tab);
+  assert.equal(expected.length,50);assert.deepEqual(kept,expected,'the eleven oldest and the undated one are gone');
+});
+
+test('what the browser kept while the extension slept is still there after the first thing that happens',async()=>{
+  const asleep=()=>{
+    const b=fakeBrowser();
+    b.store.session.tabInfo={5:{host:'fuckingfast.co',url:'https://fuckingfast.co/abc'}};
+    b.store.session.modPages={3:{...P.nexusPage(MOD_PAGE,P.nexusAddress(MOD_URL)),at:Date.now()-1000}};
+    return b;
+  };
+  // A new note.
+  const noted=asleep();
+  await fromNexus(noted,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});await tick(150);
+  assert.deepEqual(Object.keys(noted.store.session.modPages).sort(),['3','7']);assert.equal(noted.store.session.tabInfo[5].host,'fuckingfast.co');
+  // A page that is no longer a mod's page.
+  const forgot=asleep();
+  assert.deepEqual(await fromNexus(forgot,{cmd:'nexus',page:null},{tab:{id:3,incognito:false}}),{ok:true});await tick(150);
+  assert.deepEqual(forgot.store.session.modPages,{});assert.equal(forgot.store.session.tabInfo[5].host,'fuckingfast.co');
+  // The tab leaving the site.
+  const left=asleep();
+  left.api.webNavigation.onCommitted.emit({tabId:3,frameId:0,url:'https://news.example/',transitionType:'typed',transitionQualifiers:[]});await tick(150);
+  assert.deepEqual(left.store.session.modPages,{});assert.equal(left.store.session.tabInfo[5].host,'fuckingfast.co');
+  const blank=asleep();
+  blank.api.webNavigation.onCommitted.emit({tabId:3,frameId:0,url:'about:blank',transitionType:'link',transitionQualifiers:[]});await tick(150);
+  assert.deepEqual(blank.store.session.modPages,{},'also when it leaves for a page that is not on the web');
+  // The labels being switched off.
+  const off=asleep();
+  await off.message({cmd:'set',key:'nexus',value:false});await tick(150);
+  assert.deepEqual(off.store.session.modPages,{});assert.equal(off.store.session.tabInfo[5].host,'fuckingfast.co');
 });

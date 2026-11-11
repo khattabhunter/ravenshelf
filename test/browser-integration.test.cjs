@@ -4,11 +4,13 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
+const net=require('node:net');
+const protocol=require('../src/browser-protocol.cjs');
 const {createBrowserIntegration}=require('../src/browser-integration.cjs');
 const {publicErrorMessage}=require('../src/public-errors.cjs');
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
-function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null}={}){
+function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={}}={}){
   const profile=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-integration-'));
   t.after(()=>fs.rmSync(profile,{recursive:true,force:true}));
   const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[]};
@@ -28,7 +30,7 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
     shell:{openPath:async folder=>{events.opened.push(folder);return openPathError;},openExternal:async url=>{events.external.push(url);}},
     safeStorage,Notification:null,register:(name,fn)=>handles.set(name,fn),publish:()=>{events.published++;},
     resolveProvider:null,assertQueueAvailable:()=>{events.queueChecks++;},isTest,platform,setup,
-    bridgeOptions:{platform:process.platform},
+    bridgeOptions:{platform:process.platform,...bridge},
     listOptions:{fetcher:async()=>new Response('',{status:404})},
     virusTotalOptions:{fetcher:async()=>{throw new Error('no network in tests');}}
   });
@@ -151,3 +153,46 @@ test('lists update only while connected, and finished browser downloads get a fi
   bridge.afterDownload({id:'d1',origin:'browser',folder:f.profile,name:'game.zip'});
   assert.deepEqual(checked,['d1',path.join(f.profile,'game.zip')]);
 });
+
+// Talks to the bridge the way the extension's connector does: this session's
+// token and the extension's identity first, then one message.
+async function fromExtension(f,message){
+  const endpoint=JSON.parse(fs.readFileSync(f.endpoint,'utf8'));
+  const address=process.platform==='win32'?`\\\\.\\pipe\\${endpoint.pipe}`:path.join(path.dirname(f.endpoint),`${endpoint.pipe}.sock`);
+  return new Promise((resolve,reject)=>{
+    const socket=net.connect(address),chunks=[];
+    socket.on('data',chunk=>chunks.push(chunk));socket.on('error',reject);
+    socket.on('close',()=>{const data=Buffer.concat(chunks);resolve(data.length?JSON.parse(data.subarray(4,4+data.readUInt32LE(0)).toString('utf8')):null);});
+    socket.write(Buffer.concat([{v:1,token:endpoint.token,origin:`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`},{v:1,...message}].map(frame=>protocol.encodeFrame(frame))));
+  });
+}
+test('a file downloaded on Nexus Mods is queued into Mods under its game; other browser downloads go to Browser downloads',async t=>{
+  const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:decodeURIComponent(new URL(url).pathname.split('/').pop()),size:3072,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'7z'});
+  const f=fixture(t,{bridge:{inspect}});
+  await f.call('setBrowserIntegration',true);
+  const label={site:'nexusmods',game:'skyrimspecialedition',modId:12604,gameId:1704,fileId:735025,gameName:'Skyrim Special Edition',modName:'SkyUI',fileName:'Main File'};
+  const ready=async id=>{for(let i=0;i<200;i++){const capture=f.integration.snapshot().bridge.captures.find(item=>item.id===id);if(capture.status!=='checking')return capture;await tick(5);}throw new Error('still checking');};
+  const cdn='https://supporter-files.nexus-cdn.com/1704/12604/SkyUI_5_2_SE-12604-5-2SE.7z?md5=abc&expires=1&user_id=2';
+  const mod=await fromExtension(f,{type:'capture',url:cdn,referrer:'https://www.nexusmods.com/',filename:'SkyUI_5_2_SE-12604-5-2SE.7z',totalBytes:3072,incognito:false,mod:label});
+  assert.deepEqual({ok:mod.ok,action:mod.action},{ok:true,action:'take'});
+  assert.deepEqual((await ready(mod.id)).mod,label,'the review window is told which mod it is');
+  assert.equal(f.events.added.length,0,'nothing is queued before you choose');
+  await f.call('browserCaptureAction',{id:mod.id,action:'download'});
+  assert.equal(f.events.added.length,1);
+  const [batch]=f.events.added;
+  assert.equal(batch.group,'Mods');assert.equal(batch.gameTitle,'Skyrim Special Edition');assert.equal(batch.links.length,1);
+  assert.deepEqual(batch.links[0].mod,label);assert.equal(batch.links[0].origin,'browser');assert.equal(batch.links[0].markOfTheWeb,true);assert.equal(batch.links[0].url,cdn);
+  // A mod whose page gave no game name is filed under the game's short name from the address.
+  const bare=await fromExtension(f,{type:'capture',url:cdn+'&again=1',referrer:'https://www.nexusmods.com/',filename:'other.7z',mod:{site:'nexusmods',game:'fallout4',modId:7}});
+  await ready(bare.id);await f.call('browserCaptureAction',{id:bare.id,action:'download'});
+  assert.deepEqual([f.events.added[1].group,f.events.added[1].gameTitle],['Mods','fallout4']);
+  // Everything else from the browser is queued exactly as before.
+  const plain=await fromExtension(f,{type:'capture',url:'https://cdn.example/game.zip',filename:'game.zip'});
+  await ready(plain.id);await f.call('browserCaptureAction',{id:plain.id,action:'download'});
+  assert.deepEqual(Object.keys(f.events.added[2]).sort(),['gameTitle','links']);assert.equal(f.events.added[2].gameTitle,'Browser downloads');
+  assert.equal(Object.hasOwn(f.events.added[2].links[0],'mod'),false);
+  // A malformed label is refused whole, so the extension sends the download again without it.
+  assert.deepEqual(await fromExtension(f,{type:'capture',url:cdn+'&bad=1',mod:{...label,folder:'..\\..'}}),{ok:false,error:'invalid'});
+  assert.equal(f.events.queueChecks,3,'the queue is checked for availability each time');
+});
+

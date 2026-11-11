@@ -32,6 +32,11 @@ const icons = {
   video: '<rect x="3" y="5" width="18" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/>',
   book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1zm0 0v15"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 10v7M14 10v7"/>',
+  chip: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"/>',
+  gpu: '<rect x="2" y="6" width="20" height="11" rx="2"/><circle cx="8" cy="11.5" r="2.6"/><circle cx="16" cy="11.5" r="2.6"/><path d="M6 17v3m4-3v3"/>',
+  memory: '<rect x="2" y="7" width="20" height="9" rx="1.5"/><path d="M6 10v3m4-3v3m4-3v3m4-3v3M4 16v3m16-3v3M9 16v2m6-2v2"/>',
+  drive: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18M7 17h.1M11 17h3"/>',
+  monitor: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
 };
 
 const state = { downloads: [], settings: { downloadDir: '', concurrency: 2, connectionsPerFile: 4, favorites: [], collections: [] }, completionAction: {mode:'none',phase:'idle'}, catalogRefresh: null, version: '0.4.0' };
@@ -56,6 +61,10 @@ let collectionSaving = false;
 let installed = {games:[],scannedAt:null,warnings:[],locations:[]};
 let installedLoaded = false;
 let installedBusy = false;
+let hardware = null;
+let hardwareLoaded = false;
+let hardwareBusy = false;
+let hardwareFailed = false;
 let completionBusy = false;
 let completionDialogSync = false;
 let currentView = 'discover';
@@ -144,16 +153,17 @@ function busyLine(message) {
   line.setAttribute('role', 'status'); return line;
 }
 function showView(view) {
-  if (!['discover', 'downloads', 'library', 'installed', 'settings'].includes(view)) return;
+  if (!['discover', 'downloads', 'library', 'installed', 'hardware', 'settings'].includes(view)) return;
   currentView = view;
   $$('.view').forEach(node => { node.hidden = node.id !== `${view}-view`; });
   $$('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.view === view));
-  $('#current-view-label').textContent = { discover: 'Discover', downloads: 'Downloads', library: 'My library', installed: 'On this PC', settings: 'Settings' }[view];
+  $('#current-view-label').textContent = { discover: 'Discover', downloads: 'Downloads', library: 'My library', installed: 'On this PC', hardware: 'PC specs', settings: 'Settings' }[view];
   if (view === 'library') renderLibrary();
   if (view === 'downloads') renderDownloads();
   if (view === 'downloads' && featureUIAvailable()) refreshStorage();
   if (view === 'settings') renderSettings();
   if (view === 'installed') { renderInstalled(); if (!installedLoaded) loadInstalled(); }
+  if (view === 'hardware') { renderHardware(); if (!hardwareLoaded) loadHardware(false); }
   window.scrollTo(0, 0);
   if (view === 'discover') flushCatalogCheck();
 }
@@ -586,7 +596,7 @@ function updateDownloadCard(node, item) {
   node.className = `download-item ${item.status || ''}`;
   const selection=$('.download-select',node);if(selection)selection.checked=selectedDownloads.has(String(item.id));
   $('.download-name', node).textContent = item.name || item.filename || fileName(item);
-  $('.download-game', node).textContent = item.kind === 'media' ? ['YouTube', MEDIA_QUALITY_LABELS[item.media?.quality]].filter(Boolean).join(' · ') : item.gameTitle || 'Imported download';
+  $('.download-game', node).textContent = item.kind === 'media' ? ['YouTube', MEDIA_QUALITY_LABELS[item.media?.quality]].filter(Boolean).join(' · ') : modLabel(item.mod) || item.gameTitle || 'Imported download';
   $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : item.kind === 'media' ? 'video' : 'file'));
   const status = $('.download-status', node); status.textContent = statusLabel(item); status.className = `download-status ${item.status || ''}`;
   updateDownloadProgress(node, item);
@@ -785,6 +795,156 @@ async function scanInstalled(addFolder){
   if(installedBusy)return;installedBusy=true;renderInstalled();
   try{const result=await(addFolder?api.addGameFolder():api.scanInstalledGames());if(result){installed={games:[],warnings:[],locations:[],...result};installedLoaded=true;toast(`Found ${installed.games.length} installed ${installed.games.length===1?'game':'games'}.`);}}
   catch(error){toast(errorText(error),true);}finally{installedBusy=false;renderInstalled();}
+}
+// ---- PC specs: what is inside this PC, read only when the page is opened ----
+const HARDWARE_NOTES = {
+  'probe-failed': 'Windows did not answer the full hardware check, so only the basics are shown. Choose Check again to retry.',
+  'not-windows': 'The full hardware check works only on Windows. Only the basics are shown here.',
+  'basic-display': 'Windows is using its basic display driver, so the graphics card could not be identified. Install the graphics driver from the maker of the PC or the graphics card, then check again.',
+};
+// Memory sizes in MB or GB. Graphics and installed memory are sold in whole
+// gigabytes but reported slightly under, so a value within 4% of a whole number
+// is shown as that number. `exact` keeps one decimal instead.
+function formatMemory(value, exact = false) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  const gib = bytes / 1024 ** 3, whole = Math.round(gib);
+  if (!exact && whole >= 1 && Math.abs(gib - whole) / whole <= 0.04) return `${whole} GB`;
+  const mib = Math.max(1, Math.round(bytes / 1024 ** 2));
+  // Anything that would read "1024 MB" is shown in GB.
+  if (mib < 1024) return `${mib} MB`;
+  return `${Number(gib.toFixed(1))} GB`;
+}
+function plural(count, one, many) { return `${count} ${count === 1 ? one : many}`; }
+function specCard(label, iconName, title, rows = [], badge = '') {
+  const card = el('article', 'spec-card'), heading = el('div', 'spec-card-heading'), mark = el('div', 'spec-icon');
+  const titles = el('div', 'spec-title'), caption = el('div', 'spec-label');
+  mark.append(icon(iconName));
+  caption.append(el('span', '', label));
+  if (badge) caption.append(el('span', 'spec-badge', badge));
+  titles.append(caption, el('h3', '', title));
+  heading.append(mark, titles);
+  card.append(heading);
+  const shown = rows.filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (shown.length) {
+    const list = el('dl', 'spec-rows');
+    for (const [name, value] of shown) list.append(el('dt', '', name), el('dd', '', value));
+    card.append(list);
+  }
+  return card;
+}
+function processorCard(processor) {
+  if (!processor?.name) return specCard('Processor', 'chip', 'Not reported');
+  const cores = processor.cores ? plural(processor.cores, 'core', 'cores') : '';
+  const threads = processor.threads ? plural(processor.threads, 'thread', 'threads') : '';
+  const speed = processor.megahertz ? `${Number((processor.megahertz / 1000).toFixed(2))} GHz` : '';
+  return specCard('Processor', 'chip', processor.name, [
+    // Without a core count, the row is named for what it does show.
+    cores ? ['Cores', [cores, threads].filter(Boolean).join(' · ')] : ['Threads', processor.threads ? String(processor.threads) : ''],
+    ['Clock speed', speed],
+    ['Processors', processor.sockets > 1 ? String(processor.sockets) : ''],
+  ]);
+}
+function graphicsCard(adapter, several) {
+  const kind = adapter.kind === 'discrete' ? 'Graphics card' : adapter.kind === 'integrated' ? 'Built-in graphics' : '';
+  const own = formatMemory(adapter.dedicatedBytes), shared = formatMemory(adapter.sharedBytes);
+  // Built-in graphics, and any adapter with no memory of its own, borrow the PC's memory.
+  const borrows = adapter.kind === 'integrated' || (adapter.dedicatedBytes === 0 && Boolean(shared));
+  const memory = borrows ? `Shares system memory${shared ? ` (up to ${shared})` : ''}` : own || 'Not reported by Windows';
+  const directx = adapter.directx ? `DirectX ${adapter.directx}${adapter.featureLevel ? ` (feature level ${adapter.featureLevel})` : ''}` : '';
+  const card = specCard('Graphics', 'gpu', adapter.name || 'Graphics adapter', [
+    ['Type', kind],
+    ['Graphics memory', memory],
+    ['Supports', directx],
+    ['Driver version', adapter.driver],
+  ], several && adapter.main ? 'Main' : '');
+  if (adapter.problem) card.append(el('p', 'spec-problem', 'Windows reports a problem with this device: it is switched off or its driver is not working. Check it in Device Manager.'));
+  return card;
+}
+function memoryCard(memory) {
+  const installed = formatMemory(memory?.installedBytes), usable = formatMemory(memory?.usableBytes, true);
+  if (!installed && !usable) return specCard('Memory (RAM)', 'memory', 'Not reported');
+  return specCard('Memory (RAM)', 'memory', installed ? `${installed} installed` : `${usable} usable`, [
+    ['Usable by Windows', installed ? usable : ''],
+    ['Memory modules', memory.modules ? String(memory.modules) : ''],
+  ]);
+}
+function driveKind(drive) {
+  // Card and built-in flash storage are named for what they are, not as an "SSD".
+  if (drive.bus === 'SD card') return 'SD card';
+  if (drive.bus === 'MMC') return drive.removable ? 'MMC card' : 'eMMC storage';
+  const type = drive.kind === 'ssd' ? 'SSD' : drive.kind === 'hdd' ? 'hard disk' : 'drive';
+  if (drive.removable && !drive.bus) return 'Removable drive';
+  const name = drive.bus ? `${drive.bus} ${type}` : type;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+function storageCard(drives) {
+  const card = specCard('Storage', 'drive', drives.length ? plural(drives.length, 'drive', 'drives') : 'No drives reported');
+  for (const drive of drives) {
+    const block = el('div', 'spec-drive'), heading = el('div', 'spec-drive-heading');
+    heading.append(el('strong', '', `${drive.letter}:`), el('span', '', [driveKind(drive), drive.model].filter(Boolean).join(' · ')));
+    block.append(heading);
+    const total = Number(drive.totalBytes) || 0;
+    const free = drive.freeBytes === null || drive.freeBytes === undefined ? null : Number(drive.freeBytes);
+    if (total > 0 && free !== null && Number.isFinite(free) && free >= 0 && free <= total) {
+      // "Low" only when both are true, so a big drive with plenty of room is not flagged.
+      const low = free / total < 0.1 && free < 50 * 1024 ** 3;
+      const meter = el('div', 'spec-meter'), fill = el('span', `spec-meter-fill${low ? ' low' : ''}`);
+      fill.style.width = `${((1 - free / total) * 100).toFixed(1)}%`;
+      meter.setAttribute('aria-hidden', 'true');
+      meter.append(fill);
+      block.append(meter, el('p', '', `${formatBytes(free, '0 B')} free of ${formatBytes(total)}${low ? ' · low on space' : ''}`));
+    } else block.append(el('p', '', formatBytes(total)));
+    card.append(block);
+  }
+  return card;
+}
+function renderHardware() {
+  $('#check-hardware').disabled = hardwareBusy;
+  const date = hardware?.checkedAt ? new Date(hardware.checkedAt) : null;
+  $('#hardware-status').textContent = hardwareBusy ? 'Reading this PC’s hardware…'
+    : date && Number.isFinite(date.getTime()) ? `Checked at ${date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} · Read on this PC only, never sent anywhere.` : '';
+  const messages = (Array.isArray(hardware?.notes) ? hardware.notes : []).filter(note => typeof note === 'string' && Object.hasOwn(HARDWARE_NOTES, note)).map(note => HARDWARE_NOTES[note]);
+  const notes = $('#hardware-notes');
+  notes.replaceChildren(...messages.map(message => el('p', 'warning-note', message)));
+  notes.hidden = !messages.length;
+  const grid = $('#hardware-grid');
+  if (!hardware) {
+    if (hardwareBusy) { grid.replaceChildren(busyLine('Reading the processor, graphics, memory and drives…')); return; }
+    const empty = el('div', 'empty-state');
+    if (hardwareFailed) emptyState(empty, 'This PC’s specs could not be read', 'Something stopped the check before it finished. Nothing left this PC.', 'chip', {label: 'Try again', icon: 'refresh', run: () => loadHardware(true)});
+    else emptyState(empty, 'See what is inside this PC', 'Ravenshelf reads the processor, graphics, memory and drives when you ask. Nothing leaves this PC.', 'chip', {label: 'Check this PC', icon: 'refresh', run: () => loadHardware(true)});
+    grid.replaceChildren(empty);
+    return;
+  }
+  const complete = hardware.status === 'complete';
+  const adapters = (Array.isArray(hardware.graphics) ? hardware.graphics : []).filter(Boolean).sort((a, b) => Number(Boolean(b.main)) - Number(Boolean(a.main)));
+  const drives = (Array.isArray(hardware.drives) ? hardware.drives : []).filter(drive => drive && drive.letter);
+  const cards = [processorCard(hardware.processor)];
+  if (adapters.length) cards.push(...adapters.map(adapter => graphicsCard(adapter, adapters.length > 1)));
+  else {
+    const missing = specCard('Graphics', 'gpu', complete ? 'Not detected' : 'Not read');
+    missing.append(el('p', '', complete ? 'Windows did not report a graphics card with a working driver.' : 'Graphics details need the full hardware check.'));
+    cards.push(missing);
+  }
+  cards.push(memoryCard(hardware.memory));
+  if (drives.length || complete) cards.push(storageCard(drives));
+  const display = hardware.display;
+  if (display?.width && display?.height) cards.push(specCard('Display', 'monitor', `${display.width} × ${display.height}`, [['Refresh rate', display.refreshHz ? `${display.refreshHz} Hz` : '']]));
+  const system = hardware.system || {};
+  cards.push(specCard('System', 'computer', system.name || 'Windows', [['Build', system.build ? String(system.build) : ''], ['System type', system.architecture]]));
+  grid.replaceChildren(...cards);
+}
+async function loadHardware(refresh) {
+  if (hardwareBusy) return;
+  hardwareBusy = true; renderHardware();
+  try {
+    const result = await api.getHardware({refresh: Boolean(refresh)});
+    if (result && typeof result === 'object') { hardware = result; hardwareLoaded = true; hardwareFailed = false; }
+    else hardwareFailed = true;
+  }
+  catch (error) { hardwareFailed = true; toast(errorText(error), true); }
+  finally { hardwareBusy = false; renderHardware(); }
 }
 function renderCompletionAction(){
   const action=state.completionAction||{mode:'none',phase:'idle'};
@@ -1158,6 +1318,7 @@ function wireEvents() {
   $('#scan-games').addEventListener('click',()=>scanInstalled(false));
   $('#add-game-folder').addEventListener('click',()=>scanInstalled(true));
   $('#installed-search').addEventListener('input',renderInstalled);
+  $('#check-hardware').addEventListener('click', () => loadHardware(true));
   $('#completion-mode').addEventListener('change',()=>{
     const mode=$('#completion-mode').value;
     if(mode==='shutdown'&&state.completionAction?.mode!=='shutdown'){$('#shutdown-confirm').hidden=false;return;}
@@ -1242,6 +1403,37 @@ function captureStateLabel(item) {
   if (item.status === 'ready') return item.verdict?.level === 'warning' ? 'Needs your OK' : 'Ready';
   return { checking: 'Checking', manual: 'Needs your browser', unavailable: 'Unavailable', blocked: 'Blocked', queued: 'Added', duplicate: 'Already in Downloads', 'sent-to-browser': 'Sent to browser' }[item.status] || 'Waiting';
 }
+// Names that a Nexus Mods page showed are that site's words, not Ravenshelf's.
+// They are shown in quotes, and quote marks inside them are replaced, so a
+// name cannot close the quotes and read on as if Ravenshelf were speaking.
+function modText(value) { return typeof value === 'string' ? value.replace(/["\u201c\u201d\u201e\u201f\u00ab\u00bb\u2039\u203a]/g, '’').trim() : ''; }
+function modParts(mod) {
+  if (!mod || mod.site !== 'nexusmods') return null;
+  const name = modText(mod.modName), game = modText(mod.gameName) || modText(mod.game);
+  return { name, number: Number.isSafeInteger(mod.modId) && mod.modId > 0 ? mod.modId : 0, game };
+}
+// A file downloaded on Nexus Mods, in one line: “mod name” · game.
+function modLabel(mod) {
+  const parts = modParts(mod);
+  if (!parts) return '';
+  return [parts.name ? `“${parts.name}”` : parts.number ? `Mod ${parts.number}` : '', parts.game].filter(Boolean).join(' · ');
+}
+// The same for the review window, where it sits beside Ravenshelf's own words:
+// each name is its own piece of text, kept apart from the sentence around it.
+function modLine(item) {
+  const parts = modParts(item.mod);
+  if (!parts || (!parts.name && !parts.number && !parts.game)) return null;
+  const line = el('p', 'capture-mod');
+  line.append(el('span', '', 'Nexus Mods file: '));
+  if (parts.name) line.append(el('span', '', '“'), el('bdi', '', parts.name), el('span', '', '”'));
+  else if (parts.number) line.append(el('span', '', `mod ${parts.number}`));
+  if (parts.game) line.append(el('span', '', (parts.name || parts.number) ? ' for ' : ''), el('bdi', '', parts.game));
+  line.append(el('span', '', '.'));
+  // Where it will be saved is said only while that is still what will happen.
+  // The folder's name comes from the app, which is what names the folder.
+  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' Ravenshelf saves it in your download folder, under '), el('bdi', '', item.modFolder), el('span', '', '.'));
+  return line;
+}
 function captureCard(item) {
   const card = el('article', `capture-item ${item.status || ''}`);
   const head = el('div', 'capture-head'), title = el('div', 'capture-title'), host = hostOfAddress(item.address);
@@ -1250,6 +1442,8 @@ function captureCard(item) {
   const warning = item.verdict?.level === 'warning';
   head.append(title, el('span', `capture-state ${warning && item.status === 'ready' ? 'warning' : item.status || ''}`, captureStateLabel(item)));
   card.append(head);
+  const mod = modLine(item);
+  if (mod) card.append(mod);
   if (item.status === 'checking') { const busy = el('p', 'busy-line'); busy.append(el('span', 'spinner'), el('span', '', 'Checking the link without opening the page…')); card.append(busy); }
   if (item.message) card.append(el('p', 'capture-message', item.message));
   const reasons = (item.verdict?.reasons || []).filter(reason => reason && reason.message);
@@ -1338,7 +1532,7 @@ function renderDownloadReputation(node, item) {
   node.replaceChildren();
   node.hidden = item.origin !== 'browser' && !report;
   if (node.hidden) return;
-  if (item.origin === 'browser') node.append(el('span', 'origin-chip', item.kind === 'media' ? 'From YouTube' : 'From your browser'));
+  if (item.origin === 'browser') node.append(el('span', 'origin-chip', item.kind === 'media' ? 'From YouTube' : modLabel(item.mod) ? 'From Nexus Mods' : 'From your browser'));
   const info = report ? virusTotalSummary({ ...report, kind: 'file', subject: 'this file' }) : null;
   if (info) appendVirusTotal(node, info);
   node.className = `download-reputation ${info?.tone || ''}`.trim();
