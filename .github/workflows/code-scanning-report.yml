@@ -1,0 +1,28 @@
+name: Code scanning report
+
+# Prints the open code-scanning alerts on main as plain lines, for the daily
+# maintenance run, which cannot open the Security tab. Started by hand only.
+# The alerts come from analysing this public source code, so the lines say
+# nothing that running CodeQL on the code would not show.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Open alerts on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      security-events: read
+    steps:
+      - name: List open alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$REPOSITORY/code-scanning/alerts?state=open&ref=refs/heads/main&per_page=100" \
+            --jq '.[] | "ALERT #\(.number) | \(.rule.id) | \(.rule.severity) | \(.rule.security_severity_level // "-") | \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line) | \(.rule.description)"'
+          echo "END OF REPORT"
