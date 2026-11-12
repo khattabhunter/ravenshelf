@@ -27,6 +27,7 @@ The public Windows release is built on GitHub-hosted Windows machines from the t
 | YouTube downloads (0.6.0, optional) | The extension sends only the video's ID (from its address) and your quality choice to Ravenshelf on the same PC. yt-dlp then requests the video from YouTube and Google's video servers directly from your PC, as watching it does, without your browser cookies or YouTube sign-in. |
 | Nexus Mods downloads (0.7.0, optional) | On www.nexusmods.com the extension reads which game, mod and file the open page is about. That stays in the browser unless you start a download that comes from Nexus Mods' file servers; then it goes with the download to Ravenshelf on the same PC. Ravenshelf checks and downloads the file from Nexus Mods' file server itself, over one connection, with the address your browser was given and without your browser cookies or Nexus Mods sign-in. It makes no other request to Nexus Mods. The **Mods** page (0.8.0) shows only what the queue saved; **Mod page** opens a mod's page in your own browser. |
 | PC specs (0.7.0) | Nothing leaves your computer. Ravenshelf asks Windows for hardware details the first time you open the page after starting it and when you choose **Check again**, and keeps the answer in memory. |
+| Can you run it? (0.9.0) | Nothing new leaves your computer. The game's Steam requirement lists are the ones game details already request; the comparison with this PC is made locally and is not saved. The free-space check before queueing asks Windows about the download folder's drive only. |
 | YouTube helper programs | Only when you choose **Set up**: GitHub's release download hosts receive requests for the pinned yt-dlp, Deno and FFmpeg files. The programs never check for or download updates themselves. |
 
 Those Internet services can see the connection's public IP and normal HTTP information. Depending on the request, they may also receive a user-agent, referrer, cookies or a game search term. Ravenshelf's own application code has no analytics endpoint or automatic upload of the installed-games scan. That does not make external websites anonymous or prevent their own logging.
@@ -70,6 +71,8 @@ The **PC specs** page shows the processor, graphics adapters, memory, drives, di
 The answer stays in Ravenshelf's memory until you close the app. It is not written to the profile or any file, not included in logs, not sent to any site or service, and not shared with the browser extension. A drive's model name is whatever Windows calls the drive, which is normally its maker's model and can be a name someone gave it.
 
 One exception is outside Ravenshelf: if an administrator has turned on PowerShell transcription or logging for the PC (Windows policies used in some workplaces), Windows itself can record the script and what it prints, including this answer.
+
+**Can you run it?** (0.9.0) uses the same answer, read the same way, when you choose **Compare with this PC** in a game's details (or at once, after the specs have been read). The comparison is worked out in Ravenshelf on this PC and shown in the window; it is not saved or sent anywhere.
 
 ### Optional clipboard recognition
 

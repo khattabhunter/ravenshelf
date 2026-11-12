@@ -4,13 +4,13 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.8.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.9.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.8.0 prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.8.0) and download `Ravenshelf-0.8.0-Windows.exe` from **Assets**.
+1. Open the [v0.9.0 prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.9.0) and download `Ravenshelf-0.9.0-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -18,7 +18,7 @@
 
 The preview is not code-signed, so Windows may show a SmartScreen notice the first time. Do not turn off Windows security protections to use Ravenshelf. Only obtain files you have permission to download.
 
-Version 0.8.0 adds Arabic, chosen in **Settings → Language**, and a **Mods** page that lists the mod files you downloaded on Nexus Mods, by game ([release notes](docs/RELEASE-0.8.0.md), [Language](docs/USER-GUIDE.md#language), [Mods](docs/USER-GUIDE.md#the-mods-page)). Version 0.7.0 added a **PC specs** page that shows what is inside this PC without sending it anywhere, and files the mods you download on Nexus Mods by game ([release notes](docs/RELEASE-0.7.0.md)). Version 0.6.1 makes YouTube's one-time setup take about a minute and YouTube downloads faster ([release notes](docs/RELEASE-0.6.1.md)). Version 0.6.0 added YouTube downloads: a Ravenshelf button in YouTube's player with a choice of quality, and **Download with Ravenshelf** when you right-click a video. A one-time setup fetches the helper programs it needs from their official releases and checks every file ([release notes](docs/RELEASE-0.6.0.md), [guide](docs/USER-GUIDE.md#youtube-downloads)). Version 0.5.0 added a browser extension for Chrome, Edge, Brave and Firefox: downloads you start in the browser go to Ravenshelf to be checked before anything is saved, dangerous sites are blocked, and FuckingFast and FileKeeper pages can no longer redirect you or open pop-ups elsewhere. It is off until you connect it in **Settings → Browser extension**. See the [0.5.0 release notes](docs/RELEASE-0.5.0.md) and [the extension guide](docs/USER-GUIDE.md#browser-extension).
+Version 0.9.0 adds **Can you run it?**: a game's details compare its Steam requirement lists with this PC, line by line, and Ravenshelf warns before you queue files that won't fit on the download drive ([release notes](docs/RELEASE-0.9.0.md), [guide](docs/USER-GUIDE.md#can-you-run-it)). Version 0.8.0 added Arabic, chosen in **Settings → Language**, and a **Mods** page that lists the mod files you downloaded on Nexus Mods, by game ([release notes](docs/RELEASE-0.8.0.md), [Language](docs/USER-GUIDE.md#language), [Mods](docs/USER-GUIDE.md#the-mods-page)). Version 0.7.0 added a **PC specs** page that shows what is inside this PC without sending it anywhere, and files the mods you download on Nexus Mods by game ([release notes](docs/RELEASE-0.7.0.md)). Version 0.6.1 makes YouTube's one-time setup take about a minute and YouTube downloads faster ([release notes](docs/RELEASE-0.6.1.md)). Version 0.6.0 added YouTube downloads: a Ravenshelf button in YouTube's player with a choice of quality, and **Download with Ravenshelf** when you right-click a video. A one-time setup fetches the helper programs it needs from their official releases and checks every file ([release notes](docs/RELEASE-0.6.0.md), [guide](docs/USER-GUIDE.md#youtube-downloads)). Version 0.5.0 added a browser extension for Chrome, Edge, Brave and Firefox: downloads you start in the browser go to Ravenshelf to be checked before anything is saved, dangerous sites are blocked, and FuckingFast and FileKeeper pages can no longer redirect you or open pop-ups elsewhere. It is off until you connect it in **Settings → Browser extension**. See the [0.5.0 release notes](docs/RELEASE-0.5.0.md) and [the extension guide](docs/USER-GUIDE.md#browser-extension).
 
 ## Security
 
@@ -48,13 +48,13 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.8.0-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.9.0-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.8.0-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.9.0-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
 A matching checksum detects a mismatch with the published file; provenance records its build origin. From 0.4.2, the release's `.sigstore.json` file is the same signed record; you can pass it to the command with `--bundle .\Ravenshelf-0.7.0-Windows.exe.sigstore.json` instead of fetching it from GitHub. Neither certifies that software is malware-free, and the executable remains unsigned.
@@ -67,8 +67,9 @@ A matching checksum detects a mismatch with the published file; provenance recor
 | Background catalogue refresh | Checks at startup and every five minutes while Ravenshelf is open, including when minimized. |
 | Personal library | Favorites and named collections. |
 | Game details | Click-to-enlarge covers/screenshots, system requirements and real Steam recommendation counts when available. Stars express the positive-review ratio on a five-star scale. |
+| Can you run it? | Sets each line of a game's Steam requirement lists beside this PC's specs: **Meets**, **Below** or **Can’t tell**. Only figures are compared (Windows version, 64-bit, memory, graphics memory, DirectX, free space); processor and graphics card models are not. Worked out on this PC; nothing is sent or saved. |
 | Personal touches | Local genre suggestions from saved/completed games and optional artwork-colored accents with a readable fallback. |
-| Downloads | Batch queues, lightweight progress updates, pause/resume, retry, persistent partial downloads and duplicate-file protection. |
+| Downloads | Batch queues, lightweight progress updates, pause/resume, retry, persistent partial downloads and duplicate-file protection. A warning, and a tick to confirm, when new files need more room than the download drive has free. |
 | Multiple connections | Up to four connections per large file, with validated ranges and automatic fallback to one. |
 | Network controls | A shared speed limit, local-time download hours and host cooldowns after limiting responses. |
 | Queue cleanup | Select several entries or review completed downloads; keep files when removing entries, or explicitly confirm permanent file deletion. Storage checking separates queue-managed files, missing entries and other archives in the chosen folder; other archives are shown for reference only. Figures are estimates. |
@@ -89,7 +90,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Host support
 
-| Source | Status in 0.8.0 |
+| Source | Status in 0.9.0 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
@@ -114,7 +115,7 @@ For an older Atlas/Ravenshelf version or a manual update, close the older window
 - Host changes, CAPTCHA checks, expired links and network conditions can affect availability and speed. Multiple connections do not guarantee a speed increase.
 - Ravenshelf does not automatically extract archives or run downloaded installers. The installed-game scan does not launch the games it finds.
 - Mod files from Nexus Mods are downloaded, not installed or checked against your games. They use one connection, the site's waiting time is not skipped, and **Mod manager download** buttons are not handled.
-- **PC specs** shows what Windows reports. It does not compare your PC with a game's requirements, and it leaves a detail out when Windows gives no trustworthy figure.
+- **PC specs** shows what Windows reports, and leaves a detail out when Windows gives no trustworthy figure. **Can you run it?** compares only figures; it does not rank processors or graphics cards, and **Meets** is not a promise of how well a game runs.
 - The browser extension handles files the browser downloads and single YouTube videos; it does not save videos from other sites. It is loaded in Developer mode (Chrome, Edge, Brave) or as a temporary add-on (Firefox) because it isn't in the browser stores, and the Chrome Web Store does not allow YouTube downloaders.
 - Only download YouTube videos you own, that use a Creative Commons licence, or that you have permission to save: YouTube's terms allow downloading only where YouTube offers it or with permission. Ravenshelf doesn't use your YouTube sign-in, so age-restricted, members-only and private videos can't be downloaded, nor live streams before they end. When YouTube changes, downloads can fail until a Ravenshelf update brings a newer yt-dlp.
 - There is no built-in proxy/VPN kill switch or Brave Search API integration. Normal site requests still expose the connection IP; network-interface binding alone would not guarantee leak prevention.

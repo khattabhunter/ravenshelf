@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 — Can you run it?
+
+- New **Can you run it?** panel in a game's details, above its Steam requirement lists. **Compare with this PC** sets each line of the **Minimum** and **Recommended** lists beside this PC's specs and says **Meets**, **Below** or **Can’t tell**, with a sentence for each list. After this PC's specs have been read once (here or on the **PC specs** page), later games are compared as soon as they open.
+- Only figures are compared: the Windows version, 64-bit Windows, memory, graphics memory, DirectX (and its feature level, for example for DirectX 12 Ultimate) and free space. Processor and graphics card models are never compared, because no ranking of them may be included in Ravenshelf; those lines always say **Can’t tell** and show both names.
+- A line says **Can’t tell** rather than guess: when the list gives no figure, when Windows reports only the memory it can use (that can still say **Meets**, never **Below**), for built-in graphics (they use part of the PC's memory), for a graphics device Windows reports a problem with, and for 64-bit games on Windows on ARM. Graphics memory within a tenth of the figure meets it, because Windows reports a "6 GB" card as a little less. Free space counts the fixed drive with the most room.
+- The comparison is made on this PC when you ask, from the game's own requirement list and the PC specs answer Ravenshelf already keeps in memory. Nothing new is sent anywhere and nothing is saved. **Meets** is not a promise of how well a game runs.
+- **Not enough free space:** before files are queued, Ravenshelf checks the drive of your download folder. When the files' sizes are more than its free space, less what downloads already waiting there still need, it says so and **Download** waits for a tick in **Queue them anyway**. Files of unknown size, and a check that cannot be made or takes more than four seconds, never hold a download up.
+- All new texts are in Arabic too.
+
+See [the release notes](docs/RELEASE-0.9.0.md).
+
 ## 0.8.0 — Arabic, and a Mods page
 
 - **Arabic:** **Settings → Language** offers **Same as Windows**, **English** and **العربية**. In Arabic the window reads right to left, and **Numbers** offers 0 1 2 3 or ٠ ١ ٢ ٣. Changing the language reloads the window; downloads keep running. Messages from the app, notifications, file dialogs, window titles and the **Alt** menu are translated; file names, paths and web addresses keep their own direction. The **Alt** menu no longer has Electron's Help menu, which linked to Electron's website.
