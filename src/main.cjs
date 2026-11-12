@@ -214,7 +214,9 @@ app.whenReady().then(async()=>{
   setAppMenu();
   win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Ravenshelf',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
   app.setAppUserModelId?.('local.atlas.repacklibrary');
-  features=createFeatureServices({app,win,manager,completion,dialog:localDialog,clipboard,Notification:LocalNotification,register:handle,publish:publishState,providers,checked,isTest:Boolean(isTest)});
+  // PC specs are read only when a page asks for them, and stay on this PC.
+  const hardware=createHardwareService();
+  features=createFeatureServices({app,win,manager,completion,dialog:localDialog,clipboard,Notification:LocalNotification,register:handle,publish:publishState,providers,checked,hardware,isTest:Boolean(isTest)});
   media=createMediaIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
   browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),isTest:Boolean(isTest)});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
@@ -229,8 +231,6 @@ app.whenReady().then(async()=>{
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',event=>event.preventDefault());
   win.webContents.on('will-attach-webview',event=>event.preventDefault());
-  // PC specs are read only when the page asks for them, and stay on this PC.
-  const hardware=createHardwareService();
   handle('getHardware',options=>hardware.get({refresh:options?.refresh===true}));
   // A new language applies to the whole window at once: the choice is saved
   // and the window loads again in that language. Downloads keep running.
