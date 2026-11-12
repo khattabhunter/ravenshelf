@@ -155,6 +155,8 @@ const MESSAGES=new Map([
   'Only YouTube video addresses can be downloaded this way.',
   'Too many YouTube downloads are waiting. Let some finish first.',
   'Choose a YouTube download quality.',
+  'Choose a language from the list.',
+  'Choose how numbers are written from the list.',
   // Fixed messages of the YouTube helper programs and yt-dlp runner.
   ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES),
   // Fixed messages about a mod file's download link.
@@ -198,7 +200,8 @@ const ACTIONS=new Map([
   ['removeYouTubeTools','The YouTube helper programs could not be removed. Pause YouTube downloads and try again.'],
   ['saveYouTubeSettings','The YouTube preference could not be saved. Try again.'],
   ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.'],
-  ['getHardware','This PC’s specs could not be read. Try again.']
+  ['getHardware','This PC’s specs could not be read. Try again.'],
+  ['setLanguage','The language could not be changed. Try again.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],

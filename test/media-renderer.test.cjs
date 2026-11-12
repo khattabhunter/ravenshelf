@@ -20,6 +20,7 @@ function fixture(api={}){
   const document={querySelector:get,querySelectorAll:selector=>lists.get(selector)||[],createElement:tag=>new Element(tag),activeElement:null,addEventListener(){},documentElement:{style:{setProperty(){}}}};
   const toasts=[];
   const context=vm.createContext({window:{atlas:{setBrowserIntegration:async()=>({}),...api}},document,URL,console,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/i18n.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8').replace(/start\(\);\s*$/,''),context);
   context.recordToast=(message,isError)=>toasts.push([message,Boolean(isError)]);
   const run=code=>vm.runInContext(code,context);run('toast=recordToast;');

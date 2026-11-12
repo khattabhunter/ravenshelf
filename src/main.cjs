@@ -21,6 +21,7 @@ const {createBrowserIntegration}=require('./browser-integration.cjs');
 const {createMediaIntegration}=require('./media-integration.cjs');
 const {markFromInternet}=require('./motw.cjs');
 const {createHardwareService}=require('./hardware.cjs');
+const i18n=require('./i18n.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media;
 const checked=new Map(),hostWindows=new Set(),mediaWindows=new Set();
@@ -137,16 +138,20 @@ app.whenReady().then(async()=>{
   const resources={
     '/index.html':['index.html','text/html; charset=utf-8'],
     '/styles.css':['styles.css','text/css; charset=utf-8'],
+    '/i18n.js':['i18n.js','text/javascript; charset=utf-8'],
     '/app.js':['app.js','text/javascript; charset=utf-8']
   };
+  // The window's language and its texts, written for the current settings
+  // each time the window loads (see i18n.cjs).
+  const localeScript=()=>Buffer.from(i18n.windowScript(manager?.settings,app.getPreferredSystemLanguages()),'utf8');
   protocol.handle('atlas',async request=>{
     try {
     const u=new URL(request.url);
     if(u.hostname!=='app')return new Response('Not found',{status:404,headers:ERROR_RESPONSE_HEADERS});
     if(u.pathname==='/image')return await imageResponse(request);
-    const entry=resources[u.pathname];
+    const entry=u.pathname==='/locale.js'?['','text/javascript; charset=utf-8']:resources[u.pathname];
     if(!entry)return new Response('Not found',{status:404,headers:ERROR_RESPONSE_HEADERS});
-    return new Response(fs.readFileSync(path.join(__dirname,'renderer',entry[0])),{headers:{'content-type':entry[1],'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}});
+    return new Response(entry[0]?fs.readFileSync(path.join(__dirname,'renderer',entry[0])):localeScript(),{headers:{'content-type':entry[1],'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}});
     } catch {console.error('Ravenshelf could not load an app resource.');return new Response('App resource unavailable',{status:500,headers:ERROR_RESPONSE_HEADERS});}
   });
   session.defaultSession.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));
@@ -194,6 +199,14 @@ app.whenReady().then(async()=>{
   // PC specs are read only when the page asks for them, and stay on this PC.
   const hardware=createHardwareService();
   handle('getHardware',options=>hardware.get({refresh:options?.refresh===true}));
+  // A new language applies to the whole window at once: the choice is saved
+  // and the window loads again in that language. Downloads keep running.
+  handle('setLanguage',options=>{
+    manager.updateSettings(i18n.languageChoice(options));
+    browserIntegration?.languageChanged?.();
+    setImmediate(()=>{if(win&&!win.isDestroyed())win.webContents.reload();});
+    return appState();
+  });
   handle('getState',appState);
   handle('listGames',async options=>providers.listGames({page:Math.max(1,Math.min(2000,Number(options?.page)||1)),search:String(options?.search||'').slice(0,200)}));
   handle('getCatalogSections',()=>catalog.getCatalogSections());

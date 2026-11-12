@@ -13,6 +13,7 @@ function fixture(){
   const select=selector=>selector==='dialog[open]'?(dialogOpen?node():null):(nodes.has(selector)?nodes.get(selector):(nodes.set(selector,node()),nodes.get(selector)));
   const api={listCatalog:options=>new Promise((resolve,reject)=>requests.push({options,resolve,reject}))};
   const context=vm.createContext({window:{atlas:api,scrollX:0,scrollY:220,scrollTo:(...args)=>scrolls.push(args)},document:{querySelector:select,querySelectorAll:()=>[],createElement:node,activeElement:null},console,URL,Date,JSON,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/i18n.js'),'utf8'),context);
   const source=fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8').replace(/start\(\);\s*$/,'');
   vm.runInContext(source,context);
   context.recordRender=(data,selection,background)=>{renders.push({data,selection,background});};

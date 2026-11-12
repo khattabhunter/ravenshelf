@@ -24,6 +24,7 @@ function fixture(api={}){
   const document={querySelector:get,querySelectorAll:selector=>lists.get(selector)||[],createElement:tag=>new Element(tag),activeElement:null,body:new Element('body'),addEventListener(){},documentElement:{style:{setProperty(){}}}};
   const toasts=[];
   const context=vm.createContext({window:{atlas:{...api},scrollTo(){}},document,URL,console,setTimeout,clearTimeout});
+  vm.runInContext(read('i18n.js'),context);
   vm.runInContext(read('app.js').replace(/start\(\);\s*$/,''),context);
   context.recordToast=(message,isError)=>toasts.push([message,Boolean(isError)]);
   const run=code=>vm.runInContext(code,context);run('toast=recordToast;');
@@ -226,10 +227,10 @@ test('an answer in the wrong shape cannot break the page',()=>{
 
 test('the page is wired into the app: navigation, icons, styles and wording',()=>{
   const html=read('index.html'),js=read('app.js'),css=read('styles.css');
-  assert.match(html,/<button class="nav-item" data-view="hardware"><span data-icon="chip"><\/span><span>PC specs<\/span><\/button>/);
+  assert.match(html,/<button class="nav-item" data-view="hardware"><span data-icon="chip"><\/span><span data-i18n>PC specs<\/span><\/button>/);
   assert.match(html,/<section id="hardware-view" class="view" hidden>/);
   for(const id of ['check-hardware','hardware-status','hardware-notes','hardware-grid'])assert.match(html,new RegExp(`id="${id}"`),id);
-  assert.match(html,/<p>What is inside this PC\. Ravenshelf reads it here when you first open this page and when you choose Check again, and never sends it anywhere\.<\/p>/);
+  assert.match(html,/<p data-i18n>What is inside this PC\. Ravenshelf reads it here when you first open this page and when you choose Check again, and never sends it anywhere\.<\/p>/);
   const icons=vm.runInNewContext(`(${/const icons = (\{[\s\S]*?\n\});/.exec(js)[1]})`);
   for(const name of [...html.matchAll(/data-icon="([^"]+)"/g)].map(match=>match[1]))assert.ok(icons[name],`icon "${name}" exists`);
   for(const name of ['chip','gpu','memory','drive','monitor'])assert.ok(icons[name],name);
@@ -364,7 +365,7 @@ test('exact wording, time format and the page’s accessibility attributes',()=>
   assert.equal(f.all(empty).some(node=>node.tagName==='button'),false);assert.equal(empty.attributes.role,undefined);
   assert.match(f.all(empty).find(node=>node.className==='empty-icon').children[0].markup,/<rect x="6" y="6" width="12" height="12"/,'chip icon');
   const html=read('index.html');
-  assert.match(html,/<button class="button primary" id="check-hardware"><span data-icon="refresh"><\/span>Check again<\/button>/);
+  assert.match(html,/<button class="button primary" id="check-hardware"><span data-icon="refresh"><\/span><span data-i18n>Check again<\/span><\/button>/);
   assert.match(html,/<p id="hardware-status" class="hardware-status" role="status"><\/p>/);
   // The status line and the notes are read out by a screen reader when they change; the cards are not, all at once.
   assert.match(html,/<div id="hardware-notes" role="status"><\/div>/);

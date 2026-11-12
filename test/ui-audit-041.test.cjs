@@ -18,6 +18,7 @@ function fixture(api={}){
   function get(selector){if(!nodes.has(selector))nodes.set(selector,new Element());return nodes.get(selector);}
   const document={querySelector:get,querySelectorAll:selector=>lists.get(selector)||[],createElement:tag=>new Element(tag),activeElement:null,addEventListener(){},documentElement:{style:{setProperty:(key,value)=>accent.set(key,value)}}};
   const context=vm.createContext({window:{atlas:api},document,URL,console,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/i18n.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8').replace(/start\(\);\s*$/,''),context);
   const run=code=>vm.runInContext(code,context);run('toast=()=>{};');
   const all=root=>[root,...root.children.flatMap(all)];
