@@ -45,7 +45,7 @@
 .ravenshelf-yt-item {
   display: flex; align-items: center; justify-content: space-between; gap: 18px;
   box-sizing: border-box; width: 100%; min-height: 40px; margin: 0; padding: 8px 16px;
-  border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer;
 }
 .ravenshelf-yt-item:hover, .ravenshelf-yt-item:focus-visible { background: rgba(255, 255, 255, .12); outline: none; }
 .ravenshelf-yt-item:active { background: rgba(185, 160, 236, .28); }
@@ -85,3 +85,5 @@
 @media (prefers-reduced-motion: reduce) {
   .ravenshelf-yt-menu, .ravenshelf-yt-toast, .ravenshelf-yt-toast::before { animation: none; transition: none; }
 }
+/* Arabic: letter spacing and capitals do not apply to Arabic letters. */
+.ravenshelf-yt-menu:lang(ar) .ravenshelf-yt-section { letter-spacing: 0; text-transform: none; }

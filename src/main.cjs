@@ -1,5 +1,5 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification}=require('electron');
+const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification,Menu}=require('electron');
 const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
@@ -24,6 +24,37 @@ const {createHardwareService}=require('./hardware.cjs');
 const i18n=require('./i18n.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media;
+// The app's language outside the window: notifications, file dialogs, window
+// titles and the menu. Every part of the app writes English; it is translated
+// here, as it is shown. If anything about the language fails, English is used.
+function local(){
+  try{return i18n.translator(manager?.settings,app.getPreferredSystemLanguages());}
+  catch{return {t:text=>text,localText:text=>text,arabic:false};}
+}
+function localOptions(options,keys){
+  const tr=local(),shown={...options};
+  for(const key of keys)if(typeof shown[key]==='string')shown[key]=tr.localText(shown[key]);
+  if(Array.isArray(shown.filters))shown.filters=shown.filters.map(filter=>({...filter,name:tr.localText(filter.name)}));
+  return shown;
+}
+const LocalNotification=typeof Notification==='function'?new Proxy(Notification,{construct:(target,[options])=>new target(localOptions(options,['title','subtitle','body']))}):Notification;
+const localDialog={
+  showOpenDialog:(window,options)=>dialog.showOpenDialog(window,localOptions(options,['title','buttonLabel','message'])),
+  showSaveDialog:(window,options)=>dialog.showSaveDialog(window,localOptions(options,['title','buttonLabel','message'])),
+  showErrorBox:(title,content)=>{const tr=local();dialog.showErrorBox(tr.localText(title),tr.localText(content));}
+};
+// The menu that Alt shows: Electron's own menu, in the app's language,
+// without its Help menu (a link to Electron's website).
+function setAppMenu(){
+  if(typeof Menu?.setApplicationMenu!=='function')return;
+  const {t}=local();
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {label:t('File'),submenu:[{role:'quit',label:t('Exit')}]},
+    {label:t('Edit'),submenu:[{role:'undo',label:t('Undo')},{role:'redo',label:t('Redo')},{type:'separator'},{role:'cut',label:t('Cut')},{role:'copy',label:t('Copy')},{role:'paste',label:t('Paste')},{role:'delete',label:t('Delete')},{type:'separator'},{role:'selectAll',label:t('Select All')}]},
+    {label:t('View'),submenu:[{role:'reload',label:t('Reload')},{role:'forceReload',label:t('Force Reload')},{role:'toggleDevTools',label:t('Toggle Developer Tools')},{type:'separator'},{role:'resetZoom',label:t('Actual Size')},{role:'zoomIn',label:t('Zoom In')},{role:'zoomOut',label:t('Zoom Out')},{type:'separator'},{role:'togglefullscreen',label:t('Toggle Full Screen')}]},
+    {label:t('Window'),submenu:[{role:'minimize',label:t('Minimize')},{role:'close',label:t('Close')}]}
+  ]));
+}
 const checked=new Map(),hostWindows=new Set(),mediaWindows=new Set();
 // Resolve only when a link is checked, after Electron and the profile are ready.
 const fastFetch=createFastSessionFetch({getSession:root=>session.fromPartition('persist:atlas-host-'+root)});
@@ -88,7 +119,7 @@ async function openGameplay(game){
   ses.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));ses.setPermissionCheckHandler(()=>false);
   if(!ses.__atlasNoDownloads){ses.on('will-download',event=>event.preventDefault());ses.__atlasNoDownloads=true;}
   const allowed=value=>{try{const u=safeURL(value);return ['www.youtube.com','youtube.com','m.youtube.com','consent.youtube.com','consent.google.com'].includes(u.hostname);}catch{return false;}};
-  const browser=new BrowserWindow({width:1180,height:820,parent:win,title:'Ravenshelf — YouTube gameplay',autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  const browser=new BrowserWindow({width:1180,height:820,parent:win,title:local().t('Ravenshelf — YouTube gameplay'),autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
   mediaWindows.add(browser);
   browser.webContents.setWindowOpenHandler(({url})=>{if(allowed(url))setImmediate(()=>{if(!browser.isDestroyed())browser.loadURL(url).catch(()=>{});});return {action:'deny'};});
   browser.webContents.on('will-navigate',(event,url)=>{if(!allowed(url))event.preventDefault();});
@@ -104,7 +135,7 @@ async function openHost({url,gameTitle='Imported files'}={}){
   const allowed=value=>{try{const v=safeURL(value);return v.hostname===root||v.hostname.endsWith('.'+root)||v.hostname==='challenges.cloudflare.com';}catch{return false;}};
   ses.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));ses.setPermissionCheckHandler(()=>false);
   ses.webRequest.onBeforeRequest((details,cb)=>{cb({cancel:!allowed(details.url)});});
-  const browser=new BrowserWindow({width:1000,height:780,parent:win,title:'Ravenshelf protected host — popups and off-site requests blocked',autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  const browser=new BrowserWindow({width:1000,height:780,parent:win,title:local().t('Ravenshelf protected host — popups and off-site requests blocked'),autoHideMenuBar:true,webPreferences:{session:ses,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
   hostWindows.add(browser);
   browser.webContents.setWindowOpenHandler(({url:popup})=>{
     // Same-host download buttons sometimes use window.open; route only those into this window.
@@ -126,7 +157,7 @@ async function openHost({url,gameTitle='Imported files'}={}){
       const cookies=await ses.cookies.get({url:direct});
       const entry={url:direct,sourceUrl:u.href,filename,size:item.getTotalBytes(),host:root,status:'ready',headers:{'User-Agent':browser.webContents.getUserAgent(),Referer:u.href,Cookie:cookies.map(c=>`${c.name}=${c.value}`).join('; ')}};
       assertQueueAvailable();manager.add({links:[entry],gameTitle});browser.close();
-    }catch(error){dialog.showErrorBox('Could not queue file',publicErrorMessage(error,'openHost'));}
+    }catch(error){localDialog.showErrorBox('Could not queue file',publicErrorMessage(error,'openHost'));}
   };
   ses.on('will-download',onDownload);
   browser.on('closed',()=>{hostWindows.delete(browser);ses.removeListener('will-download',onDownload);});
@@ -179,11 +210,12 @@ app.whenReady().then(async()=>{
   }});
   manager.on('state',()=>{completion.refresh();features?.observe();publishState();});
   manager.on('progress',publishProgress);
+  setAppMenu();
   win=new BrowserWindow({width:1440,height:940,minWidth:880,minHeight:640,backgroundColor:'#10121c',title:'Ravenshelf',autoHideMenuBar:true,show:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
   app.setAppUserModelId?.('local.atlas.repacklibrary');
-  features=createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register:handle,publish:publishState,providers,checked,isTest:Boolean(isTest)});
-  media=createMediaIntegration({app,win,manager,Notification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
-  browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),isTest:Boolean(isTest)});
+  features=createFeatureServices({app,win,manager,completion,dialog:localDialog,clipboard,Notification:LocalNotification,register:handle,publish:publishState,providers,checked,isTest:Boolean(isTest)});
+  media=createMediaIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
+  browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),isTest:Boolean(isTest)});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
@@ -203,7 +235,7 @@ app.whenReady().then(async()=>{
   // and the window loads again in that language. Downloads keep running.
   handle('setLanguage',options=>{
     manager.updateSettings(i18n.languageChoice(options));
-    browserIntegration?.languageChanged?.();
+    setAppMenu();
     setImmediate(()=>{if(win&&!win.isDestroyed())win.webContents.reload();});
     return appState();
   });
@@ -216,7 +248,7 @@ app.whenReady().then(async()=>{
   handle('getInstalledGames',()=>installedCache?.scannedAt?installedCache:performInstalledScan());
   handle('scanInstalledGames',performInstalledScan);
   handle('addGameFolder',async()=>{
-    const result=await dialog.showOpenDialog(win,{title:'Choose an installed game or game library folder',properties:['openDirectory']});
+    const result=await localDialog.showOpenDialog(win,{title:'Choose an installed game or game library folder',properties:['openDirectory']});
     if(result.canceled)return null;
     const folder=result.filePaths[0],folders=Array.isArray(manager.settings.gameFolders)?manager.settings.gameFolders:[];
     if(folders.length>=20&&!folders.some(p=>p.toLowerCase()===folder.toLowerCase()))throw new Error('You can scan up to 20 custom game folders.');
@@ -258,7 +290,7 @@ app.whenReady().then(async()=>{
     if(['resume','retry','scan'].includes(action))assertQueueAvailable();
     return manager.action(id,action);
   });
-  handle('chooseFolder',async()=>{const r=await dialog.showOpenDialog(win,{title:'Choose download folder',defaultPath:manager.settings.downloadDir,properties:['openDirectory','createDirectory']});if(r.canceled)return null;manager.updateSettings({downloadDir:r.filePaths[0]});return r.filePaths[0];});
+  handle('chooseFolder',async()=>{const r=await localDialog.showOpenDialog(win,{title:'Choose download folder',defaultPath:manager.settings.downloadDir,properties:['openDirectory','createDirectory']});if(r.canceled)return null;manager.updateSettings({downloadDir:r.filePaths[0]});return r.filePaths[0];});
   handle('saveSettings',patch=>{
     const changes=featureSettings(patch);
     if(patch?.defenderScan!==undefined){if(typeof patch.defenderScan!=='boolean')throw new Error('Choose whether to scan finished downloads.');changes.defenderScan=patch.defenderScan;}
@@ -276,7 +308,7 @@ app.whenReady().then(async()=>{
   handle('openExternal',url=>shell.openExternal(safeURL(url).href));
   handle('openDownloadsFolder',()=>{fs.mkdirSync(manager.settings.downloadDir,{recursive:true});return shell.openPath(manager.settings.downloadDir);});
   handle('copyText',text=>{if(typeof text!=='string'||text.length>1000000)throw new Error('Text is too long.');clipboard.writeText(text);return true;});
-  handle('exportLinks',async({urls,gameTitle})=>{const clean=validateLinks(urls);const result=await dialog.showSaveDialog(win,{title:'Export download links',defaultPath:path.join(app.getPath('downloads'),safeName(gameTitle,'Ravenshelf links')+'.txt'),filters:[{name:'Link list',extensions:['txt']}]});if(result.canceled)return {cancelled:true};await fs.promises.writeFile(result.filePath,clean.join('\r\n')+'\r\n','utf8');return {saved:true,path:result.filePath};});
+  handle('exportLinks',async({urls,gameTitle})=>{const clean=validateLinks(urls);const result=await localDialog.showSaveDialog(win,{title:'Export download links',defaultPath:path.join(app.getPath('downloads'),safeName(gameTitle,'Ravenshelf links')+'.txt'),filters:[{name:'Link list',extensions:['txt']}]});if(result.canceled)return {cancelled:true};await fs.promises.writeFile(result.filePath,clean.join('\r\n')+'\r\n','utf8');return {saved:true,path:result.filePath};});
   handle('sendToJDownloader',async({urls,gameTitle})=>{
     const clean=validateLinks(urls);
     try{
@@ -290,7 +322,7 @@ app.whenReady().then(async()=>{
   win.once('ready-to-show',()=>win.show());
   catalogRefresh.start();
   await win.loadURL('atlas://app/index.html');
-}).catch(()=>{console.error('Ravenshelf startup failed.');dialog.showErrorBox('Ravenshelf could not start','Ravenshelf could not start. Close it and try again. If the problem continues, replace the app with a fresh copy of the latest release.');app.quit();});
+}).catch(()=>{console.error('Ravenshelf startup failed.');localDialog.showErrorBox('Ravenshelf could not start','Ravenshelf could not start. Close it and try again. If the problem continues, replace the app with a fresh copy of the latest release.');app.quit();});
 app.on('window-all-closed',()=>app.quit());
 let exiting=false;
 app.on('before-quit',event=>{

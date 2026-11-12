@@ -179,3 +179,79 @@ test('the main process reads the Arabic file once and falls back to English if i
   assert.equal(main.translator({ language: 'en' }, ['ar']).t('Downloads'), 'Downloads');
   assert.equal(main.translator({}, ['ar-SA']).language, 'ar');
 });
+
+test('texts the main process fills in with values have Arabic versions, and match what it writes', () => {
+  for (const template of I18N.TEMPLATES) assert.equal(typeof AR[template], 'string', template);
+  for (const [one, other] of I18N.PLURAL_TEMPLATES) {
+    assert.equal(typeof AR[other], 'object', other);
+    assert.deepEqual(placeholders(one), placeholders(other));
+  }
+  // Each pattern's fixed words are written somewhere in the main process, so a
+  // changed English text cannot silently stop matching.
+  const source = fs.readdirSync(path.join(__dirname, '../src')).filter(name => name.endsWith('.cjs')).map(name => read('src/' + name)).join('\n');
+  const BUILT = new Set(['Mods \u203a ']);
+  // (Texts with a count are checked through what the main process writes, below.)
+  for (const template of I18N.TEMPLATES) {
+    for (const piece of template.split(/\{\w+\}/).map(part => part.trim()).filter(part => part.length >= 12 && !BUILT.has(part))) {
+      const words = piece.split(/\s+/).slice(0, 4).join(' ');
+      assert.ok(source.includes(words), `"${words}" (from "${template}") is written by the main process`);
+    }
+  }
+});
+
+test('texts from the main process are shown in Arabic, and unchanged in English', () => {
+  const linkSafety = require('../src/link-safety.cjs');
+  const { analyzeArchiveSet } = require('../src/archive-set-validation.cjs');
+  const { publicErrorMessage } = require('../src/public-errors.cjs');
+  const ar = I18N.createTranslator({ language: 'ar', messages: AR }), en = I18N.createTranslator(undefined);
+  const arabic = /[\u0600-\u06ff]/;
+  const messages = [
+    ...linkSafety.nameReasons('holiday.jpg.exe'), ...linkSafety.nameReasons('setup.exe'), ...linkSafety.nameReasons('run.bat'),
+    ...linkSafety.nameReasons('disk.iso'), ...linkSafety.nameReasons('notes.txt       .exe'),
+    ...linkSafety.contentReasons('song.mp3', 'windows-program'), ...linkSafety.contentReasons('pack.zip', 'windows-program'),
+    ...linkSafety.assessDownload({ filename: 'a.zip', chain: [{ host: 'a.test' }, { host: 'b.test', listed: { label: 'phishing sites' } }, { host: 'c.test' }] }).reasons,
+    ...linkSafety.assessDownload({ filename: 'a.zip', virusTotal: [{ status: 'ok', kind: 'file', malicious: 3 }, { status: 'ok', kind: 'domain', subject: 'b.test', malicious: 1 }] }).reasons
+  ].map(item => item.message);
+  const archive = analyzeArchiveSet(['https://h.test/Game.part1.rar', 'https://h.test/Game.part3.rar', 'https://h.test/odd-name.bin']);
+  messages.push(...archive.errors, ...archive.warnings);
+  messages.push(publicErrorMessage(new Error('Host returned HTTP 503. Check the source link or retry.'), 'download'));
+  assert.ok(messages.length >= 12);
+  for (const message of messages) {
+    assert.equal(en.localText(message), message, 'English is unchanged');
+    assert.match(ar.localText(message), arabic, `"${message}" is shown in Arabic`);
+  }
+  // A name before ": " is kept as it is, and the known text after it is translated.
+  assert.equal(ar.localText('Game.part1.rar: Duplicate archive part numbers were found. Choose one copy of each part.'),
+    '\u2068Game.part1.rar\u2069: ' + AR['Duplicate archive part numbers were found. Choose one copy of each part.']);
+  // Values that are texts of the app are translated; names are kept.
+  assert.equal(ar.localText('evil.test is on Ravenshelf\u2019s list of phishing sites.'),
+    AR['{host} is on Ravenshelf\u2019s list of {list}.'].replace('{host}', '\u2068evil.test\u2069').replace('{list}', '\u2068' + AR['phishing sites'] + '\u2069'));
+  // The chain of sites runs right to left, with arrows to match.
+  const chain = ar.localText('The link passed through 2 other sites: a.test → b.test → c.test.');
+  assert.ok(chain.includes('\u2068a.test\u2069 \u2190 \u2068b.test\u2069 \u2190 \u2068c.test\u2069'), chain);
+  assert.equal(ar.localText('The link passed through 1 other site: a.test → b.test.'), AR['The link passed through {n} other sites: {chain}.'].one.replace('{chain}', '\u2068\u200f\u2068a.test\u2069 \u2190 \u2068b.test\u2069\u2069'));
+  // Several known sentences, as in a catalogue notice.
+  const notice = 'Monthly source popularity, not a review score. Explicitly adult-tagged entries are hidden in this showcase; source positions are preserved. 2 adult-tagged entries are hidden on this page.';
+  assert.equal(ar.localText(notice), AR['Monthly source popularity, not a review score. Explicitly adult-tagged entries are hidden in this showcase; source positions are preserved.'] + ' ' + AR['{n} adult-tagged entries are hidden on this page.'].two);
+  // Lines: known lines are translated, a source page's own notes are kept.
+  assert.equal(ar.localText('Source-reported installation notes (not independently verified):\nUnpack part 1 first.'),
+    AR['Source-reported installation notes (not independently verified):'] + '\nUnpack part 1 first.');
+  // Unknown text is shown as it came, in both languages.
+  for (const text of ['Something only the source says.', 'a: b', '', 'x\ny']) { assert.equal(ar.localText(text), text); assert.equal(en.localText(text), text); }
+  assert.equal(ar.localText(undefined), undefined); assert.equal(ar.localText(42), 42);
+});
+
+test('the main process translates its own fixed texts', () => {
+  const source = read('src/main.cjs');
+  const keys = [...source.matchAll(/\bt\('((?:[^'\\]|\\.)*)'\)/g)].map(m => m[1]);
+  assert.ok(keys.length >= 20, 'menu labels and window titles');
+  for (const key of keys) assert.equal(typeof AR[key], 'string', key);
+  for (const text of ['Choose download folder', 'Choose an installed game or game library folder', 'Export download links', 'Ravenshelf links', 'Link list',
+    'Could not queue file', 'Ravenshelf could not start', 'Choose an SFV, MD5 or SHA-256 checksum file', 'Checksum manifests', 'Choose the extracted game folder to verify',
+    'Review a download in Ravenshelf', 'Ravenshelf blocked a download', 'Check this download before opening it', 'Ravenshelf update available', 'Ravenshelf update ready',
+    'A download has finished.', 'Downloads have finished.', 'Set up YouTube downloads', 'It failed Ravenshelf\u2019s safety checks.', 'a downloaded file'])
+    assert.equal(typeof AR[text], 'string', text);
+  // Notifications, dialogs and the error box go through the translation.
+  assert.match(source, /Notification:LocalNotification/);
+  assert.doesNotMatch(source.replace(/const localDialog=\{[\s\S]*?\n\};/, ''), /\bdialog\.show/);
+});

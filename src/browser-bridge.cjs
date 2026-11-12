@@ -44,10 +44,10 @@ async function writeJSONAtomic(file,value){
 }
 
 class BrowserBridge extends EventEmitter{
-  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
+  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},language=()=>({language:'en',digits:'latn'}),localText=text=>text,appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
     super();
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
-    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,openExternal,reveal,notify,setReputation,appVersion,now,platform,listenPath});
+    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
     this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
   }
@@ -102,15 +102,25 @@ class BrowserBridge extends EventEmitter{
     if(this.requests.length>=REQUESTS_PER_MINUTE)return false;
     this.requests.push(now);return true;
   }
+  // The app's language, for the extension. Only the two known values are sent.
+  appLanguage(){
+    try{const {language,digits}=this.language()||{};return {language:language==='ar'?'ar':'en',digits:digits==='arab'?'arab':'latn'};}
+    catch{return {language:'en',digits:'latn'};}
+  }
+  localReason(reason){try{const local=this.localText(reason);return typeof local==='string'&&local?local.slice(0,1000):reason;}catch{return reason;}}
   async respond(browser,raw){
     if(!this.allowRequest())return {ok:false,error:'busy'};
     let message;try{message=validateRequest(raw);}catch{return {ok:false,error:'invalid'};}
     try{
       if(message.type==='hello'){
         this.contact={browser,extensionVersion:message.extensionVersion,at:new Date(this.now()).toISOString()};this.emit('change');
-        return {ok:true,app:'Ravenshelf',version:this.appVersion,capture:true,protection:this.threatLists?{version:this.threatLists.version,total:this.threatLists.total}:null};
+        return {ok:true,app:'Ravenshelf',version:this.appVersion,capture:true,protection:this.threatLists?{version:this.threatLists.version,total:this.threatLists.total}:null,...this.appLanguage()};
       }
-      if(message.type==='capture'||message.type==='send')return {ok:true,...this.receive(browser,message)};
+      if(message.type==='capture'||message.type==='send'){
+        // The extension shows the reason as it comes, so it is sent in the app's language.
+        const result=this.receive(browser,message);
+        return {ok:true,...result,...(typeof result?.reason==='string'?{reason:this.localReason(result.reason)}:{})};
+      }
       // YouTube videos skip the review: the user chose the video and quality
       // themselves, and nothing but its video ID reaches Ravenshelf.
       if(message.type==='media'){

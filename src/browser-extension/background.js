@@ -7,7 +7,9 @@
 // It talks only to Ravenshelf on this PC, through the native connector.
 'use strict';
 if (typeof importScripts === 'function' && !globalThis.RavenshelfPolicy) importScripts('policy.js');
+if (typeof importScripts === 'function' && !globalThis.RavenshelfText) importScripts('text.js');
 const P = globalThis.RavenshelfPolicy;
+const T = globalThis.RavenshelfText;
 const api = typeof browser !== 'undefined' ? browser : chrome;
 const isFirefox = typeof api.runtime.getBrowserInfo === 'function';
 const BROWSER = isFirefox ? 'firefox' : 'chromium';
@@ -49,20 +51,43 @@ async function hello() {
   const reply = await ask({ type: 'hello', extensionVersion: VERSION, browser: BROWSER }, 5000);
   const status = reply.ok ? 'connected' : STATUS_FROM_ERROR[reply.error] || 'unavailable';
   await api.storage.local.set({ status, appVersion: reply.ok && typeof reply.version === 'string' ? reply.version.slice(0, 20) : '' });
+  // The app says which language it uses; an older app says nothing, and the
+  // browser's own language is used.
+  if (reply.ok && T.LANGUAGES.includes(reply.language)) {
+    const saved = await api.storage.local.get(['appLanguage', 'appDigits']);
+    const digits = T.DIGITS.includes(reply.digits) ? reply.digits : 'latn';
+    if (saved.appLanguage !== reply.language || saved.appDigits !== digits) {
+      await api.storage.local.set({ appLanguage: reply.language, appDigits: digits });
+      if (saved.appLanguage !== reply.language) await quiet(() => createMenus());
+    }
+  }
   return reply;
+}
+// The texts in the app's language, once the app has said which; until then,
+// in the browser's language.
+function browserLanguage() { try { return api.i18n && typeof api.i18n.getUILanguage === 'function' ? api.i18n.getUILanguage() : ''; } catch (error) { return ''; } }
+async function texts() {
+  let saved = {};
+  try { saved = await api.storage.local.get(['appLanguage', 'appDigits']) || {}; } catch (error) {}
+  return T.create(T.pick(saved.appLanguage, browserLanguage()), saved.appDigits);
 }
 
 // ---- notifications (rate limited, so a hostile page cannot flood them) ----
 const lastShown = new Map();
 let shownTimes = [];
-function notify(key, title, message, cooldown = 4000) {
+// title and message are English, with {values} filled from params.
+function notify(key, title, message, cooldown = 4000, params) {
   const now = Date.now();
   if (now - (lastShown.get(key) || 0) < cooldown) return;
   shownTimes = shownTimes.filter(time => now - time < 60000);
   if (shownTimes.length >= 6) return;
   lastShown.set(key, now); shownTimes.push(now);
   if (lastShown.size > 200) lastShown.delete(lastShown.keys().next().value);
-  quiet(() => api.notifications.create(`ravenshelf-${now}-${shownTimes.length}`, { type: 'basic', iconUrl: api.runtime.getURL('icons/icon-128.png'), title, message: String(message || '').slice(0, 300) }));
+  const id = `ravenshelf-${now}-${shownTimes.length}`;
+  quiet(async () => {
+    const { t } = await texts();
+    return api.notifications.create(id, { type: 'basic', iconUrl: api.runtime.getURL('icons/icon-128.png'), title: t(title), message: t(String(message || ''), params).slice(0, 300) });
+  });
 }
 function notifyUnavailable(error) {
   const text = {
@@ -148,12 +173,13 @@ if (api.downloads.onDeterminingFilename) {
 // ---- right-click menu ----
 async function createMenus() {
   if (!menus) return;
+  const { t } = await texts();
   await quiet(() => menus.removeAll());
   const done = () => { void api.runtime.lastError; };
-  menus.create({ id: 'ravenshelf-link', title: 'Download with Ravenshelf', contexts: ['link'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
-  menus.create({ id: 'ravenshelf-page', title: 'Download this file with Ravenshelf', contexts: ['page'], documentUrlPatterns: P.SEND_PAGE_PATTERNS.slice() }, done);
+  menus.create({ id: 'ravenshelf-link', title: t('Download with Ravenshelf'), contexts: ['link'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
+  menus.create({ id: 'ravenshelf-page', title: t('Download this file with Ravenshelf'), contexts: ['page'], documentUrlPatterns: P.SEND_PAGE_PATTERNS.slice() }, done);
   // On YouTube the video area opens YouTube's own menu first; right-click again for this one.
-  menus.create({ id: 'ravenshelf-youtube', title: 'Download this video with Ravenshelf', contexts: ['page', 'video'], documentUrlPatterns: P.YOUTUBE_PAGE_PATTERNS.slice() }, done);
+  menus.create({ id: 'ravenshelf-youtube', title: t('Download this video with Ravenshelf'), contexts: ['page', 'video'], documentUrlPatterns: P.YOUTUBE_PAGE_PATTERNS.slice() }, done);
 }
 async function sendToApp(kind, url, pageUrl, incognito) {
   if (incognito) { notify('private', 'Private window', 'Ravenshelf does not take downloads from private windows.'); return { ok: false, error: 'private' }; }
@@ -301,7 +327,8 @@ function claim(tabId, url) {
 async function closePopup(tabId, sourceHost, targetHost) {
   closing.add(tabId); watched.delete(tabId); persist();
   await quiet(() => api.tabs.remove(tabId));
-  notify(`popup-${sourceHost}`, 'Ravenshelf closed a pop-up', `${sourceHost} tried to open ${targetHost || 'another page'}. File hosts use pop-ups for ads and fake downloads.`, 60000);
+  if (targetHost) notify(`popup-${sourceHost}`, 'Ravenshelf closed a pop-up', '{source} tried to open {target}. File hosts use pop-ups for ads and fake downloads.', 60000, { source: sourceHost, target: targetHost });
+  else notify(`popup-${sourceHost}`, 'Ravenshelf closed a pop-up', '{source} tried to open another page. File hosts use pop-ups for ads and fake downloads.', 60000, { source: sourceHost });
 }
 async function showBlocked(tabId, params) {
   const query = new URLSearchParams();
@@ -313,7 +340,8 @@ async function showBlocked(tabId, params) {
 async function stopRedirect(tabId, targetUrl, from, committed) {
   if (!claim(tabId, targetUrl)) return;
   const targetHost = P.hostOf(targetUrl);
-  notify(`redirect-${targetHost}`, 'Ravenshelf stopped a redirect', `${from.host || 'A file-host page'} tried to send you to ${targetHost} instead of your download.`, 30000);
+  if (from.host) notify(`redirect-${targetHost}`, 'Ravenshelf stopped a redirect', '{source} tried to send you to {target} instead of your download.', 30000, { source: from.host, target: targetHost });
+  else notify(`redirect-${targetHost}`, 'Ravenshelf stopped a redirect', 'A file-host page tried to send you to {target} instead of your download.', 30000, { target: targetHost });
   const now = Date.now();
   if (from.url && P.protectedRoot(P.hostOf(from.url)) && now - (restoredAt.get(tabId) || 0) > RESTORE_GAP_MS) {
     restoredAt.set(tabId, now);
@@ -438,7 +466,7 @@ api.webNavigation.onErrorOccurred.addListener(details => {
     }
     if (!claim(tabId, details.url)) return;
     const host = P.hostOf(details.url);
-    notify(`blocked-${host}`, 'Ravenshelf blocked a dangerous site', `${host} is on a list of ${CATEGORY_TEXT[reason]}.`, 30000);
+    notify(`blocked-${host}`, 'Ravenshelf blocked a dangerous site', `{host} is on a list of ${CATEGORY_TEXT[reason]}.`, 30000, { host });
     await showBlocked(tabId, { reason, host, url: details.url });
   }).catch(() => {});
 });

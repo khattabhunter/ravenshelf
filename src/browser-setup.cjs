@@ -9,7 +9,7 @@ const crypto=require('node:crypto');
 const {execFile}=require('node:child_process');
 const {HOST_NAME,CHROMIUM_EXTENSION_KEY,CHROMIUM_EXTENSION_ID,FIREFOX_EXTENSION_ID}=require('./browser-protocol.cjs');
 
-const EXTENSION_FILES=Object.freeze(['background.js','policy.js','popup.html','popup.js','popup.css','blocked.html','blocked.js','youtube.js','youtube.css','nexus.js','icons/icon-16.png','icons/icon-32.png','icons/icon-48.png','icons/icon-128.png']);
+const EXTENSION_FILES=Object.freeze(['background.js','policy.js','text.js','_locales/en/messages.json','_locales/ar/messages.json','popup.html','popup.js','popup.css','blocked.html','blocked.js','youtube.js','youtube.css','nexus.js','icons/icon-16.png','icons/icon-32.png','icons/icon-48.png','icons/icon-128.png']);
 const HOST_EXE='ravenshelf-browser-host.exe';
 const REGISTRY_KEYS=Object.freeze([
   Object.freeze({browser:'chromium',name:'Google Chrome',key:`HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`}),
@@ -17,20 +17,22 @@ const REGISTRY_KEYS=Object.freeze([
   Object.freeze({browser:'chromium',name:'Brave',key:`HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\${HOST_NAME}`}),
   Object.freeze({browser:'firefox',name:'Firefox',key:`HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${HOST_NAME}`})
 ]);
-// Browsers show at most 132 characters of this.
-const DESCRIPTION='Sends downloads to Ravenshelf to be checked first, blocks dangerous sites and pop-ups, and works with YouTube and Nexus Mods.';
+// The description is in _locales/<language>/messages.json, in English and
+// Arabic; the browser shows the one for its own language (at most 132
+// characters).
+const DESCRIPTION='__MSG_extDescription__';
 // The only two websites the extension has a page script on, each in the top
 // frame only. On www.youtube.com it adds Ravenshelf's download button to the
 // player. On www.nexusmods.com it changes nothing: it reads which game, mod
 // and file the page is about, so a download started there is filed by game.
-const YOUTUBE_SCRIPT=Object.freeze({matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false});
+const YOUTUBE_SCRIPT=Object.freeze({matches:['https://www.youtube.com/*'],js:['policy.js','text.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false});
 const NEXUS_SCRIPT=Object.freeze({matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false});
 const sha256=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 
 function extensionManifest(browser,version){
   if(!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(String(version)))throw new Error('Invalid extension version.');
   const common={
-    manifest_version:3,name:'Ravenshelf',description:DESCRIPTION,version,
+    manifest_version:3,name:'Ravenshelf',description:DESCRIPTION,default_locale:'en',version,
     icons:{16:'icons/icon-16.png',32:'icons/icon-32.png',48:'icons/icon-48.png',128:'icons/icon-128.png'},
     action:{default_title:'Ravenshelf',default_popup:'popup.html',default_icon:{16:'icons/icon-16.png',32:'icons/icon-32.png'}},
     content_security_policy:{extension_pages:"script-src 'self'; object-src 'none'; base-uri 'none'"},
@@ -42,7 +44,7 @@ function extensionManifest(browser,version){
     background:{service_worker:'background.js'}};
   if(browser==='firefox')return {...common,
     permissions:['downloads','nativeMessaging','declarativeNetRequest','webNavigation','menus','notifications','storage','alarms','activeTab'],
-    background:{scripts:['policy.js','background.js']},
+    background:{scripts:['policy.js','text.js','background.js']},
     browser_specific_settings:{gecko:{id:FIREFOX_EXTENSION_ID,strict_min_version:'140.0',
       // Download and page addresses go to the Ravenshelf app on this PC, which
       // Mozilla counts as transmitting browsing activity. With a download from
@@ -57,7 +59,7 @@ async function exportExtension({browser,root,sourceDir=path.join(__dirname,'brow
   const manifest=extensionManifest(browser,version);
   if(typeof root!=='string'||!path.isAbsolute(root))throw new Error('Invalid extension folder.');
   const target=path.join(root,browser),staging=path.join(root,`.${browser}-${crypto.randomUUID()}`),retired=path.join(root,`.${browser}-old-${crypto.randomUUID()}`);
-  await fsApi.promises.mkdir(path.join(staging,'icons'),{recursive:true});
+  for(const folder of new Set(EXTENSION_FILES.map(name=>path.dirname(name))))await fsApi.promises.mkdir(path.join(staging,folder),{recursive:true});
   try{
     for(const name of EXTENSION_FILES)await fsApi.promises.writeFile(path.join(staging,name),await fsApi.promises.readFile(path.join(sourceDir,name)),{flag:'wx'});
     await fsApi.promises.writeFile(path.join(staging,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{flag:'wx'});

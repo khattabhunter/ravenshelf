@@ -128,7 +128,7 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
     set:async values=>{Object.assign(store[name],structuredClone(values));onChanged.emit(values,name);}
   });
   const origin=firefox?'moz-extension://uuid/':'chrome-extension://ccgeallihglgkgpokepckdejgbfojcnh/';
-  const menu={removeAll:async()=>{},create:(props,done)=>{calls.push(['menu',props.id]);done&&done();},onClicked:event()};
+  const menu={removeAll:async()=>{calls.push(['menus-cleared']);},create:(props,done)=>{calls.push(['menu',props.id,props.title]);done&&done();},onClicked:event()};
   const api={
     runtime:{id:'self',getManifest:()=>({version:'0.5.0'}),getURL:file=>origin+file,onMessage:event(),onInstalled:event(),onStartup:event(),
       sendNativeMessage:async(host,message)=>{assert.equal(host,P.HOST_NAME);message=own(message);calls.push(['native',message]);const reply=await native(message);if(reply instanceof Error)throw reply;return reply;}},
@@ -147,6 +147,7 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
   if(firefox){api.runtime.getBrowserInfo=async()=>({name:'Firefox'});api.menus=menu;}else api.contextMenus=menu;
   const context=vm.createContext({console,setTimeout,clearTimeout,URL,URLSearchParams,structuredClone,[firefox?'browser':'chrome']:api});
   vm.runInContext(read('policy.js'),context,{filename:'policy.js'});
+  vm.runInContext(read('text.js'),context,{filename:'text.js'});
   vm.runInContext(read('background.js'),context,{filename:'background.js'});
   const message=async(msg,url=origin+'popup.html',tab)=>new Promise(resolve=>{const handled=api.runtime.onMessage.emit(msg,{id:'self',url,tab},value=>resolve(own(value)))[0];if(handled!==true)resolve(undefined);});
   return {api,calls,store,dynamic,hang,message,of:kind=>calls.filter(call=>call[0]===kind)};
@@ -696,7 +697,7 @@ test('the toolbar window hides a switch that the running extension does not know
     };
     const api={runtime:{sendMessage:async message=>{sent.push(message);return typeof reply==='function'?reply(message):reply;}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{url:'https://example.com/',incognito:false}]}};
     const context=vm.createContext({chrome:api,document:{getElementById:element},Date,Number});
-    vm.runInContext(read('policy.js'),context,{filename:'policy.js'});vm.runInContext(read('popup.js'),context,{filename:'popup.js'});
+    vm.runInContext(read('policy.js'),context,{filename:'policy.js'});vm.runInContext(read('text.js'),context,{filename:'text.js'});vm.runInContext(read('popup.js'),context,{filename:'popup.js'});
     await tick(30);
     return {element,sent};
   };
@@ -713,4 +714,79 @@ test('the toolbar window hides a switch that the running extension does not know
   // Turning a switch tells the extension, with the key and the new value.
   off.element('nexus').listeners.change({target:{checked:true}});await tick(20);
   assert.deepEqual(JSON.parse(JSON.stringify(off.sent.at(-1))),{cmd:'set',key:'nexus',value:true});
+});
+
+// ---- the extension in the app's language ----
+const TEXT=require('../src/browser-extension/text.js');
+test('every text of the extension has an Arabic version that starts with an Arabic word',()=>{
+  const LIT="'((?:[^'\\\\]|\\\\.)*)'";
+  const keys=new Set(),plurals=new Map();
+  for(const file of ['background.js','popup.js','blocked.js','youtube.js']){
+    const source=read(file);
+    for(const m of source.matchAll(new RegExp('\\bt\\(\\s*'+LIT,'g')))keys.add(m[1]);
+    for(const m of source.matchAll(new RegExp('\\btn\\([^,]+,\\s*'+LIT+',\\s*'+LIT,'g')))plurals.set(m[2],m[1]);
+    // The English titles and messages that are translated where they are shown.
+    for(const m of source.matchAll(/notify\([^,]+,\s*'([^']+)',\s*'([^']*)'/g)){keys.add(m[1]);if(m[2])keys.add(m[2]);}
+    for(const m of source.matchAll(/notify\([^,]+,\s*'([^']+)',\s*`([^`]*)`/g)){keys.add(m[1]);}
+    for(const m of source.matchAll(/showMessage\(\s*'([^']+)'/g))keys.add(m[1]);
+  }
+  for(const html of ['popup.html','blocked.html'])for(const m of read(html).matchAll(/<[a-z0-9]+\b[^>]*\sdata-i18n(?=[\s>])[^>]*>([^<]*)</g))keys.add(m[1].replace(/\s+/g,' ').trim());
+  // The texts that are kept in the extension's tables.
+  const background=read('background.js'),popup=read('popup.js'),blocked=read('blocked.js');
+  for(const m of /CATEGORY_TEXT = Object\.freeze\((\{[^}]+\})\)/.exec(background)[1].matchAll(/'([^']+)'/g))if(/ /.test(m[1]))keys.add(`{host} is on a list of ${m[1]}.`);
+  for(const m of popup.matchAll(/title: '([^']+)'/g))keys.add(m[1]);
+  for(const m of blocked.matchAll(new RegExp(LIT,'g')))if(/^[A-Z{].* /.test(m[1]))keys.add(m[1]);
+  for(const reply of [{ok:true,action:'queued'},{ok:true,action:'duplicate'},{ok:true,action:'setup'},{ok:true,action:'busy'},...['not-running','not-installed','not-allowed','private','busy','invalid','x'].map(error=>({ok:false,error}))]){
+    const text=P.mediaReplyText(reply);keys.add(text.title);keys.add(text.text);
+  }
+  for(const choice of P.PLAYER_CHOICES){if(!/^\d+p$|^M4A$|^MP3$/.test(choice.label))keys.add(choice.label);keys.add(choice.hint);}
+  for(const label of ['Video','Audio only','Download with Ravenshelf','Saved to Ravenshelf › YouTube'])keys.add(label);
+  assert.ok(keys.size>80,`found ${keys.size}`);
+  const missing=[...keys].filter(key=>!plurals.has(key)&&typeof TEXT.AR[key]!=='string'&&!TEXT.AR_PLURAL[key]);
+  assert.deepEqual(missing,[]);
+  for(const [other] of plurals)assert.ok(TEXT.AR_PLURAL[other],other);
+  const holders=text=>[...text.matchAll(/\{(\w+)\}/g)].map(m=>m[1]).sort();
+  const check=(key,value,form)=>{
+    // A notification or a menu takes its direction from its first letter.
+    assert.match(value,/^[^A-Za-z{]*[\u0600-\u06ff]/,`${key}: starts with an Arabic word`);
+    assert.doesNotMatch(value,/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/,key);
+    if(['zero','one','two'].includes(form))assert.deepEqual(holders(value).filter(n=>n!=='n'),holders(key).filter(n=>n!=='n'),key);
+    else assert.deepEqual(holders(value),holders(key),key);
+  };
+  for(const [key,value] of Object.entries(TEXT.AR))check(key,value);
+  for(const [key,forms] of Object.entries(TEXT.AR_PLURAL)){assert.deepEqual(Object.keys(forms),['zero','one','two','few','many','other']);for(const [form,value] of Object.entries(forms))check(key,value,form);}
+});
+
+test('the extension texts follow the app, then the browser, and stay English otherwise',()=>{
+  assert.equal(TEXT.pick('ar','en-US'),'ar');assert.equal(TEXT.pick('en','ar'),'en');
+  assert.equal(TEXT.pick(undefined,'ar'),'ar');assert.equal(TEXT.pick(undefined,'ar-IQ'),'ar');assert.equal(TEXT.pick('fr','en-GB'),'en');assert.equal(TEXT.pick(null,undefined),'en');
+  const en=TEXT.create('en'),ar=TEXT.create('ar'),arab=TEXT.create('ar','arab');
+  assert.equal(en.t('{source} tried to open {target}. File hosts use pop-ups for ads and fake downloads.',{source:'a.test',target:'b.test'}),'a.test tried to open b.test. File hosts use pop-ups for ads and fake downloads.');
+  assert.equal(en.tn(1,'{n} min ago','{n} min ago'),'1 min ago');assert.equal(en.count(12345),'12,345');
+  assert.equal(ar.t('Private window'),TEXT.AR['Private window']);
+  assert.ok(ar.t('Back to {host}',{host:'a.test'}).includes('\u2068a.test\u2069'),'a site keeps its own direction');
+  assert.equal(ar.tn(2,'{n} days ago','{n} days ago'),TEXT.AR_PLURAL['{n} days ago'].two);
+  assert.equal(arab.tn(5,'{n} min ago','{n} min ago'),'\u0645\u0646\u0630 \u0665 \u062f\u0642\u0627\u0626\u0642');
+  assert.equal(arab.t('Pause protection for 10 minutes'),TEXT.AR['Pause protection for 10 minutes'].replace('10','\u0661\u0660'));
+  assert.equal(arab.t('Up to 4K'),TEXT.AR['Up to 4K'],'digits of a name stay as they are');
+  assert.equal(ar.t('Something the app already wrote in Arabic'),'Something the app already wrote in Arabic');
+});
+
+test('the extension learns the app language when it says hello, and its menu and notices follow',async()=>{
+  let language='ar';
+  const b=fakeBrowser({native:message=>message.type==='hello'?{ok:true,version:'0.8.0',language,digits:'arab'}:message.type==='send'?{ok:true,action:'block',reason:'\u0646\u0635 \u0645\u0646 \u0627\u0644\u062a\u0637\u0628\u064a\u0642'}:{ok:false,error:'invalid'}});
+  await b.message({cmd:'status'});await tick(30);
+  assert.equal(b.store.local.appLanguage,'ar');assert.equal(b.store.local.appDigits,'arab');
+  const titles=b.of('menu').map(call=>call[2]);
+  assert.deepEqual(titles.slice(-3),[TEXT.AR['Download with Ravenshelf'],TEXT.AR['Download this file with Ravenshelf'],TEXT.AR['Download this video with Ravenshelf']]);
+  // A reason the app sends is already in its language and is shown as it is.
+  b.api.contextMenus.onClicked.emit({menuItemId:'ravenshelf-link',linkUrl:'https://cdn.example/a.zip',pageUrl:'https://example.com/'},{incognito:false});await tick(30);
+  assert.deepEqual(b.of('notify').at(-1),['notify',TEXT.AR['Ravenshelf blocked this link'],'\u0646\u0635 \u0645\u0646 \u0627\u0644\u062a\u0637\u0628\u064a\u0642']);
+  // Back to English: the menu is made again in English.
+  language='en';const before=b.of('menu').length;
+  await b.message({cmd:'status'});await tick(30);
+  assert.equal(b.store.local.appLanguage,'en');
+  assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
+  // An answer with an unknown language changes nothing.
+  language='fr';await b.message({cmd:'status'});await tick(30);assert.equal(b.store.local.appLanguage,'en');
 });

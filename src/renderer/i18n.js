@@ -25,6 +25,74 @@
   const ARABIC_DIGITS = '\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669';
   const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
+  // Texts the main process writes with values in them, in English. They reach
+  // the window and the notifications already filled in, so they are found by
+  // these patterns, and the values found are put into the Arabic version of
+  // the same text. {status}, {count}, {n} and {version} are numbers and {ext}
+  // a file ending; {message}, {reason}, {list}, {subject} and {tool} are texts
+  // of the app and are translated too; {chain} is a list of sites. Any other
+  // value (a file, folder, host or game name) is kept as it is.
+  const TEMPLATES = Object.freeze([
+    'Host returned HTTP {status}. Check the source link or retry.',
+    'The host returned HTTP {status}; open it in your browser.',
+    'FuckingFast returned HTTP {status}. Open the protected host to complete its verification.',
+    'The source returned HTTP {status}. Please try again or choose another source.',
+    'The site returned HTTP {status}.',
+    'Ravenshelf {version} is available. Nothing is downloaded until you choose Download and install.',
+    'Version {version} is available. Open Settings to review and install it.',
+    '{count} earlier or internal archive part(s) are missing from this selection.',
+    '{count} file name(s) are unresolved or unsupported and were not checked.',
+    '{host} is on Ravenshelf\u2019s list of {list}.',
+    '{name} was sent from your browser. Nothing downloads until you choose.',
+    '{count} security vendors on VirusTotal flagged {subject}.',
+    '1 security vendor on VirusTotal flagged {subject}; one detection is often a false alarm.',
+    'Mods \u203a {game}',
+    'Only the first {count} other archives are listed; their total includes all archives counted in this check.',
+    'Steam manifest: {path}',
+    'Epic installation manifest: {path}',
+    'Windows uninstall registration: {path}',
+    'GOG installation registration: {path}',
+    'Executable version resource: {path}',
+    'Executable found in selected/known game folder: {path}',
+    'Executable search was bounded in {path}. Add its specific game folder if a version is missing.',
+    'A Steam manifest could not be read: {file}',
+    'An Epic manifest could not be read: {file}',
+    '{count} stale game registrations pointed to missing folders and were not counted as installed.',
+    'The name looks like a .{shown} file, but it is really a .{ext} program.',
+    'The name hides its .{ext} ending behind a run of spaces.',
+    '.{ext} files are programs that can change your PC. Run it only if you trust where it came from.',
+    '.{ext} files run commands as soon as they are opened. Open it only if you are sure it is safe.',
+    '.{ext} disk images can hide programs and skip some Windows warnings. Open it only if you expected one.',
+    'This file contains a Windows program even though its name ends in .{ext}.',
+    'This .{ext} file is really a self-extracting program. Open it only if you expected that.',
+    'Downloading {tool} {version}\u2026',
+    'Downloading {tool}\u2026',
+    'Checking and unpacking {tool}\u2026',
+    'Source notes: {notes}',
+    'Could not expand paste: {message}'
+  ]);
+  // The same for texts with a count: the English one and other forms. The
+  // Arabic forms are kept under the English other form.
+  const PLURAL_TEMPLATES = Object.freeze([
+    Object.freeze(['{n} adult-tagged entry is hidden on this page.', '{n} adult-tagged entries are hidden on this page.']),
+    Object.freeze(['Full details are temporarily unavailable for {n} entry.', 'Full details are temporarily unavailable for {n} entries.']),
+    Object.freeze(['The link passed through {n} other site: {chain}.', 'The link passed through {n} other sites: {chain}.'])
+  ]);
+  const VALUE = { host: '[^\\s:/]+', status: '[1-5]\\d{2}', count: '\\d+', n: '\\d+', version: '\\d[0-9A-Za-z.+-]*', ext: '[A-Za-z0-9]{1,8}', shown: '[A-Za-z0-9]{1,8}' };
+  const TRANSLATED = new Set(['message', 'reason', 'list', 'subject', 'tool']);
+  function compile(template) {
+    const names = [];
+    const source = template.split(/(\{[A-Za-z][A-Za-z0-9]*\})/).map((part, index) => {
+      if (index % 2 === 0) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      names.push(part.slice(1, -1));
+      return '(' + (VALUE[part.slice(1, -1)] || '[\\s\\S]+?') + ')';
+    }).join('');
+    return { pattern: new RegExp('^' + source + '$'), names };
+  }
+  const SINGLE_PATTERNS = TEMPLATES.map(template => Object.assign(compile(template), { key: template }));
+  const PLURAL_PATTERNS = [];
+  for (const [one, other] of PLURAL_TEMPLATES) for (const form of [one, other]) PLURAL_PATTERNS.push(Object.assign(compile(form), { one, other }));
+
   // The language a setting asks for. "system" follows the first language
   // Windows lists for this user.
   function resolveLanguage(setting, preferred) {
@@ -88,6 +156,66 @@
       const found = arabic && own(messages, text) ? messages[text] : null;
       return fill(typeof found === 'string' ? textDigits(found) : text, params);
     }
+    // A text the main process wrote, in English, possibly with values in it:
+    // a fixed text, one of the patterns above, a name followed by ": " and a
+    // known text, several known sentences, or several lines (each line that is
+    // known is translated; the others, such as notes from a source page, are
+    // kept). Anything else is shown as it came. English is never changed.
+    function localText(text) {
+      if (!arabic || typeof text !== 'string') return text;
+      const whole = known(text, 0);
+      if (whole !== null) return whole;
+      if (text.includes('\n')) return text.split('\n').map(line => { const local = known(line, 0); return local === null ? line : local; }).join('\n');
+      const sentences = text.split(/(?<=[.!?\u2026])\s+(?=[A-Z0-9])/);
+      if (sentences.length > 1 && sentences.length <= 12) {
+        const parts = knownSentences(sentences, 0, new Map());
+        if (parts) return parts.join(' ');
+      }
+      return text;
+    }
+    // Known texts that together make up the sentences, longest first: a
+    // known text may itself be several sentences.
+    function knownSentences(sentences, from, tried) {
+      if (from === sentences.length) return [];
+      if (tried.has(from)) return tried.get(from);
+      let found = null;
+      for (let to = sentences.length; to > from && !found; to--) {
+        const local = known(sentences.slice(from, to).join(' '), 0);
+        const rest = local === null ? null : knownSentences(sentences, to, tried);
+        if (rest) found = [local, ...rest];
+      }
+      tried.set(from, found);
+      return found;
+    }
+    function known(text, depth) {
+      if (own(messages, text) && typeof messages[text] === 'string') return t(text);
+      for (const item of SINGLE_PATTERNS) {
+        const match = item.pattern.exec(text);
+        if (match) return t(item.key, values(item, match, depth));
+      }
+      for (const item of PLURAL_PATTERNS) {
+        const match = item.pattern.exec(text);
+        if (match) { const found = values(item, match, depth); return tn(Number(found.n), item.one, item.other, found); }
+      }
+      // A file, archive or game name, then ": " and a known text.
+      if (depth < 2) {
+        for (let at = text.indexOf(': '); at > 0; at = text.indexOf(': ', at + 1)) {
+          const rest = known(text.slice(at + 2), depth + 1);
+          if (rest !== null) return ISOLATE_START + text.slice(0, at) + ISOLATE_END + ': ' + rest;
+        }
+      }
+      return null;
+    }
+    function values(item, match, depth) {
+      const found = {};
+      item.names.forEach((name, index) => {
+        const value = match[index + 1];
+        if (name === 'chain') found.chain = '\u200f' + value.split(' \u2192 ').map(host => ISOLATE_START + host + ISOLATE_END).join(' \u2190 ');
+        else if (TRANSLATED.has(name)) { const local = depth < 2 ? known(value, depth + 1) : null; found[name] = local === null ? value : local; }
+        else found[name] = value;
+      });
+      return found;
+    }
     // Translates a text that depends on a count. English has two forms; Arabic
     // has six, kept under the English "other" form. The count is {n}.
     function tn(count, one, other, params) {
@@ -121,10 +249,10 @@
       language, arabic, direction: arabic ? 'rtl' : 'ltr', digitStyle,
       // For the number and date formats of the platform.
       locale: arabic ? 'ar-IQ-u-nu-' + digitStyle : 'en-US',
-      t, tn, digits, applyTo,
+      t, tn, digits, applyTo, localText,
       has: text => own(messages, text)
     });
   }
 
-  return Object.freeze({ LANGUAGES, SETTINGS, DIGITS, PLURAL_FORMS, resolveLanguage, cleanMessages, createTranslator });
+  return Object.freeze({ LANGUAGES, SETTINGS, DIGITS, PLURAL_FORMS, TEMPLATES, PLURAL_TEMPLATES, resolveLanguage, cleanMessages, createTranslator });
 });

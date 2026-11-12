@@ -65,17 +65,23 @@ test('browser requests must match an exact shape',()=>{
 test('extension manifests request only what the features need',()=>{
   const chrome=setup.extensionManifest('chromium','0.5.0'),firefox=setup.extensionManifest('firefox','0.5.0');
   assert.equal(chrome.manifest_version,3);assert.equal(chrome.key,protocol.CHROMIUM_EXTENSION_KEY);assert.equal(chrome.background.service_worker,'background.js');
-  assert.deepEqual(firefox.background,{scripts:['policy.js','background.js']});
+  assert.deepEqual(firefox.background,{scripts:['policy.js','text.js','background.js']});
   assert.equal(firefox.browser_specific_settings.gecko.id,protocol.FIREFOX_EXTENSION_ID);assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions,{required:['browsingActivity','websiteContent']},'addresses, and the names a Nexus Mods page showed');
   for(const manifest of [chrome,firefox]){
     assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
     // The two page scripts, top frame only: the download button in YouTube's
     // player, and the reader that notes which mod a Nexus Mods page is about.
     assert.deepEqual(manifest.content_scripts,[
-      {matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false},
+      {matches:['https://www.youtube.com/*'],js:['policy.js','text.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false},
       {matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false}]);
     for(const script of manifest.content_scripts)for(const file of [...script.js,...(script.css||[])])assert.ok(setup.EXTENSION_FILES.includes(file),file);
-    assert.ok(manifest.description.length<=132,'browsers cut a longer description short');assert.match(manifest.description,/YouTube and Nexus Mods/);
+    // The description comes from the extension's language files, in English and Arabic.
+    assert.equal(manifest.description,'__MSG_extDescription__');assert.equal(manifest.default_locale,'en');
+    for(const language of ['en','ar']){
+      const file=`_locales/${language}/messages.json`;assert.ok(setup.EXTENSION_FILES.includes(file),file);
+      const text=JSON.parse(fs.readFileSync(path.join(__dirname,'../src/browser-extension',file),'utf8')).extDescription.message;
+      assert.ok(text.length<=132,'browsers cut a longer description short');assert.match(text,/YouTube/);assert.match(text,/Nexus Mods/);
+    }
     assert.equal(manifest.externally_connectable,undefined);assert.equal(manifest.web_accessible_resources,undefined);
     assert.ok(!manifest.permissions.some(permission=>/cookies|tabs|history|scripting|webRequest|<all_urls>|\*/.test(permission)),manifest.permissions.join());
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
@@ -153,7 +159,8 @@ function bridgeFixture(t,options={}){
     inspect:options.inspect||(async(url,{lookupHost,referer})=>({status:'ready',url,sourceUrl:url,filename:new URL(url).pathname.split('/').pop()||'file',size:10,chain:[{url,host:new URL(url).hostname,listed:lookupHost(new URL(url).hostname)}],sniffed:'zip',referer})),
     resolveProvider:options.resolveProvider||null,virusTotal:options.virusTotal||null,now:options.now||Date.now,
     queueDownload:async entry=>{events.queued.push(entry);return options.queueResult||{added:1};},openExternal:async url=>{events.opened.push(url);},
-    reveal:()=>{events.revealed++;},notify:note=>events.notes.push(note),setReputation:(id,value)=>events.reputation.push([id,value])});
+    reveal:()=>{events.revealed++;},notify:note=>events.notes.push(note),setReputation:(id,value)=>events.reputation.push([id,value]),
+    ...(options.language?{language:options.language}:{}),...(options.localText?{localText:options.localText}:{})});
   t.after(()=>bridge.stop());
   return {bridge,dir,events};
 }
@@ -177,7 +184,7 @@ test('the bridge answers only connections that present this session’s token an
   const endpoint=JSON.parse(fs.readFileSync(path.join(dir,'endpoint.json'),'utf8'));
   assert.equal(endpoint.schema,1);assert.match(endpoint.pipe,/^ravenshelf-[a-f0-9]{32}$/);assert.match(endpoint.token,/^[a-f0-9]{64}$/);
   const hello=await ask(dir,{type:'hello',extensionVersion:'0.5.0',browser:'chromium'});
-  assert.deepEqual(hello,{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v1',total:3}});
+  assert.deepEqual(hello,{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v1',total:3},language:'en',digits:'latn'});
   assert.equal(bridge.snapshot().contact.browser,'chromium');
   assert.equal((await ask(dir,{type:'hello',extensionVersion:'0.5.0',browser:'firefox'},{origin:FIREFOX})).ok,true);
   assert.equal(bridge.snapshot().contact.browser,'firefox');
@@ -448,4 +455,21 @@ test('the name the review shows is the name the queue then saves the file under'
   assert.equal(warned,4,'setup.exe, the long .exe, browser.exe and address.scr were shown with their warning');
   for(let i=0;i<600&&manager.running.size;i++)await new Promise(resolve=>setTimeout(resolve,5));
   assert.deepEqual(fs.readdirSync(path.join(root,'downloads')),['Browser downloads'],'nothing was written beside the folder');
+});
+
+test('the extension is told the app language, and block reasons come in that language',async t=>{
+  const {bridge,dir}=bridgeFixture(t,{language:()=>({language:'ar',digits:'arab'}),localText:text=>text==='It failed Ravenshelf\u2019s safety checks.'||/is on Ravenshelf/.test(text)?'AR:'+text:text});
+  await bridge.start();
+  const hello=await ask(dir,{type:'hello',extensionVersion:'0.5.0',browser:'chromium'});
+  assert.equal(hello.language,'ar');assert.equal(hello.digits,'arab');
+  const blocked=await ask(dir,{type:'send',kind:'link',url:'https://bad.example/file.zip'});
+  assert.equal(blocked.action,'block');assert.match(blocked.reason,/^AR:bad\.example is on Ravenshelf/);
+  // Only the two known values ever leave the app, whatever the setting says.
+  for(const [given,expected] of [[{language:'fr',digits:'roman'},{language:'en',digits:'latn'}],[null,{language:'en',digits:'latn'}],['x',{language:'en',digits:'latn'}]]){
+    bridge.language=()=>given;assert.deepEqual(bridge.appLanguage(),expected);
+  }
+  bridge.language=()=>{throw new Error('no');};assert.deepEqual(bridge.appLanguage(),{language:'en',digits:'latn'});
+  // A failing translation keeps the English reason.
+  bridge.localText=()=>{throw new Error('no');};assert.equal(bridge.localReason('Plain reason.'),'Plain reason.');
+  bridge.localText=()=>'';assert.equal(bridge.localReason('Plain reason.'),'Plain reason.');
 });

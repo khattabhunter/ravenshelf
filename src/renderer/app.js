@@ -120,21 +120,8 @@ function errorText(error) {
 }
 // Messages from the main process arrive in English. They come from a fixed
 // list (see public-errors.cjs); a few carry a status number.
-const MESSAGE_PATTERNS = [
-  [/^Host returned HTTP ([1-5]\d{2})\. Check the source link or retry\.$/, later('Host returned HTTP {status}. Check the source link or retry.')],
-  [/^The host returned HTTP ([1-5]\d{2}); open it in your browser\.$/, later('The host returned HTTP {status}; open it in your browser.')],
-  [/^FuckingFast returned HTTP ([1-5]\d{2})\. Open the protected host to complete its verification\.$/, later('FuckingFast returned HTTP {status}. Open the protected host to complete its verification.')],
-  [/^The source returned HTTP (\d{3})\. Please try again or choose another source\.$/, later('The source returned HTTP {status}. Please try again or choose another source.')],
-];
-function localMessage(text) {
-  if (!i18n.arabic || typeof text !== 'string') return text;
-  if (i18n.has(text)) return t(text);
-  for (const [pattern, english] of MESSAGE_PATTERNS) {
-    const match = pattern.exec(text);
-    if (match) return t(english, { status: Number(match[1]) });
-  }
-  return text;
-}
+// A text the main process wrote, in English, shown in the app's language.
+function localMessage(text) { return i18n.localText(text); }
 function toast(message, isError = false) {
   const node = el('div', `toast${isError ? ' error' : ''}`, message);
   node.setAttribute('role', isError ? 'alert' : 'status');
@@ -447,7 +434,7 @@ function renderGameDetails(game) {
   panel.append(results); body.append(panel);
   const installation = el('details', 'installation-section');
   installation.append(el('summary', '', t('Installation notes')));
-  installation.append(el('div', 'installation-text', game.installation || t('Keep all parts of the same repack in one folder. Review the source page for its extraction, verification, language, disk-space, and installation requirements. Ravenshelf does not automatically run downloaded files.')));
+  installation.append(el('div', 'installation-text', localMessage(game.installation) || t('Keep all parts of the same repack in one folder. Review the source page for its extraction, verification, language, disk-space, and installation requirements. Ravenshelf does not automatically run downloaded files.')));
   installation.append(el('p', 'host-helper', t('Link availability does not verify the contents of an installer. Ravenshelf does not run downloads or change Windows security settings.')));
   body.append(installation);
   $('#detail-content').replaceChildren(header, body);
@@ -788,7 +775,7 @@ async function loadGameResources(game,container){
   }catch(error){container.append(el('p','host-helper',t('Guide links unavailable: {reason}',{reason:errorText(error)})));}
 }
 function installEvidence(value){
-  if(typeof value==='string')return value;
+  if(typeof value==='string')return localMessage(value);
   if(Array.isArray(value))return value.map(installEvidence).filter(Boolean).join('\n');
   if(value&&typeof value==='object')return [value.source||value.type||value.label,value.path||value.file,value.detail||value.value].filter(x=>typeof x==='string').join(' · ');
   return '';
@@ -1516,7 +1503,7 @@ function modLine(item) {
   // The folder's name comes from the app, which is what names the folder. It
   // can hold words from the page, so it stands apart as a path, and nothing of
   // Ravenshelf's own follows it.
-  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' ' + t('Ravenshelf saves it in your download folder, in:') + ' '), el('bdi', 'capture-folder', item.modFolder));
+  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' ' + t('Ravenshelf saves it in your download folder, in:') + ' '), el('bdi', 'capture-folder', localMessage(item.modFolder)));
   return line;
 }
 function captureCard(item) {

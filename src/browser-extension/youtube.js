@@ -8,7 +8,8 @@
   'use strict';
   const api = typeof browser !== 'undefined' ? browser : chrome;
   const P = globalThis.RavenshelfPolicy;
-  if (!P || window.top !== window || location.hostname !== 'www.youtube.com') return;
+  const T = globalThis.RavenshelfText;
+  if (!P || !T || window.top !== window || location.hostname !== 'www.youtube.com') return;
   const SVG = 'http://www.w3.org/2000/svg';
   const LABEL = 'Download with Ravenshelf';
   const MIN_PLAYER_WIDTH = 480;
@@ -22,6 +23,10 @@
   let toastTimer = null;
   let sending = false;
   let resizeWatch = null;
+  // Ravenshelf's own parts of the player speak the app's language. Only they
+  // get its language and direction; YouTube's page is left as it is.
+  let tr = T.create('en');
+  function speak(node) { node.lang = tr.language; node.dir = tr.dir; return node; }
 
   function make(tag, className, text) {
     const node = document.createElement(tag);
@@ -61,7 +66,7 @@
   function makeButton() {
     const node = make('button', 'ytp-button ravenshelf-ytp-button');
     node.type = 'button';
-    node.setAttribute('aria-label', LABEL);
+    node.setAttribute('aria-label', tr.t(LABEL));
     node.setAttribute('aria-haspopup', 'menu');
     node.setAttribute('aria-expanded', 'false');
     node.append(icon());
@@ -124,7 +129,7 @@
   // ---- tooltip ----
   function showTip() {
     if (!button || !player || (menu && !menu.hidden)) return;
-    if (!tip) { tip = make('div', 'ravenshelf-yt-tip', LABEL); tip.setAttribute('role', 'tooltip'); }
+    if (!tip) { tip = speak(make('div', 'ravenshelf-yt-tip', tr.t(LABEL))); tip.setAttribute('role', 'tooltip'); }
     if (tip.parentNode !== player) player.append(tip);
     const area = player.getBoundingClientRect(), target = button.getBoundingClientRect();
     tip.hidden = false;
@@ -137,21 +142,21 @@
 
   // ---- the quality menu ----
   function buildMenu() {
-    const node = make('div', 'ravenshelf-yt-menu');
+    const node = speak(make('div', 'ravenshelf-yt-menu'));
     node.setAttribute('role', 'menu');
-    node.setAttribute('aria-label', LABEL);
+    node.setAttribute('aria-label', tr.t(LABEL));
     node.hidden = true;
     const head = make('div', 'ravenshelf-yt-head');
-    head.append(make('span', 'ravenshelf-yt-mark', 'R'), make('span', 'ravenshelf-yt-title', LABEL));
+    head.append(make('span', 'ravenshelf-yt-mark', 'R'), make('span', 'ravenshelf-yt-title', tr.t(LABEL)));
     node.append(head);
     for (const [group, title] of [['video', 'Video'], ['audio', 'Audio only']]) {
-      node.append(make('div', 'ravenshelf-yt-section', title));
+      node.append(make('div', 'ravenshelf-yt-section', tr.t(title)));
       for (const choice of P.PLAYER_CHOICES.filter(item => item.group === group)) {
         const item = make('button', 'ravenshelf-yt-item');
         item.type = 'button';
         item.setAttribute('role', 'menuitem');
         item.dataset.quality = choice.id;
-        item.append(make('span', 'ravenshelf-yt-label', choice.label), make('span', 'ravenshelf-yt-hint', choice.hint));
+        item.append(make('span', 'ravenshelf-yt-label', tr.t(choice.label)), make('span', 'ravenshelf-yt-hint', tr.t(choice.hint)));
         item.addEventListener('click', event => {
           event.preventDefault();
           event.stopPropagation();
@@ -161,7 +166,7 @@
         node.append(item);
       }
     }
-    node.append(make('div', 'ravenshelf-yt-foot', 'Saved to Ravenshelf › YouTube'));
+    node.append(make('div', 'ravenshelf-yt-foot', tr.t('Saved to Ravenshelf › YouTube')));
     contain(node, ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'keyup', 'wheel', 'contextmenu']);
     node.addEventListener('keydown', event => {
       event.stopPropagation();
@@ -214,7 +219,8 @@
     if (!player) return;
     if (!toast) { toast = make('div', 'ravenshelf-yt-toast'); toast.setAttribute('role', 'status'); toast.setAttribute('aria-live', 'polite'); }
     if (toast.parentNode !== player) player.append(toast);
-    toast.textContent = text;
+    speak(toast);
+    toast.textContent = tr.t(text);
     toast.className = `ravenshelf-yt-toast ${tone || ''} ravenshelf-visible`.trim();
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { if (toast) toast.classList.remove('ravenshelf-visible'); }, TOAST_MS);
@@ -247,10 +253,19 @@
   // YouTube rebuilds parts of the player while it plays (ads, chapters); a
   // light check every second and a half puts the button back if it goes.
   setInterval(() => { if (document.visibilityState === 'visible' && (!button || !button.isConnected || !watchPage())) schedule(); }, 1500);
+  // A new language: the menu and tooltip are made again when next shown.
+  function setLanguage(saved) {
+    tr = T.create(T.pick(saved && saved.appLanguage, api.i18n && api.i18n.getUILanguage ? api.i18n.getUILanguage() : ''), saved && saved.appDigits);
+    closeMenu(false); hideTip();
+    if (menu) { menu.remove(); menu = null; }
+    if (tip) { tip.remove(); tip = null; }
+    if (button) button.setAttribute('aria-label', tr.t(LABEL));
+  }
   api.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.youtube) { enabled = changes.youtube.newValue !== false; schedule(); }
+    if (area === 'local' && (changes.appLanguage || changes.appDigits)) Promise.resolve(api.storage.local.get(['appLanguage', 'appDigits'])).then(setLanguage, () => {});
   });
-  Promise.resolve(api.storage.local.get({ youtube: true }))
-    .then(saved => { enabled = !saved || saved.youtube !== false; }, () => {})
+  Promise.resolve(api.storage.local.get({ youtube: true, appLanguage: '', appDigits: '' }))
+    .then(saved => { enabled = !saved || saved.youtube !== false; setLanguage(saved); }, () => {})
     .then(schedule);
 })();
