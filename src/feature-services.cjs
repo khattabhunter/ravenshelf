@@ -1,4 +1,5 @@
 'use strict';
+const fs=require('node:fs');
 const path=require('node:path');
 const {spawn}=require('node:child_process');
 const {AppUpdater}=require('./app-updater.cjs');
@@ -10,6 +11,7 @@ const {createIntegrityVerifier}=require('./integrity-verifier.cjs');
 const {analyzeArchiveSet}=require('./archive-set-validation.cjs');
 const {normalizeBandwidthLimit}=require('./bandwidth-limiter.cjs');
 const {normalizeSchedule}=require('./download-schedule.cjs');
+const {compareRequirements}=require('./compatibility.cjs');
 const BOOLEAN_SETTINGS=['autoUpdateEnabled','clipboardWatchEnabled','notificationsEnabled','adaptiveThemeEnabled'];
 function featureSettings(patch){
   const changes={};
@@ -18,7 +20,22 @@ function featureSettings(patch){
   if(patch?.downloadSchedule!==undefined)changes.downloadSchedule=normalizeSchedule(patch.downloadSchedule);
   return changes;
 }
-function createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register,publish,providers,checked,isTest=false}){
+// Free space on the drive of a folder, in bytes, or null. A folder that does
+// not exist yet is measured at its nearest existing parent.
+async function freeSpace(folder,{statfs=fs.promises.statfs}={}){
+  if(typeof statfs!=='function'||typeof folder!=='string'||!folder)return null;
+  let current=path.resolve(folder);
+  for(let i=0;i<64;i++){
+    try{const stats=await statfs(current);const free=Number(stats.bavail)*Number(stats.bsize);return Number.isSafeInteger(free)&&free>=0?free:null;}
+    catch(error){if(error?.code!=='ENOENT')return null;}
+    const parent=path.dirname(current);if(parent===current)return null;current=parent;
+  }
+  return null;
+}
+// The same drive, by the root of each path (the drive letter on Windows).
+const SPACE_TIMEOUT_MS=4000;
+const driveOf=value=>{try{return path.parse(path.resolve(String(value))).root.toLowerCase();}catch{return '';}};
+function createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register,publish,providers,checked,hardware=null,statfs,isTest=false}){
   manager.settings={autoUpdateEnabled:true,clipboardWatchEnabled:false,notificationsEnabled:true,adaptiveThemeEnabled:true,...manager.settings};
   const cleanup=createDownloadCleanup({getDownloads:()=>manager.downloads,getDownloadDir:()=>manager.settings.downloadDir});
   const metadata=createGameMetadata();
@@ -48,12 +65,48 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
   register('checkForUpdates',()=>updater.check());
   register('downloadUpdate',()=>updater.download());
   register('installUpdate',()=>{assertIdle();const update=updater.snapshot();if(update.phase!=='ready'||update.installApproved!==true)throw new Error('Choose Download and install, and wait for the update to be verified first.');restartOnExit=true;app.quit();return {restarting:true};});
-  register('getGameMetadata',async value=>{
+  async function gameDetails(value){
     if(!value||typeof value.url!=='string')return metadata({});
     let game;try{game=await providers.getGame(value.url);}catch{return {source:null,requirements:{minimum:'',recommended:''},reviews:null,genres:[],message:'Game details could not be loaded. Try again later.'};}
     const result=await metadata(game);
     if(!result.requirements.minimum&&!result.requirements.recommended&&game.systemRequirements)result.requirements={minimum:String(game.systemRequirements).slice(0,12000),recommended:''};
     return result;
+  }
+  register('getGameMetadata',gameDetails);
+  // Can You Run It: the game's requirement list next to this PC's specs. The
+  // specs are read on this PC, only when asked, and the answer is not saved.
+  // refresh:true (Compare again) reads this PC again, as Check again does.
+  register('checkGame',async value=>{
+    if(!value||typeof value.url!=='string'||value.url.length>2000)throw new Error('Choose a game first.');
+    const details=await gameDetails({url:value.url});
+    let specs=null;
+    if(hardware&&typeof hardware.get==='function'){try{specs=await hardware.get({refresh:value.refresh===true});}catch{specs=null;}}
+    // A message without lists: the details could not be loaded this time.
+    return compareRequirements(details?.requirements,specs,{unavailable:Boolean(details?.message)});
+  });
+  // Room for new downloads: free space on the download folder's drive, and
+  // what downloads already waiting there still need.
+  // A drive that does not answer (an offline network share, say) gives no
+  // figure after four seconds; a check still running is shared.
+  let spaceTask=null;
+  function measure(folder){
+    if(spaceTask?.folder===folder)return spaceTask.promise;
+    let timer;
+    const promise=Promise.race([freeSpace(folder,{statfs}),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),SPACE_TIMEOUT_MS);timer.unref?.();})])
+      .finally(()=>{clearTimeout(timer);if(spaceTask?.promise===promise)spaceTask=null;});
+    spaceTask={folder,promise};
+    return promise;
+  }
+  register('getDownloadSpace',async()=>{
+    const folder=manager.settings.downloadDir,drive=driveOf(folder);
+    let pendingBytes=0;
+    // A download that failed can be retried, so what it still needs counts too.
+    for(const item of manager.downloads){
+      if(!['queued','downloading','paused','error'].includes(item.status)||driveOf(item.folder||folder)!==drive)continue;
+      const total=Number(item.total),received=Number(item.received)||0;
+      if(Number.isSafeInteger(total))pendingBytes+=Math.max(0,total-Math.max(0,received));
+    }
+    return {freeBytes:await measure(folder),pendingBytes};
   });
   register('getStorageSummary',()=>{
     if(closing)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
@@ -122,4 +175,4 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
     }
   };
 }
-module.exports={createFeatureServices,featureSettings};
+module.exports={createFeatureServices,featureSettings,freeSpace};

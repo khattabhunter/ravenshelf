@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.8.0 for Windows, a preview release. See the [0.8.0 release notes](RELEASE-0.8.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
+This guide describes Ravenshelf 0.9.0 for Windows, a preview release. See the [0.9.0 release notes](RELEASE-0.9.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.8.0-Windows.exe` from the [v0.8.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.8.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.9.0-Windows.exe` from the [v0.9.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.9.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, close its window before opening the new executable. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
@@ -62,7 +62,20 @@ The **A few you might like** suggestions use available genre information from sa
 
 Click a game cover or screenshot to enlarge it. Use the left/right arrow keys or on-screen buttons to browse, and **Escape** to close and return to the image button. **Settings → Match accents to game artwork** controls the optional cover-derived color accents.
 
-Game details show system requirements when the source provides them. Where a verified Steam app ID is available, Ravenshelf requests Steam requirements and recommendation counts. The displayed stars are `positive recommendations ÷ total reviews × 5`, rounded to one decimal, beside the percentage and review count. They are not literal five-star reviews or a Ravenshelf editorial score. Missing data is labeled unavailable; requirements are not a test of your laptop's compatibility. Use **View Steam source** to inspect the linked listing. The review data comes from [Steam's documented review API](https://partner.steamgames.com/doc/webapi/IUserReviewsService#GetAppReviews).
+Game details show system requirements when the source provides them. Where a verified Steam app ID is available, Ravenshelf requests Steam requirements and recommendation counts. The displayed stars are `positive recommendations ÷ total reviews × 5`, rounded to one decimal, beside the percentage and review count. They are not literal five-star reviews or a Ravenshelf editorial score. Missing data is labeled unavailable. **Can you run it?** (below) compares the lists with this PC. Use **View Steam source** to inspect the linked listing. The review data comes from [Steam's documented review API](https://partner.steamgames.com/doc/webapi/IUserReviewsService#GetAppReviews).
+
+### Can you run it?
+
+When a game has Steam requirement lists, its details show **Can you run it?** above them. Choose **Compare with this PC**: Ravenshelf reads this PC's specs (as on the **PC specs** page, if they have not been read since starting) and sets each line it recognises in the **Minimum** and **Recommended** lists beside what this PC has: Windows, 64-bit Windows, processor, memory, graphics, graphics memory, DirectX and storage. Other lines, such as sound card, network and notes, stay in the lists below and are not compared.
+
+- **Meets** and **Below** are given only for figures: the Windows version, 64-bit Windows, memory, graphics memory, DirectX (with its feature level when the list names one, such as DirectX 12 Ultimate) and free space.
+- **Processor** and **Graphics** always say **Can’t tell** and show both names. Comparing models needs a ranking of them, and none may be included in Ravenshelf; compare the names yourself, for example on a benchmark site.
+- A line also says **Can’t tell** when the list gives no figure, or when Windows gives no figure for this PC (for example on a PC where only the basic details could be read, where **64-bit Windows** cannot be told). It does when the line can be read two ways: figures in one line that disagree ("100 GB (150 GB during installation)"), a Windows line that rules versions out ("Windows 7 is not supported"), or one that asks for an update of the version this PC has ("Windows 10 version 2004", "Windows 7 SP1"). **Memory** does when Windows reports only the memory it can use and that is less than the figure (installed memory is what lists mean). **Graphics memory** does for built-in graphics, which use part of the PC's memory, and when less memory is found on a device Windows does not call a card. A graphics line about built-in graphics, and sizes in it said to be system memory or a speed, give no figure. **DirectX** does for "DirectX 12" when the card supports DirectX 12 at an older feature level. **Graphics memory** and **DirectX** do for a graphics device that Windows reports a problem with. **64-bit Windows** does on Windows on ARM, which runs many 64-bit games but not every one.
+- **Graphics memory** within a twentieth of the figure counts as meeting it, because Windows reports a "6 GB" card as a little less. When the list names several cards, the smallest graphics memory it prints is the figure.
+- **Free space** compares the game's storage line with the fixed drive that has the most room, which need not be the drive of your download folder. Removable drives are left out.
+- Each list gets a sentence: it meets what can be checked, it is below in named items, or it could not be checked. A "Recommended" heading inside the minimum list ends that list.
+
+After this PC's specs have been read once, later games are compared as soon as you open them. **Compare again** reads this PC again, as **Check again** on **PC specs** does, and compares once more. The comparison is made on this PC from the game's own list and the specs Ravenshelf keeps in memory; nothing is sent anywhere or saved. **Meets** means the figures Ravenshelf can read reach the list. It is not a promise of how well a game runs, which also depends on the processor, the graphics card and the game itself.
 
 ## Download a file set
 
@@ -70,7 +83,7 @@ Game details show system requirements when the source provides them. Where a ver
 2. Choose **Check download links**. Ravenshelf expands supported paste links and checks the selected files.
 3. Read each result. **Ready** means a file response was found. **Needs a browser step** means the host requires interaction. **Not found** means the host explicitly reported a missing or deleted file. Other failures remain **Not verified** with an explanation.
 4. Read the archive-set warnings. Recognizable numbered archives are checked for earlier/internal gaps, duplicate part numbers and inconsistent known sizes among nonfinal parts. Errors require a fresh **Queue these ready files anyway** confirmation. An unknown final part is a warning: a gap-free selection does not prove the whole archive is present.
-5. Use **Download all** when the required set is ready. If only some links are ready, the button clearly names how many files it can queue. Only those ready files enter the queue. If the archive check itself fails, check the links again first.
+5. Use **Download all** when the required set is ready. If the files need more room than the drive of your download folder has free (less what downloads already waiting there still need), Ravenshelf says so, and the button waits for a tick in **Queue them anyway**; free some space or choose another download folder in **Settings** first if you can. Files of unknown size, and files already in the queue, are not counted; downloads that failed count with what they still need. A check that cannot be made says **Free space could not be checked.** and holds the button for four seconds at most. The check is made when the results appear: after choosing another folder, choose **Check links again**. It covers file sets queued here; browser, YouTube and Nexus Mods downloads are not checked. If only some links are ready, the button clearly names how many files it can queue. Only those ready files enter the queue. If the archive check itself fails, check the links again first.
 6. Follow progress in **Downloads**. Use pause, resume, retry, cancel or the completed file's folder button as needed. If a connection drops or times out, Ravenshelf retries by itself up to twice in a row before showing the error.
 
 Check the source notes for required parts, optional languages, updates and separate replacement archives. Before extracting a multipart archive, make sure all required parts are present. Ravenshelf does not automatically extract files, test archive contents or run installers.
@@ -294,7 +307,7 @@ The scan is bounded and can miss installations. It does not run discovered progr
 
 ## See your PC's specs
 
-Choose **PC specs** to see what is inside this PC: the processor (cores, threads and clock speed), each graphics adapter, the memory, the drives with their free space, the display and the Windows version. Ravenshelf asks Windows the first time you open the page after starting, which usually takes a few seconds; it gives up after 20 seconds. Until you close Ravenshelf, opening the page again shows that answer. **Check again** reads everything afresh.
+Choose **PC specs** to see what is inside this PC: the processor (cores, threads and clock speed), each graphics adapter, the memory, the drives with their free space, the display and the Windows version. Ravenshelf asks Windows the first time you open the page (or choose **Compare with this PC** in a game's details) after starting, which usually takes a few seconds; it gives up after 20 seconds. Until you close Ravenshelf, opening the page again shows that answer. **Check again** reads everything afresh.
 
 - With more than one graphics adapter, **Main** marks the one games normally use: one that works before one with a problem, then a separate graphics card, then the one with the most memory of its own.
 - **Graphics memory** is memory of the adapter's own, read from what DirectX recorded or, if that is missing, from the graphics driver or Windows, so cards with more than 4 GB show their real size. Adapters recognised as built-in graphics show **Shares system memory** instead. When Windows gives no figure that can be trusted, the page says **Not reported by Windows** rather than guessing.
@@ -304,7 +317,7 @@ Choose **PC specs** to see what is inside this PC: the processor (cores, threads
 - A drive is marked **low on space** when less than a tenth of it, and less than 50 GB, is free.
 - If no graphics driver works at all, the page says Windows is using its basic display driver. An adapter that Windows reports a problem with is listed with a warning. A second adapter on the basic display driver is not listed while another one works, and the page says so. Install or repair the graphics driver, then check again.
 
-Nothing on this page leaves your PC. It is not saved to a file, not sent to any site and not shared with the browser extension, and Ravenshelf never asks Windows for serial numbers, the computer's name or user names. This version shows the specs only; it does not compare them with a game's requirements.
+Nothing on this page leaves your PC. It is not saved to a file, not sent to any site and not shared with the browser extension, and Ravenshelf never asks Windows for serial numbers, the computer's name or user names. A game's details can compare these specs with its requirement lists; see [Can you run it?](#can-you-run-it).
 
 ## Watch gameplay and open guides
 

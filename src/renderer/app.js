@@ -523,6 +523,15 @@ function renderCheckedLinks(container, links, warnings, title, preflight = null)
     issues.append(confirmation); wrapper.append(issues);
   }
   for (const warning of (preflight?.warnings || []).slice(0, 8)) wrapper.append(el('p', 'warning-note', localMessage(warning)));
+  // Room on the drive: checked before anything is queued. The button waits
+  // for the answer (a few seconds at most) and, when the files will not fit,
+  // for a tick in the box.
+  // Files already in the queue are not added again, so they are not counted.
+  const queued = new Set(state.downloads.filter(item => item && item.status !== 'cancelled').map(item => item.sourceUrl).filter(Boolean));
+  const spaceNeed = ready.reduce((sum, link) => sum + (queued.has(link.sourceUrl || link.url) ? 0 : (Number(link.size) || 0)), 0);
+  const space = { state: spaceNeed && typeof api?.getDownloadSpace === 'function' ? 'pending' : 'done', low: false, confirmation: null };
+  const spaceNote = el('div', 'space-check');
+  wrapper.append(spaceNote);
   if (browserSteps.length) wrapper.append(el('p', 'warning-note', t('The host needs browser verification or another browser step for some files. Use Open protected host beside an affected file to continue. This does not mean the files were deleted.')));
   if (missing.length) wrapper.append(el('p', 'warning-note', t('The host reported some files missing or deleted. Choose another mirror or check the source page for replacement links.')));
   if (unverified.length) wrapper.append(el('p', 'warning-note', t('Some links could not be verified. Read the message beside each file, then check again or choose another mirror.')));
@@ -550,9 +559,33 @@ function renderCheckedLinks(container, links, warnings, title, preflight = null)
     finally { recheck.disabled = false; }
   });
   const download = button(ready.length === links.length ? tn(ready.length, 'Download all {n} file', 'Download all {n} files') : tn(ready.length, 'Download {n} ready file', 'Download {n} ready files'), 'button primary', 'download');
-  const canQueue = () => ready.length > 0 && !preflight?.unavailable && (!archiveConfirmation || archiveConfirmation.checked);
+  const canQueue = () => ready.length > 0 && !preflight?.unavailable && (!archiveConfirmation || archiveConfirmation.checked) && space.state === 'done' && (!space.low || space.confirmation?.checked === true);
   download.disabled = !canQueue();
   archiveConfirmation?.addEventListener('change', () => { download.disabled = !canQueue(); });
+  if (space.state === 'pending') {
+    const timeout = new Promise(resolve => setTimeout(() => resolve(null), 4000));
+    Promise.race([Promise.resolve().then(() => api.getDownloadSpace()), timeout]).catch(() => null).then(answer => {
+      const free = Number(answer?.freeBytes), pending = Math.max(0, Number(answer?.pendingBytes) || 0);
+      const known = answer && answer.freeBytes !== null && Number.isFinite(free) && free >= 0;
+      // A check that could not be made is said, quietly; it does not stop anything.
+      if (!known) spaceNote.replaceChildren(el('p', 'small-text', t('Free space could not be checked.')));
+      if (known && spaceNeed > free - pending) {
+        space.low = true;
+        const box = el('div', 'warning-note space-warning'); box.setAttribute('role', 'alert');
+        const need = formatBytes(spaceNeed), room = formatBytes(free, t('{size} B', { size: 0 }));
+        box.append(el('strong', '', t('Not enough free space for these files.')));
+        box.append(el('p', '', pending ? t('They need {need}. The drive of your download folder has {free} free, and downloads already in your queue still need {pending} of it.', { need, free: room, pending: formatBytes(pending) })
+          : t('They need {need}, and the drive of your download folder has {free} free.', { need, free: room })));
+        box.append(el('p', '', t('Free some space, or choose another download folder in Settings.')));
+        const label = el('label', 'check-label'); space.confirmation = el('input'); space.confirmation.type = 'checkbox';
+        label.append(space.confirmation, el('span', '', t('Queue them anyway. I will make room before they finish.')));
+        space.confirmation.addEventListener('change', () => { download.disabled = !canQueue(); });
+        box.append(label); spaceNote.replaceChildren(box);
+      }
+      space.state = 'done';
+      download.disabled = !canQueue();
+    });
+  }
   download.addEventListener('click', async () => {
     if (!canQueue()) return;
     download.disabled = true;
@@ -1178,6 +1211,141 @@ function steamReviewSummary(reviews){
   if(!reviews||!Number.isSafeInteger(reviews.total)||reviews.total<1||!Number.isSafeInteger(reviews.positive)||reviews.positive<0||reviews.positive>reviews.total)return null;
   const ratio=reviews.positive/reviews.total;return {percent:Math.round(ratio*100),stars:Math.round(ratio*50)/10,total:reviews.total,description:typeof reviews.description==='string'?reviews.description:''};
 }
+// Can You Run It: this game's requirement list next to this PC's specs.
+// Only figures are compared; processor and graphics card models never are.
+let gameCheckReady = false;
+const CHECK_KEYS = new Set(['windows', 'bits', 'processor', 'memory', 'graphics', 'videoMemory', 'directx', 'storage']);
+const CHECK_NOTES = {
+  usable: 'Windows reported only the memory it can use.',
+  shared: 'Built-in graphics use part of the PC’s memory, so their memory is not compared.',
+  problem: 'Windows reports a problem with the graphics device.',
+  arm: 'Windows on ARM runs many 64-bit games, but not every one.',
+  'no-value': 'The list gives no figure that can be compared.',
+  unclear: 'The list can be read more than one way here, so it is not judged.',
+  update: 'The list asks for a particular update of this Windows version, which is not compared.',
+  kind: 'Windows does not say whether this graphics device is a card or built-in, so less memory is not judged.',
+  level: 'This graphics device supports DirectX 12 at an older feature level; whether the game needs a newer one is not known.',
+};
+const WINDOWS_NAMES = new Map([[5.1, 'Windows XP'], [6, 'Windows Vista'], [7, 'Windows 7'], [8, 'Windows 8'], [8.1, 'Windows 8.1'], [10, 'Windows 10'], [11, 'Windows 11']]);
+function checkLabel(key) {
+  return { windows: () => t('Windows'), bits: () => t('64-bit Windows'), processor: () => t('Processor'), memory: () => t('Memory'), graphics: () => t('Graphics'), videoMemory: () => t('Graphics memory'), directx: () => 'DirectX', storage: () => t('Free space') }[key]?.() || '';
+}
+function verdictLabel(verdict) {
+  return verdict === 'meets' ? t('Meets') : verdict === 'below' ? t('Below') : t('Can’t tell');
+}
+function checkNeeds(row) {
+  // A figure read from the graphics card line is shown as that figure.
+  if (row.key === 'videoMemory' && row.derived && Number(row.need) > 0) return formatMemory(row.need);
+  return typeof row.needs === 'string' ? row.needs : '';
+}
+function checkHave(row) {
+  const have = row.have;
+  if (row.key === 'windows') return WINDOWS_NAMES.get(have) || '';
+  if (row.key === 'bits') return have === '64' ? t('64-bit') : have === '32' ? t('32-bit') : have === 'arm' ? 'ARM' : '';
+  if (row.key === 'processor' || row.key === 'graphics') return typeof row.haveText === 'string' ? row.haveText : '';
+  if (row.key === 'memory' || row.key === 'videoMemory') return Number(have) > 0 ? formatMemory(have, row.note === 'usable') : '';
+  if (row.key === 'directx') {
+    if (!have || !Number.isInteger(have.version)) return '';
+    return `DirectX ${have.version}` + (Number.isFinite(have.level) ? ' · ' + t('feature level {version}', { version: have.level.toFixed(1) }) : '');
+  }
+  if (row.key === 'storage') return Number(have) >= 0 && have !== null && /^[A-Z]$/.test(String(row.drive)) ? t('{free} free on {drive}', { free: formatMemory(have, true) || t('{size} B', { size: 0 }), drive: `${row.drive}:` }) : '';
+  return '';
+}
+function joinLabels(labels) {
+  try { return new Intl.ListFormat(i18n.arabic ? 'ar' : 'en', { style: 'long', type: 'conjunction' }).format(labels); }
+  catch { return labels.join(', '); }
+}
+function tierSummary(tier, result) {
+  const minimum = tier === 'minimum';
+  if (result.verdict === 'below') {
+    const items = joinLabels(result.rows.filter(row => row.verdict === 'below').map(row => checkLabel(row.key)));
+    return minimum ? t('This PC is below the minimum requirements in: {items}.', { items }) : t('This PC is below the recommended requirements in: {items}.', { items });
+  }
+  if (result.verdict === 'meets') return minimum ? t('This PC meets the minimum requirements that can be checked.') : t('This PC meets the recommended requirements that can be checked.');
+  return minimum ? t('The minimum requirements could not be checked.') : t('The recommended requirements could not be checked.');
+}
+function renderGameCheck(result, box) {
+  const parts = [];
+  const tiers = result?.tiers && typeof result.tiers === 'object' ? result.tiers : {};
+  const shown = ['minimum', 'recommended'].map(tier => [tier, Array.isArray(tiers[tier]?.rows) ? tiers[tier].rows.filter(row => row && CHECK_KEYS.has(row.key)) : []]).filter(([, rows]) => rows.length);
+  if (!shown.length) {
+    const status = result?.status;
+    parts.push(el('p', 'small-text', status === 'nothing-to-compare' ? t('None of the lines in this game’s list can be compared automatically.')
+      : status === 'details-unavailable' ? t('This game’s requirement list could not be loaded. Try again later.') : t('This game has no requirement list to compare.')));
+    box.replaceChildren(...parts);
+    return;
+  }
+  for (const [tier, rows] of shown) {
+    // The verdict comes from the rows shown, not from what the answer says.
+    const verdicts = rows.map(row => ['meets', 'below'].includes(row.verdict) ? row.verdict : 'unknown');
+    const verdict = verdicts.includes('below') ? 'below' : verdicts.includes('meets') ? 'meets' : 'unknown';
+    const found = { rows };
+    const section = el('section', `fit-tier ${verdict}`);
+    const heading = el('div', 'fit-tier-heading');
+    heading.append(el('h5', '', tier === 'minimum' ? t('Minimum') : t('Recommended')), el('span', `fit-verdict ${verdict}`, verdictLabel(verdict)));
+    section.append(heading, el('p', 'fit-summary', tierSummary(tier, { ...found, verdict })));
+    const table = el('table', 'fit-table'), head = el('tr');
+    for (const name of [t('Item'), t('This game needs'), t('This PC'), t('Result')]) { const cell = el('th', '', name); cell.scope = 'col'; head.append(cell); }
+    const thead = el('thead'); thead.append(head);
+    const body = el('tbody');
+    for (const row of rows) {
+      const rowVerdict = ['meets', 'below'].includes(row.verdict) ? row.verdict : 'unknown';
+      const line = el('tr');
+      const label = el('th', '', checkLabel(row.key)); label.scope = 'row';
+      // The game's own words and this PC's names keep their own direction.
+      const needs = el('td', 'fit-needs', checkNeeds(row)); needs.dir = 'auto';
+      const have = el('td', 'fit-have'), haveText = checkHave(row);
+      // Names Windows gives (processor, graphics card) keep their own direction.
+      const value = el('span', '', haveText || t('Not reported')); if (haveText && (row.key === 'processor' || row.key === 'graphics')) value.dir = 'auto'; have.append(value);
+      if (Object.hasOwn(CHECK_NOTES, row.note)) have.append(el('small', 'fit-note', t(CHECK_NOTES[row.note])));
+      const outcome = el('td', ''); outcome.append(el('span', `fit-verdict ${rowVerdict}`, verdictLabel(rowVerdict)));
+      line.append(label, needs, have, outcome); body.append(line);
+    }
+    table.append(thead, body);
+    const scroller = el('div', 'fit-table-wrap'); scroller.append(table);
+    section.append(scroller); parts.push(section);
+  }
+  const notes = Array.isArray(result.notes) ? result.notes : [];
+  if (result.status === 'no-specs' || notes.includes('not-windows')) parts.push(el('p', 'warning-note', t('This PC’s specs are read on Windows only, so the lines about this PC say Can’t tell.')));
+  else if (result.status === 'partial') parts.push(el('p', 'warning-note', t('Windows did not give every detail of this PC, so some lines say Can’t tell. Compare again reads this PC again.')));
+  if (shown.some(([, rows]) => rows.some(row => row.note === 'model'))) parts.push(el('p', 'small-text', t('Processor and graphics card models are not compared: no ranking of them may be included in Ravenshelf. Compare the names yourself.')));
+  parts.push(el('p', 'small-text', t('“Meets” means the figures Ravenshelf can read reach the game’s list. It does not promise how well the game runs.')));
+  box.replaceChildren(...parts);
+}
+function gameCheckSection(game) {
+  const section = el('section', 'fit-check');
+  const heading = el('div', 'fit-check-heading');
+  heading.append(el('h4', '', t('Can you run it?')));
+  const result = el('div', 'fit-check-result'); result.setAttribute('aria-live', 'polite');
+  const run = button(t('Compare with this PC'), 'button secondary', 'chip');
+  const request = detailRequest;
+  let compared = false;
+  // Compare again reads this PC again, as Check again on PC specs does.
+  async function compare(refresh = false) {
+    run.disabled = true;
+    result.replaceChildren(busyLine(t('Comparing this game’s list with this PC…')));
+    try {
+      const answer = await api.checkGame(refresh ? { url: game.url, refresh: true } : { url: game.url });
+      if (request !== detailRequest || !section.isConnected) return;
+      if (!answer || typeof answer !== 'object') throw new Error('No answer.');
+      let drawn = false;
+      try { renderGameCheck(answer, result); drawn = true; } catch { drawn = false; }
+      if (!drawn) throw new Error('This PC could not be compared with the game. Try again.');
+      gameCheckReady = true; compared = true;
+      run.replaceChildren(icon('refresh'), el('span', '', t('Compare again')));
+    } catch (error) {
+      if (request !== detailRequest || !section.isConnected) return;
+      const message = el('p', 'inline-error', errorText(error)); message.setAttribute('role', 'alert');
+      result.replaceChildren(message);
+    } finally { run.disabled = false; }
+  }
+  run.addEventListener('click', () => compare(compared));
+  heading.append(run);
+  section.append(heading, el('p', 'small-text', t('Compares this game’s requirement list with this PC’s specs. The specs are read on this PC and never sent anywhere.')), result);
+  // Once this PC's specs have been read, later games are compared at once.
+  if (gameCheckReady || hardwareLoaded) setTimeout(() => compare(false), 0);
+  return section;
+}
 async function loadGameMetadata(game,container){
   container.replaceChildren(el('h3','detail-section-title',t('Requirements & player reviews')));
   if(typeof api?.getGameMetadata!=='function'){container.append(el('p','small-text',t('Requirements and Steam review data are not available for this game.')));return;}
@@ -1195,7 +1363,8 @@ async function loadGameMetadata(game,container){
     }else container.append(el('p','small-text',t('Steam player reviews are unavailable for this game.')));
     const requirements=el('div','requirements-grid');let count=0;
     for(const [key,label]of [['minimum',t('Minimum')],['recommended',t('Recommended')]]){const value=metadata?.requirements?.[key];if(typeof value==='string'&&value.trim()){const card=el('section','requirement-card');card.append(el('h4','',label),el('p','',value.slice(0,16000)));requirements.append(card);count++;}}
-    if(count)container.append(requirements);else container.append(el('p','small-text',t('System requirements are unavailable. Check the game’s official store page.')));
+    if(count){if(typeof api?.checkGame==='function')container.append(gameCheckSection(game));container.append(requirements);}
+    else container.append(el('p','small-text',t('System requirements are unavailable. Check the game’s official store page.')));
     if(sourceUrl)container.append(button(t('View Steam source'),'text-button','external',()=>attempt(()=>api.openExternal(sourceUrl))));
     if(metadata?.message||metadata?.error)container.append(el('p','small-text',localMessage(String(metadata.message||metadata.error).slice(0,400))));
   }catch{if(request===detailRequest){loading.textContent=t('Game requirements and review data could not be loaded. Try opening the game again.');}}

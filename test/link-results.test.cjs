@@ -88,3 +88,93 @@ test('an older host check cannot overwrite the result of a later check',async()=
   assert.equal(f.withClass('link-name')[0].textContent,'new.rar');
   assert.equal(f.button('Download all 1 file').disabled,false);
 });
+
+// Free space before queueing: sizes are those the hosts reported.
+const sized=(id,size)=>({...link(id,'ready'),size});
+test('files that do not fit on the download drive need a tick before they are queued',async()=>{
+  let batch=null,asked=0;
+  const f=fixture({getDownloadSpace:async()=>{asked++;return {freeBytes:2000,pendingBytes:0};},addDownloads:async value=>{batch=value;return {added:2};},getState:async()=>({})});
+  f.render([sized('one',1500),sized('two',1500)]);
+  const download=f.button('Download all 2 files');
+  // While the drive is checked, nothing can be queued.
+  assert.equal(download.disabled,true);
+  await settle();await settle();
+  assert.equal(asked,1);
+  const warning=f.withClass('space-warning')[0];
+  assert.ok(warning);
+  assert.equal(warning.attributes.role,'alert');
+  assert.match(warning.textContent,/Not enough free space for these files\./);
+  assert.match(warning.textContent,/They need 2\.9 KB, and the drive of your download folder has 2\.0 KB free\./);
+  assert.match(warning.textContent,/choose another download folder in Settings/);
+  assert.equal(download.disabled,true);
+  const box=f.nodes().find(node=>node.tagName==='input'&&node.type==='checkbox');
+  box.checked=true;box.events.get('change')();
+  assert.equal(download.disabled,false);
+  await download.events.get('click')();
+  assert.equal(batch.links.length,2);
+  box.checked=false;box.events.get('change')();
+  assert.equal(download.disabled,true);
+});
+test('downloads already waiting on the drive count against its free space',async()=>{
+  const f=fixture({getDownloadSpace:async()=>({freeBytes:5000,pendingBytes:4000})});
+  f.render([sized('one',3000)]);
+  await settle();await settle();
+  const warning=f.withClass('space-warning')[0];
+  assert.match(warning.textContent,/They need 2\.9 KB\. The drive of your download folder has 4\.9 KB free, and downloads already in your queue still need 3\.9 KB of it\./);
+  assert.equal(f.button('Download all 1 file').disabled,true);
+});
+test('files that fit are queued without a question',async()=>{
+  const f=fixture({getDownloadSpace:async()=>({freeBytes:10000,pendingBytes:1000})});
+  f.render([sized('one',3000),sized('two',6000)]);
+  const download=f.button('Download all 2 files');
+  assert.equal(download.disabled,true);
+  await settle();await settle();
+  assert.equal(f.withClass('space-warning').length,0);
+  assert.equal(download.disabled,false);
+});
+test('an unknown free space never blocks a download',async()=>{
+  for(const answer of [async()=>{throw new Error('Free space could not be checked.');},async()=>({freeBytes:null,pendingBytes:0}),async()=>null,async()=>({freeBytes:'lots'}),async()=>({freeBytes:-5})]){
+    const f=fixture({getDownloadSpace:answer});
+    f.render([sized('one',3000)]);
+    await settle();await settle();
+    assert.equal(f.withClass('space-warning').length,0);
+    assert.equal(f.button('Download all 1 file').disabled,false);
+  }
+  // An app without the check, and files of unknown size, are not held up.
+  const old=fixture();old.render([sized('one',3000)]);
+  assert.equal(old.button('Download all 1 file').disabled,false);
+  let asked=0;const unknown=fixture({getDownloadSpace:async()=>{asked++;return {freeBytes:0,pendingBytes:0};}});
+  unknown.render([link('one','ready')]);
+  assert.equal(unknown.button('Download all 1 file').disabled,false);
+  await settle();assert.equal(asked,0);
+});
+test('a free-space check that never answers lets the download go after a few seconds',async()=>{
+  const f=fixture({getDownloadSpace:()=>new Promise(()=>{})});
+  const delays=[];f.context.setTimeout=(fn,ms)=>{delays.push(ms);return setTimeout(fn,ms===4000?1:ms);};
+  f.render([sized('one',3000)]);
+  assert.equal(f.button('Download all 1 file').disabled,true);
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(delays.includes(4000));
+  assert.equal(f.button('Download all 1 file').disabled,false);
+});
+test('a free-space check that cannot be made is said quietly, and files already queued are not counted',async()=>{
+  const f=fixture({getDownloadSpace:async()=>({freeBytes:null,pendingBytes:0})});
+  f.render([sized('one',3000)]);
+  await settle();await settle();
+  assert.match(f.withClass('space-check')[0].textContent,/Free space could not be checked\./);
+  assert.equal(f.withClass('space-warning').length,0);
+  assert.equal(f.button('Download all 1 file').disabled,false);
+  // The same file set checked again: the queued files count once, in what the queue still needs.
+  const g=fixture({getDownloadSpace:async()=>({freeBytes:5000,pendingBytes:3000})});
+  g.run("state.downloads.push({sourceUrl:'https://fuckingfast.co/one#one.rar',status:'paused'},{sourceUrl:'https://fuckingfast.co/two#two.rar',status:'cancelled'})");
+  g.render([sized('one',3000)]);
+  await settle();await settle();
+  assert.equal(g.withClass('space-warning').length,0);
+  assert.equal(g.button('Download all 1 file').disabled,false);
+  // A cancelled entry is downloaded again, so it counts.
+  const h=fixture({getDownloadSpace:async()=>({freeBytes:5000,pendingBytes:3000})});
+  h.run("state.downloads.push({sourceUrl:'https://fuckingfast.co/two#two.rar',status:'cancelled'})");
+  h.render([sized('two',3000)]);
+  await settle();await settle();
+  assert.equal(h.withClass('space-warning').length,1);
+});

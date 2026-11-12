@@ -203,6 +203,8 @@ const ACTIONS=new Map([
   ['saveYouTubeSettings','The YouTube preference could not be saved. Try again.'],
   ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.'],
   ['getHardware','This PC’s specs could not be read. Try again.'],
+  ['checkGame','This PC could not be compared with the game. Try again.'],
+  ['getDownloadSpace','Free space could not be checked.'],
   ['setLanguage','The language could not be changed. Try again.'],
   ['openModPage','The mod’s page could not be opened.'],
   ['openModsFolder','The Mods folder could not be opened.']
