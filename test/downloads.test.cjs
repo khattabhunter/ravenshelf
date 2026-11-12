@@ -377,18 +377,32 @@ test('the cleaning of file names is pinned, name by name: it has not changed sin
   assert.equal(safeName('','Imported files'),'Imported files');assert.equal(safeName('..','Imported files'),'Imported files');assert.equal(safeName('Game: Title','Imported files'),'Game_ Title');
 });
 
+test('a device name with spaces before its dot is still the device on Windows, so it gets the prefix too', () => {
+  // Windows drops the spaces between a device name and its extension, so
+  // "con .txt" opens the console, not a file. Names that are not devices stay.
+  const {folderName}=require('../src/safe-name.cjs');
+  const cases=[['con .txt','_con .txt'],['NUL   .tar.gz','_NUL   .tar.gz'],['com1 .rar','_com1 .rar'],['aux .x','_aux .x'],['Prn  .','_Prn'],['LPT0 .7z','_LPT0 .7z'],
+    ['con x.txt','con x.txt'],['conx .txt','conx .txt'],['com10 .txt','com10 .txt'],['my con .txt','my con .txt'],['con-file .txt','con-file .txt']];
+  for(const [input,expected] of cases)assert.equal(safeName(input),expected,JSON.stringify(input));
+  for(const [input] of cases)assert.equal(safeName(safeName(input)),safeName(input),'cleaning twice changes nothing: '+JSON.stringify(input));
+  assert.equal(folderName('Con .Game'),'_Con .Game');assert.equal(folderName('Con Game'),'Con Game');
+  // A long one is handled like a long "con." name: the queue is handed the name as it arrived and cleans it once.
+  const long='con .'+'a'.repeat(170)+'.exex';assert.equal(long.length,180);assert.equal(safeName(long),'_'+long);
+});
+
 test('the queue cleans every file name it is handed, so no name can put a file outside its folder', async t => {
   const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
-  const unsafe=['../../escaped.rar','..'+String.fromCharCode(92,46,46,92)+'escaped2.rar','a'+String.fromCharCode(92)+'b.rar','sub/dir/file.rar','CON','x.rar. ','C:'+String.fromCharCode(92)+'Windows'+String.fromCharCode(92)+'evil.dll','nul.7z','..','wide'+String.fromCharCode(0xff0e,0xff45,0xff58,0xff45)];
+  const unsafe=['../../escaped.rar','..'+String.fromCharCode(92,46,46,92)+'escaped2.rar','a'+String.fromCharCode(92)+'b.rar','sub/dir/file.rar','CON','x.rar. ','C:'+String.fromCharCode(92)+'Windows'+String.fromCharCode(92)+'evil.dll','nul.7z','..','con .rar','wide'+String.fromCharCode(0xff0e,0xff45,0xff58,0xff45)];
   const {ids}=manager.add({gameTitle:'Game',links:unsafe.map((filename,index)=>link(`unsafe-${index}`,filename))});
   assert.equal(ids.length,unsafe.length);
   for(const [index,id] of ids.entries()){
     const d=manager.downloads.find(item=>item.id===id),label=JSON.stringify(unsafe[index]);
     assert.equal(d.name,safeName(unsafe[index]),label);
     assert.equal(path.dirname(path.resolve(d.folder,d.name)),d.folder,label);
-    assert.doesNotMatch(d.name,/[\\/:]/,label);assert.doesNotMatch(d.name,/[. ]$/,label);assert.doesNotMatch(d.name,/^(con|nul)(?:\.|$)/i,label);
+    assert.doesNotMatch(d.name,/[\\/:]/,label);assert.doesNotMatch(d.name,/[. ]$/,label);assert.doesNotMatch(d.name,/^(con|nul) *(?:\.|$)/i,label);
   }
   assert.deepEqual(manager.downloads.slice(0,4).map(d=>d.name),['.._.._escaped.rar','.._.._escaped2.rar','a_b.rar','sub_dir_file.rar']);
+  assert.equal(manager.downloads.at(-2).name,'_con .rar');
   assert.equal(manager.downloads.at(-1).name,'wide.exe','and it is the cleaned name that gets the file');
   // With no name at all, the name comes from the address and is cleaned the same way.
   const {ids:[bare]}=manager.add({gameTitle:'Game',links:[{status:'ready',url:'https://files.example.com/dir/aux'}]});
