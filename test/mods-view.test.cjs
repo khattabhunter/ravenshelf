@@ -32,11 +32,12 @@ function fixture({ api = {}, locale } = {}) {
 }
 const mod = (game, gameName, modId, modName, fileName) => ({ site: 'nexusmods', game, gameId: 1, modId, fileId: 2, gameName, modName, fileName });
 const DOWNLOADS = [
-  { id: 'a', name: 'SkyUI_5_2.7z', status: 'completed', total: 3 * 1024 * 1024, createdAt: '2026-11-01T10:00:00Z', mod: mod('skyrimspecialedition', 'Skyrim Special Edition', 12604, 'SkyUI', 'SkyUI main file') },
   { id: 'b', name: 'Better Bags.zip', status: 'downloading', total: 0, createdAt: '2026-11-02T10:00:00Z', mod: mod('stardewvalley', 'Stardew Valley', 777, 'Better Bags', 'Better Bags.zip') },
+  { id: 'a', name: 'SkyUI_5_2.7z', status: 'completed', total: 3 * 1024 * 1024, createdAt: '2026-11-01T10:00:00Z', mod: mod('skyrimspecialedition', 'Skyrim Special Edition', 12604, 'SkyUI', 'SkyUI main file') },
   { id: 'c', name: 'Patch.7z', status: 'error', total: 0, createdAt: '2026-11-03T10:00:00Z', mod: mod('skyrimspecialedition', 'Skyrim Special Edition', 31337, 'Unofficial Patch', 'Patch.7z') },
   { id: 'd', name: 'game.part1.rar', status: 'completed', total: 10, gameTitle: 'Some Game' },
-  { id: 'e', name: 'clip.mp4', status: 'completed', kind: 'media', total: 10 }
+  { id: 'e', name: 'clip.mp4', status: 'completed', kind: 'media', total: 10 },
+  { id: 'f', name: 'other.zip', status: 'completed', total: 10, mod: { site: 'elsewhere', game: 'x', modId: 1, modName: 'Other Site Mod' } }
 ];
 
 test('mods are listed by game, newest first, with their file and status; other downloads are not', async () => {
@@ -65,7 +66,7 @@ test('mods are listed by game, newest first, with their file and status; other d
   const stardew = games[1].children[1].children[0];
   assert.equal(stardew.children[3].children[1].textContent, 'See in Downloads');
   assert.equal(stardew.children[1].textContent, 'Better Bags.zip', 'the same name is shown once');
-  assert.doesNotMatch(JSON.stringify(f.all(f.get('#mods-list')).map(node => node.textContent)), /game\.part1|clip\.mp4/);
+  assert.doesNotMatch(JSON.stringify(f.all(f.get('#mods-list')).map(node => node.textContent)), /game\.part1|clip\.mp4|Other Site Mod/, 'only files labelled as Nexus Mods files');
 });
 
 test('search narrows the mods, and an empty list explains how mods get here', () => {

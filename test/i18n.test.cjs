@@ -99,6 +99,8 @@ test('English text is used as it is', () => {
   assert.equal(en.tn(2, '{n} link', '{n} links'), '2 links');
   // An English bundle ignores any Arabic messages it is given.
   assert.equal(I18N.createTranslator({ language: 'en', messages: { Downloads: 'x' } }).t('Downloads'), 'Downloads');
+  // Arabic digits are an Arabic choice only: English keeps 0-9 whatever is saved.
+  assert.equal(I18N.createTranslator({ language: 'en', digits: 'arab' }).t('{size} MB', { size: 12 }), '12 MB');
 });
 
 test('Arabic text, numbers and plurals', () => {
@@ -226,6 +228,9 @@ test('texts from the main process are shown in Arabic, and unchanged in English'
   // Values that are texts of the app are translated; names are kept.
   assert.equal(ar.localText('evil.test is on Ravenshelf\u2019s list of phishing sites.'),
     AR['{host} is on Ravenshelf\u2019s list of {list}.'].replace('{host}', '\u2068evil.test\u2069').replace('{list}', '\u2068' + AR['phishing sites'] + '\u2069'));
+  // A site name cannot swallow a file name put before it.
+  assert.equal(ar.localText('a.rar: evil.test is on Ravenshelf\u2019s list of phishing sites.'),
+    '\u2068a.rar\u2069: ' + AR['{host} is on Ravenshelf\u2019s list of {list}.'].replace('{host}', '\u2068evil.test\u2069').replace('{list}', '\u2068' + AR['phishing sites'] + '\u2069'));
   // The chain of sites runs right to left, with arrows to match.
   const chain = ar.localText('The link passed through 2 other sites: a.test → b.test → c.test.');
   assert.ok(chain.includes('\u2068a.test\u2069 \u2190 \u2068b.test\u2069 \u2190 \u2068c.test\u2069'), chain);
