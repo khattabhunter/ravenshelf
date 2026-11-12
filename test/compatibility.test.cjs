@@ -130,6 +130,7 @@ test('built-in graphics, Intel graphics and a device with a problem are not comp
   assert.equal(dx.verdict,'unknown');assert.equal(dx.note,'problem');
   // Also when an old DirectX figure is still there.
   [vram,dx]=check({problem:true});
+  assert.equal(vram.note,'problem');
   assert.equal(dx.verdict,'unknown');assert.equal(dx.note,'problem');assert.equal(dx.have,null);
   // Unknown memory of its own: nothing to compare.
   [vram]=check({dedicatedBytes:null});
