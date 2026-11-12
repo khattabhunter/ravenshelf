@@ -132,6 +132,6 @@ Alternatively, after reviewing and merging the release changes into `main`, wait
 
 Published builds include a GitHub build-provenance attestation. Follow the [restricted verification command](SUPPLY-CHAIN.md#verify-the-published-executables-build-origin) to check the repository, expected release workflow, exact reviewed source commit and GitHub-hosted runner. The attestation identifies the build origin; it is not Windows code signing or a malware verdict. Version 0.4.2 remains unsigned, and its network controls do not establish a measured file-host speed improvement.
 
-CodeQL also analyzes the C# helper using an explicit native-helper compilation job, alongside JavaScript and workflow analysis. Review the alert lists as well as workflow completion; a finished scan is not itself a finding-free result.
+CodeQL also analyzes the C# helper using an explicit native-helper compilation job, alongside JavaScript and workflow analysis. Review the alert lists as well as workflow completion; a finished scan is not itself a finding-free result. **Code scanning report** (started by hand) prints the open alerts on `main` as plain lines in its log, for maintenance runs that cannot open the Security tab; the alerts come from analysing this public source, so the log shows nothing that running CodeQL on the code would not.
 
 Do not commit `node_modules`, build output, downloaded archives, host cookies, queue/history files or machine-specific scan results.
