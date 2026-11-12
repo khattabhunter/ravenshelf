@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.7.0 for Windows, a preview release. See the [0.7.0 release notes](RELEASE-0.7.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
+This guide describes Ravenshelf 0.8.0 for Windows, a preview release. See the [0.8.0 release notes](RELEASE-0.8.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.7.0-Windows.exe` from the [v0.7.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.7.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.8.0-Windows.exe` from the [v0.8.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.8.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, close its window before opening the new executable. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
@@ -21,6 +21,16 @@ The native Windows helper applies the update after the app exits. It does not re
 After a successful update, the helper keeps the previous executable next to the app as a hidden-name `.ravenshelf-rollback-….exe` copy, and the downloaded copy stays in the profile's `updates/pending/` folder. From 0.4.2, Ravenshelf removes these shortly after it starts, but only when the update's own result shows success and the rollback copy exactly matches the executable that was replaced. After a failed update, the rollback copy is kept. Profile backups are kept.
 
 Updating from 0.4.1 to 0.4.2 still uses 0.4.1's behavior: it prepares the update automatically and installs it on close. The approval step applies to updates offered by 0.4.2 and later.
+
+## Language
+
+**Settings → Language** sets the language of Ravenshelf and its browser extension: **Same as Windows** (the default), **English** or **العربية** (Arabic). **Same as Windows** uses Arabic when Arabic is first in your Windows language list, and English otherwise. Changing the language reloads the window and brings you back to Settings; downloads keep running.
+
+In Arabic the window reads right to left. File names, folder paths, web addresses and game names keep their own direction. **Numbers**, shown only in Arabic, chooses 0 1 2 3 or ٠ ١ ٢ ٣; digits that belong to a name or code, such as 4K or SHA-256, stay as they are.
+
+The language also applies to desktop notifications, file dialogs, the titles of Ravenshelf's other windows and the menu that **Alt** shows. Folders that Ravenshelf creates in your download folder, such as **Browser downloads**, **Mods** and **YouTube**, keep their English names on disk, so files keep going to the same place. Text that comes from websites, such as game descriptions, source notes and mod names, stays as the site wrote it.
+
+The browser extension (its toolbar menu, warning page, notifications, right-click menu and YouTube button) changes language the next time it talks to Ravenshelf: when you open its toolbar menu, when the browser starts, or at the latest within an hour while Ravenshelf is open. Until it has heard from Ravenshelf, it uses your browser's language. Its description in the browser's list of extensions follows the browser's language.
 
 ## Browse the catalogue
 
@@ -125,7 +135,7 @@ Keep `.atlas-part` files and `.atlas-segments-*` support folders alongside their
 Use a card's remove button, select several files, or choose **Clean up completed** in Downloads. **Select visible** affects the current filter; the selected count can include entries selected under another filter. Review the listed files and estimated size before proceeding.
 
 - **Remove from list** is always the initial choice. It stops selected transfers and removes their queue entries while keeping their files.
-- **Delete files** permanently removes the selected managed download files and their queue entries. It requires a fresh confirmation checkbox every time. It does not uninstall games or clear an entire download folder. In game folders it deletes only downloaded archives; downloads taken over from your browser can be any file type and are deleted from the **Browser downloads** folder.
+- **Delete files** permanently removes the selected managed download files and their queue entries. It requires a fresh confirmation checkbox every time. It does not uninstall games or clear an entire download folder. In game folders it deletes only downloaded archives; downloads taken over from your browser can be any file type and are deleted from the **Browser downloads** folder, and mod files from Nexus Mods from their `Mods\<game>` folder.
 
 Opening the preview pauses selected active downloads. Cancelling leaves them paused; resume them explicitly in Downloads. Changed, linked, shared or inaccessible files can be refused. If only some files can be removed, the dialog reports the failures and requires another preview before retrying.
 
@@ -208,22 +218,32 @@ Paste your own free VirusTotal API key under **Settings → Browser extension**.
 
 With the [browser extension](#browser-extension) connected, Ravenshelf recognises the files you download on Nexus Mods. Download the way you always do: open the mod's **Files** tab, choose **Manual download**, then press Nexus Mods' own download button. When the browser starts the download, Ravenshelf takes it over like any other browser download and checks it. Its review shows **Nexus Mods file** with the mod and the game, and the folder the file will go to. Choose **Download** and the file is saved in `Mods\<game>` inside your download folder, for example `Mods\Skyrim Special Edition`. The **Downloads** page shows the mod's and the game's names under the file.
 
-- Mod files download over **one connection**, whatever **Connections per file** says. Nexus Mods serves free accounts one connection per file, and Ravenshelf does not try to get around the site's limits.
+- Mod files download over **one connection**, whatever **Connections per file** says. Ravenshelf does not try to get around the site's limits.
 - The waiting time and the sign-in on Nexus Mods are the site's own; nothing is skipped. Ravenshelf never uses your Nexus Mods account, an API key or your browser cookies.
-- Nexus Mods' download links stop working after a while, and a mod download that fails for that reason says so. Start the download again from the mod's page: the failed entry takes the new link and carries on. What it had already downloaded is kept when Nexus Mods' server allows it.
-- A mod file that is already in your **Downloads** list is not added a second time, however often you press the download button.
-- **Mod manager download** buttons (for Vortex and other mod managers) and the site's own **Resumable download** are not handled by Ravenshelf.
-- Only files that come from Nexus Mods' own file servers are treated as mod files. A file kept on another site is an ordinary browser download, even when a Nexus Mods page links to it.
+- Nexus Mods' download links stop working after a while, and a mod download that fails for that reason says so. Start the download again from the mod's page: a failed or cancelled entry for the same file takes the new link and tries again. A paused entry does not take a new link, also after Ravenshelf restarts: choose **Resume** first, and if it then fails, start the download again from the mod's page. A cancelled mod download keeps no link, so **Resume** and **Retry** only tell you to start it again from the mod's page. What it had already downloaded is kept when Nexus Mods' server allows it.
+- A mod file that is already in your **Downloads** list is not added a second time, however often you press the download button: a download counts as the same file when it has the same path on Nexus Mods' file servers and the same name, and goes to the same game's folder.
+- **Mod manager download** buttons (for Vortex and other mod managers) are not handled by Ravenshelf.
+- Only files that come from Nexus Mods' file servers (nexus-cdn.com), for a download that began on Nexus Mods, are treated as mod files. A file kept on another site, or one that another site sends on to those file servers, is an ordinary browser download, even when a Nexus Mods page links to it. If a mod file's download is sent on to another site while it downloads, Ravenshelf stops it.
 - If Ravenshelf can't tell which mod a download belongs to (for example, when two open mod pages offer a file with the same name), the file is treated like any other browser download and saved in **Browser downloads**.
-- Ravenshelf downloads mod files. It does not install them, sort them or check them against your games; use a mod manager or the mod's own instructions.
+- Ravenshelf downloads mod files. It does not install them, put them in load order or check them against your games; use a mod manager or the mod's own instructions.
 - Only download mods you are allowed to use, and follow Nexus Mods' rules and each mod's permissions.
-- The toolbar button's **Sort Nexus Mods files by game** switch turns this off. After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page, then reload open Nexus Mods tabs.
+- The toolbar button's **Sort Nexus Mods files by game** switch turns this off. In Firefox, if mod files are not recognised, allow Ravenshelf on www.nexusmods.com from Firefox's extensions menu. After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page, then reload open Nexus Mods tabs.
 
-### Privacy
+### The Mods page
 
-On www.nexusmods.com the extension only reads what the open page says about itself: the game, the mod's name and number, the page's address as the page states it and, on a file's page, the file's name and number. It adds nothing to the page, presses nothing and makes no requests. What it reads stays in the browser's memory. It is forgotten when the tab closes or leaves Nexus Mods, and it is not used after half an hour. It goes to Ravenshelf on your PC only together with a download that you start and that comes from Nexus Mods' file servers. Nexus Mods pages in private windows are never read.
+**Mods** lists the mod files in your **Downloads** list that Ravenshelf recognised as Nexus Mods files, grouped by game, newest first within each game. Each shows the mod's name, the file, its state and its size. Type in **Find a mod, file or game…** to narrow the list.
 
-A Nexus Mods download link carries a short-lived signature and your Nexus Mods account number. Ravenshelf keeps the link on your PC while the download is waiting or unfinished, because it needs it to continue. Once the file has finished, only the plain address of the file is kept.
+- **Mod page** opens the mod's page on Nexus Mods in your own browser. Its address is made only from the game and mod number saved with the download; Ravenshelf itself never contacts Nexus Mods.
+- **Show file**, for a finished file, opens the folder that holds it. **See in Downloads**, for any other, opens the **Downloads** page, where you can resume or retry it.
+- **Open Mods folder** opens `Mods` in your download folder.
+
+The page shows only what is in your **Downloads** list: an entry you remove there leaves this page too, and its file stays on disk unless you chose **Delete files**. Mod files downloaded with 0.7.0 that are still in the list appear here as well.
+
+### Privacy on Nexus Mods
+
+On www.nexusmods.com the extension only reads the tab's address and what the open page says about itself: the game, the mod's name and number, the page's address as the page states it and, on a file's page, the file's name and number. It also notices that you clicked or pressed Enter or Space (not what), and whether the tab is visible. It adds nothing to the page, presses nothing and makes no requests. What it reads stays in the browser's memory. It is forgotten when the tab closes or leaves Nexus Mods, and it is not used after half an hour. It goes to Ravenshelf on your PC only together with a download that you start and that comes from Nexus Mods' file servers. Nexus Mods pages in private windows are never read.
+
+A Nexus Mods download link carries a short-lived signature and can include your Nexus Mods account number. For a file recognised as a mod file, Ravenshelf keeps the link on your PC while the download is waiting or unfinished, because it needs it to continue. Once the file has finished or you cancel it, only the plain address of the file is kept. A file from Nexus Mods that was not recognised is an ordinary browser download and keeps its link until you remove its entry.
 
 ## YouTube downloads
 
@@ -274,15 +294,15 @@ The scan is bounded and can miss installations. It does not run discovered progr
 
 ## See your PC's specs
 
-Choose **PC specs** to see what is inside this PC: the processor (cores, threads and clock speed), each graphics adapter, the memory, the drives with their free space, the display and the Windows version. Ravenshelf asks Windows when you open the page, which takes about a second. **Check again** reads everything afresh.
+Choose **PC specs** to see what is inside this PC: the processor (cores, threads and clock speed), each graphics adapter, the memory, the drives with their free space, the display and the Windows version. Ravenshelf asks Windows the first time you open the page after starting, which usually takes a few seconds; it gives up after 20 seconds. Until you close Ravenshelf, opening the page again shows that answer. **Check again** reads everything afresh.
 
-- With more than one graphics adapter, **Main** marks the one games normally use: a separate graphics card before built-in graphics.
-- **Graphics memory** is memory of the adapter's own, read from what DirectX recorded, so cards with more than 4 GB show their real size. Built-in graphics show **Shares system memory** instead. When Windows gives no figure that can be trusted, the page says **Not reported by Windows** rather than guessing.
-- **Type** (**Graphics card** or **Built-in graphics**) appears only when it is certain. It is left out for many AMD adapters, because AMD makes both kinds with every amount of memory, and for older cards with less than 2 GB.
-- **Supports DirectX 12** means the adapter and its driver offer DirectX 12. A particular game can still need features or speed that the adapter lacks.
-- **Installed** memory is the sum of the memory modules. **Usable by Windows** can be lower, for example when built-in graphics keep some for themselves.
+- With more than one graphics adapter, **Main** marks the one games normally use: one that works before one with a problem, then a separate graphics card, then the one with the most memory of its own.
+- **Graphics memory** is memory of the adapter's own, read from what DirectX recorded or, if that is missing, from the graphics driver or Windows, so cards with more than 4 GB show their real size. Adapters recognised as built-in graphics show **Shares system memory** instead. When Windows gives no figure that can be trusted, the page says **Not reported by Windows** rather than guessing.
+- **Type** (**Graphics card** or **Built-in graphics**) appears when Windows says which adapter is which (on PCs that have both), and for NVIDIA and Intel adapters whose memory makes it clear. Otherwise it is left out, for example for AMD adapters, because AMD makes both kinds with every amount of memory.
+- **Supports** shows the DirectX version the adapter and its driver offer, with the feature level when Windows names it, for example **DirectX 12 (feature level 12.1)**. It is left out for an adapter that Windows reports a problem with. A particular game can still need features or speed that the adapter lacks.
+- The memory card's title shows the memory installed, the sum of the memory modules. **Usable by Windows** can be lower, for example when built-in graphics keep some for themselves.
 - A drive is marked **low on space** when less than a tenth of it, and less than 50 GB, is free.
-- If Windows is using its basic display driver, or reports a problem with a graphics device, the page says so. Install or repair the graphics driver, then check again.
+- If no graphics driver works at all, the page says Windows is using its basic display driver. An adapter that Windows reports a problem with is listed with a warning. A second adapter on the basic display driver is not listed while another one works, and the page says so. Install or repair the graphics driver, then check again.
 
 Nothing on this page leaves your PC. It is not saved to a file, not sent to any site and not shared with the browser extension, and Ravenshelf never asks Windows for serial numbers, the computer's name or user names. This version shows the specs only; it does not compare them with a game's requirements.
 
@@ -308,7 +328,7 @@ The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the 
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
-If Windows cannot encrypt saved download headers, Ravenshelf displays a warning and keeps those headers in memory only. The queue and partial files remain saved. After restart, affected downloads refresh their source links before resuming and may need another protected-browser step. Version 0.3.1 removes plaintext headers from the current older queue file; it does not rewrite previous backups.
+If Windows cannot encrypt saved download headers, Ravenshelf displays a warning and keeps those headers in memory only. The queue and partial files remain saved. After restart, affected downloads refresh their source links before resuming and may need another protected-browser step. Nexus Mods files are never looked up again: they continue at their own link, without the page address. Version 0.3.1 removes plaintext headers from the current older queue file; it does not rewrite previous backups.
 
 Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue, image and download services still see the IP used to connect; Ravenshelf's ad protections do not make those requests anonymous.
 
@@ -336,9 +356,10 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | The Ravenshelf button doesn't appear on YouTube | After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the YouTube tab. Check the toolbar button's **YouTube download button** switch. The button hides in small players; right-click still works. |
 | A YouTube video fails | Read the message on its card: private, members-only, age-restricted and region-locked videos can't be downloaded. If many videos fail, update Ravenshelf for a newer yt-dlp. |
 | The YouTube helper programs are damaged | Choose **Set up again** in **Settings → YouTube downloads**. Ravenshelf downloads and checks them again. |
-| A Nexus Mods file went to **Browser downloads** instead of **Mods** | After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the Nexus Mods tab. Check the toolbar button's **Sort Nexus Mods files by game** switch. Start the download from the file's own page (**Manual download**). A file that a mod's page links to on another site is not a Nexus Mods file. |
-| A mod download stopped and won't resume | Nexus Mods' download links expire. Start the download again from the mod's page; the failed entry takes the new link and carries on. |
+| A Nexus Mods file went to **Browser downloads** instead of **Mods** | After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the Nexus Mods tab. Check the toolbar button's **Sort Nexus Mods files by game** switch. Start the download from the file's own page (**Manual download**). In Firefox, allow Ravenshelf on www.nexusmods.com from Firefox's extensions menu. A file that a mod's page links to on another site is not a Nexus Mods file. |
+| A mod download stopped and won't resume | Nexus Mods' download links expire. Start the download again from the mod's page; a failed or cancelled entry takes the new link and tries again. If the entry is paused, choose **Resume** first. |
+| Some text is still in English after choosing Arabic | Text from websites stays as the site wrote it. The browser extension changes language the next time it talks to Ravenshelf: open its toolbar menu. |
 | **PC specs** shows only the basics | Windows did not answer the full hardware check (some workplace PCs restrict it). Choose **Check again**. Processor and memory are still shown. |
-| **PC specs** shows no graphics card | Windows is using its basic display driver, or the graphics driver is not working. Install the driver from the maker of the PC or the graphics card, then choose **Check again**. |
+| **PC specs** shows no graphics card, or misses one | No graphics driver works, or the missing adapter is on Windows' basic display driver; the page says which. Install the driver from the maker of the PC or the graphics card, then choose **Check again**. An adapter with a broken driver is listed with a warning. |
 
 For a reproducible app problem, see [CONTRIBUTING.md](../CONTRIBUTING.md) before opening an issue.
