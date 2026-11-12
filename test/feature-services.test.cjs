@@ -16,7 +16,7 @@ function load(file,replacements={},extra=''){
   const module={exports:{}},native=createRequire(file),requireFn=name=>Object.prototype.hasOwnProperty.call(replacements,name)?replacements[name]:native(name);
   vm.compileFunction(fs.readFileSync(file,'utf8')+extra,['require','module','exports','__filename','__dirname'],{filename:file})(requireFn,module,module.exports,file,path.dirname(file));return module.exports;
 }
-function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null,Notification,packaged=false,completionMode='none'}={}){
+function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null,Notification,packaged=false,completionMode='none',hardware,statfs,requirements=null}={}){
   const root=fs.mkdtempSync(path.join(base,'case-')),profile=path.join(root,'profile'),folder=path.join(root,'Game');fs.mkdirSync(profile);fs.mkdirSync(folder);
   const manager=new DownloadManager({stateFile:path.join(profile,'library.json'),downloadDir:root,fetcher:async()=>{throw new Error('Network access is not part of feature tests.');}});
   manager.settings={...manager.settings,autoUpdateEnabled:false,clipboardWatchEnabled:false,notificationsEnabled:false,...settings};
@@ -38,12 +38,12 @@ function fixture(t,{settings={},cleanupGate=null,storageGate=null,register=null,
   const module=load(path.resolve(__dirname,'../src/feature-services.cjs'),{
     './app-updater.cjs':{AppUpdater:FakeUpdater},
     './clipboard-inbox.cjs':{ClipboardInbox:ObservedInbox},
-    './game-metadata.cjs':{createGameMetadata:()=>async game=>{calls.metadata.push(game);return {source:'Steam',requirements:{minimum:'',recommended:''},reviews:null,genres:[]};}},
+    './game-metadata.cjs':{createGameMetadata:()=>async game=>{calls.metadata.push(game);return {source:'Steam',requirements:requirements||{minimum:'',recommended:''},reviews:null,genres:[]};}},
     './integrity-verifier.cjs':{createIntegrityVerifier:()=>verifier},
     './download-cleanup.cjs':{createDownloadCleanup:options=>{const cleanup=createDownloadCleanup(options);return {...cleanup,async summary(value){instances.storageSignal=value?.signal;calls.events.push('storage:pending');if(storageGate)await storageGate.promise;return cleanup.summary(value);},async deletePreview(value){if(cleanupGate){calls.events.push('cleanup:pending');await cleanupGate.promise;}return cleanup.deletePreview(value);}};}},
     'node:child_process':{spawn(helper,args,options){calls.spawn.push({helper,args,options});const child=new EventEmitter();child.unref=()=>{};queueMicrotask(()=>child.emit('spawn'));return child;}}
   });
-  const services=module.createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register:(name,handler)=>{handlers.set(name,handler);register?.(name,handler);},publish:()=>calls.publish++,providers,checked,isTest:false});
+  const services=module.createFeatureServices({app,win,manager,completion,dialog,clipboard,Notification,register:(name,handler)=>{handlers.set(name,handler);register?.(name,handler);},publish:()=>calls.publish++,providers,checked,hardware,statfs,isTest:false});
   const add=(id='one',name='archive.rar',content='fixture archive')=>{const download={id,name,folder,status:'paused',received:content.length,total:content.length,url:'https://example.invalid/'+name,sourceUrl:'https://example.invalid/'+name,headers:{}};manager.downloads.push(download);fs.writeFileSync(path.join(folder,name),content,{flag:'wx'});return download;};
   t.after(async()=>{
     cleanupGate?.resolve();storageGate?.resolve();instances.updater.state.phase='idle';instances.updater.state.installApproved=false;await manager.stop();await services.beforeQuit();
@@ -195,6 +195,82 @@ test('All new feature IPC handlers retain main-frame and exact app-origin author
   const trusted={sender:f.win.webContents,senderFrame:f.win.webContents.mainFrame};
   assert.equal((await handlers.get('atlas:getUpdateState')(trusted)).phase,'idle');
   const attacks=[{sender:{},senderFrame:f.win.webContents.mainFrame},{sender:f.win.webContents,senderFrame:{url:'atlas://app/index.html'}},{sender:f.win.webContents,senderFrame:null}];
-  for(const name of ['getUpdateState','checkForUpdates','downloadUpdate','installUpdate','removeDownloads','verifyFiles','getGameMetadata','importClipboardLinks'])for(const event of attacks)await assert.rejects(handlers.get('atlas:'+name)(event,{}),/Invalid app request/);
+  for(const name of ['getUpdateState','checkForUpdates','downloadUpdate','installUpdate','removeDownloads','verifyFiles','getGameMetadata','importClipboardLinks','checkGame','getDownloadSpace'])for(const event of attacks)await assert.rejects(handlers.get('atlas:'+name)(event,{}),/Invalid app request/);
   f.win.webContents.mainFrame.url='https://fuckingfast.co/';await assert.rejects(handlers.get('atlas:getUpdateState')(trusted),/Invalid app request/);assert.equal(f.calls.quit,0);assert.equal(f.verifier.starts.length,0);assert.equal(f.calls.getGame.length,0);
+});
+
+// Made-up hardware in the shape of the PC specs answer.
+const SPECS={schema:1,status:'complete',system:{name:'Windows 11 Home',version:'10.0.22631',build:22631,architecture:'64-bit'},processor:{name:'Example CPU'},
+  memory:{installedBytes:16*1024**3,usableBytes:15*1024**3},graphics:[{name:'Example GPU',maker:'NVIDIA',kind:'discrete',dedicatedBytes:8*1024**3,directx:12,featureLevel:'12.1',problem:false,main:true}],
+  drives:[{letter:'C',freeBytes:100*1024**3,removable:false}],notes:[]};
+test('Can You Run It compares the trusted game page with this PC, asking for the specs only once and without a new check',async t=>{
+  const asks=[];const hardware={async get(options){asks.push(options);return SPECS;}};
+  const f=fixture(t,{hardware,requirements:{minimum:'OS: Windows 10\nMemory: 8 GB RAM\nStorage: 500 GB',recommended:''}});
+  const result=await f.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/',steamAppId:'999999',requirements:{minimum:'Memory: 1 MB'},specs:{memory:{installedBytes:1}}});
+  assert.deepEqual(f.calls.getGame,['https://fitgirl-repacks.site/fixture/']);
+  assert.equal(f.calls.metadata[0].steamAppId,'570');
+  assert.deepEqual(asks,[{refresh:false}]);
+  assert.equal(result.status,'complete');
+  assert.deepEqual(result.tiers.minimum.rows.map(row=>[row.key,row.verdict]),[['windows','meets'],['memory','meets'],['storage','below']]);
+  assert.equal(result.tiers.recommended,undefined);
+  for(const value of [undefined,null,{},{url:7},{url:'x'.repeat(2001)}])await assert.rejects(f.handlers.get('checkGame')(value),/Choose a game first/);
+  assert.equal(asks.length,1);
+});
+test('Can You Run It still answers when the specs cannot be read, and leaks nothing from a failed page',async t=>{
+  const hardware={async get(){throw new Error('Private failure C:\\private\\hardware');}};
+  const f=fixture(t,{hardware,requirements:{minimum:'Memory: 8 GB RAM',recommended:''}});
+  const result=await f.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/'});
+  assert.equal(result.status,'no-specs');assert.equal(result.tiers.minimum.rows[0].verdict,'unknown');
+  const failed=await f.handlers.get('checkGame')({url:'https://unapproved.invalid/'});
+  assert.equal(failed.status,'no-requirements');assert.doesNotMatch(JSON.stringify(failed),/private|token|unapproved/);
+  // Without a specs service there is nothing to read.
+  const g=fixture(t,{requirements:{minimum:'Memory: 8 GB RAM',recommended:''}});
+  assert.equal((await g.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/'})).status,'no-specs');
+});
+test('Free space is measured at the download folder, or its nearest existing parent',async t=>{
+  const asked=[];
+  const statfs=async folder=>{asked.push(folder);if(folder.endsWith('missing')||folder.endsWith('deeper'))throw Object.assign(new Error('gone'),{code:'ENOENT'});return {bavail:1000,bsize:4096};};
+  const f=fixture(t,{statfs});
+  f.manager.settings.downloadDir=path.join(f.root,'missing','deeper');
+  const answer=await f.handlers.get('getDownloadSpace')();
+  assert.equal(answer.freeBytes,4096000);
+  assert.deepEqual(asked,[path.join(f.root,'missing','deeper'),path.join(f.root,'missing'),f.root]);
+  assert.equal(answer.pendingBytes,0);
+});
+test('Free space: what downloads waiting on the same drive still need is counted',async t=>{
+  const f=fixture(t,{statfs:async()=>({bavail:10,bsize:100})});
+  const entry=(id,status,received,total)=>({id,name:id,folder:f.folder,status,received,total,url:'https://example.invalid/'+id,headers:{}});
+  f.manager.downloads.push(entry('a','queued',0,1000),entry('b','downloading',400,1000),entry('c','paused',900,1000),entry('d','completed',500,1000),entry('e','cancelled',0,5000),entry('f','error',0,7000),entry('g','queued',0,0),entry('h','queued',0,null),entry('j','queued',0,undefined),entry('k','queued',0,'x'),entry('i','paused',2000,1000));
+  const answer=await f.handlers.get('getDownloadSpace')();
+  assert.deepEqual(answer,{freeBytes:1000,pendingBytes:1000+600+100});
+});
+test('Free space: unreadable drives, missing statfs and impossible numbers give no figure',async()=>{
+  const {freeSpace}=require('../src/feature-services.cjs');
+  assert.equal(await freeSpace('/x',{statfs:async()=>{throw Object.assign(new Error('denied'),{code:'EACCES'});}}),null);
+  // A folder that cannot be read is not measured at its parent.
+  assert.equal(await freeSpace('/x',{statfs:async folder=>{if(folder==='/x')throw Object.assign(new Error('denied'),{code:'EACCES'});return {bavail:1,bsize:1};}}),null);
+  assert.equal(await freeSpace('/x',{statfs:null}),null);
+  assert.equal(await freeSpace('',{statfs:async()=>({bavail:1,bsize:1})}),null);
+  assert.equal(await freeSpace(7,{statfs:async()=>({bavail:1,bsize:1})}),null);
+  assert.equal(await freeSpace('/x',{statfs:async()=>({bavail:2**53,bsize:4096})}),null);
+  assert.equal(await freeSpace('/x',{statfs:async()=>({bavail:-1,bsize:4096})}),null);
+  assert.equal(await freeSpace('/x',{statfs:async()=>({bavail:'abc',bsize:4096})}),null);
+  assert.equal(await freeSpace('/x',{statfs:async()=>({bavail:0,bsize:4096})}),0);
+  assert.equal(await freeSpace('/',{statfs:async()=>{throw Object.assign(new Error('gone'),{code:'ENOENT'});}}),null);
+  // BigInt answers are read too.
+  assert.equal(await freeSpace('/x',{statfs:async()=>({bavail:3n,bsize:4096n})}),12288);
+});
+test('Free space: on Windows a download on another drive is not counted',async()=>{
+  const module=load(path.resolve(__dirname,'../src/feature-services.cjs'),{'node:path':path.win32});
+  const handlers=new Map();
+  const manager={settings:{downloadDir:'D:\\Downloads\\Atlas'},downloads:[
+    {status:'queued',folder:'D:\\Downloads\\Atlas\\Game',received:0,total:300},
+    {status:'queued',folder:'d:\\Other',received:100,total:300},
+    {status:'queued',folder:'C:\\Games\\Old',received:0,total:9000},
+    {status:'queued',received:0,total:50}]};
+  const asked=[];
+  module.createFeatureServices({app:{isPackaged:false,getVersion:()=>'0.9.0',getPath:()=>base},win:{},manager,completion:null,dialog:{},clipboard:{readText:()=>''},Notification:null,
+    register:(name,handler)=>handlers.set(name,handler),publish(){},providers:{},checked:new Map(),statfs:async folder=>{asked.push(folder);return {bavail:1,bsize:4096};},isTest:true});
+  assert.deepEqual(await handlers.get('getDownloadSpace')(),{freeBytes:4096,pendingBytes:300+200+50});
+  assert.deepEqual(asked,['D:\\Downloads\\Atlas']);
 });
