@@ -70,6 +70,7 @@ html[dir="rtl"] .hero{background:radial-gradient(ellipse at 11% 20%,#43315b 0%,t
 html[dir="rtl"] .detail-top{background:radial-gradient(ellipse at 0 0,#3b2b50 0,transparent 75%),#191b2b}
 html[dir="rtl"] .download-progress>div{background:linear-gradient(270deg,#7453bd,#b494f6)}
 html[dir="rtl"] .skeleton-cover{background-image:linear-gradient(250deg,#1b2030 30%,#272c40 48%,#1b2030 66%);animation-direction:reverse}
+html[dir="rtl"] :is(#import-links,#vt-key):placeholder-shown{direction:rtl}
 html[dir="rtl"] :is(code,kbd,samp,.brand-name,#version,#update-version,.removal-item>span:last-child,.storage-file-row>span:last-child,.clipboard-item>p){direction:ltr;unicode-bidi:isolate}
 #language-card .settings-row+.settings-row{margin-top:18px}
 html[dir="rtl"] :is(.toast,.inline-error,.download-error,.download-connections,.download-scan>span,.link-message,.capture-message,.capture-reasons li,.warning-note,.version-note,.local-evidence>p){unicode-bidi:plaintext}

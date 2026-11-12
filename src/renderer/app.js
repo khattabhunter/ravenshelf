@@ -1713,7 +1713,7 @@ function mediaStatus() {
   return { text: tools.message ? `${localMessage(tools.message)} ${text}` : text, tone: '' };
 }
 function toolLines(target) {
-  target.replaceChildren(...(Array.isArray(mediaTools().tools) ? mediaTools().tools : []).map(tool => el('li', '', `${tool.name} ${tool.version} · ${localMessage(tool.license)} · ${tool.source}`)));
+  target.replaceChildren(...(Array.isArray(mediaTools().tools) ? mediaTools().tools : []).map(tool => el('li', '', [`${tool.name} ${tool.version}`, localMessage(tool.license), tool.source].map(own).join(' · '))));
 }
 function renderYouTubeSettings() {
   const card = $('#youtube-card'); if (!card) return;
