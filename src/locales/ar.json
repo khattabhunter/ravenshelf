@@ -623,6 +623,7 @@
  "Off-site download blocked.": "حُظر تنزيل من موقع خارجي.",
  "Off. Downloads in your browser are not sent to Ravenshelf.": "متوقفة. لا تُرسل التنزيلات من متصفحك إلى Ravenshelf.",
  "On": "تشغيل",
+ "On Nexus Mods, it also reads which game, mod and file a page is about, so that a mod you download there is saved in Mods, in a folder for its game. You can turn this off in the extension’s menu.": "وعلى Nexus Mods، تقرأ الإضافة أيضًا اللعبة والمود والملف التي تتناولها الصفحة، ليُحفظ المود الذي تنزّله منها في مجلد Mods، داخل مجلد خاص بلعبته. يمكنك إيقاف ذلك من قائمة الإضافة.",
  "On this PC": "على هذا الحاسوب",
  "On. Load the extension in your browser with the steps below.": "مفعّلة. حمّل الإضافة في متصفحك باتباع الخطوات أدناه.",
  "One connection selected.": "اختير اتصال واحد.",

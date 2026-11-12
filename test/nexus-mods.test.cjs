@@ -1064,7 +1064,8 @@ test('the review names the folder exactly as the queue then makes it',async t=>{
 });
 
 test('a busy file server makes a mod download wait, without talk of fewer connections',async t=>{
-  const q=queueFor(t,{fetch:async()=>new Response('slow down',{status:429,headers:{'retry-after':'1','content-type':'text/plain'}})});
+  // A long wait, so both notes are seen before either file is tried again, even on a slow machine.
+  const q=queueFor(t,{fetch:async()=>new Response('slow down',{status:429,headers:{'retry-after':'30','content-type':'text/plain'}})});
   q.manager.add({links:[modLink()],gameTitle:mods.modFolder(LABEL),group:mods.MODS_FOLDER});
   q.manager.add({links:[modLink({mod:undefined,url:'https://cdn.example/a.zip',sourceUrl:'https://cdn.example/a.zip',filename:'a.zip'})],gameTitle:'Browser downloads'});
   const [mod,plain]=q.manager.downloads;
