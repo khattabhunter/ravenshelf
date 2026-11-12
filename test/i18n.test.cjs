@@ -21,12 +21,13 @@ const placeholders = text => [...String(text).matchAll(/\{(\w+)\}/g)].map(m => m
 // in app.js, and the data-i18n texts and data-i18n-attr attributes of the page.
 function windowTexts() {
   const LIT = "'((?:[^'\\\\]|\\\\.)*)'";
-  const unquote = s => JSON.parse('"' + s.replace(/\\'/g, "'").replace(/"/g, '\\"') + '"');
+  // The text of a quoted literal, its escapes read in one pass.
+  const unquote = s => s.replace(/\\(?:u([0-9a-fA-F]{4})|(.))/g, (m, hex, ch) => hex ? String.fromCharCode(parseInt(hex, 16)) : ({ n: '\n', t: '\t', r: '\r' })[ch] || ch);
   const keys = new Set(), plurals = new Map();
   for (const m of APP.matchAll(new RegExp('\\b(?:t|later)\\(\\s*' + LIT, 'g'))) keys.add(unquote(m[1]));
   const calls = [...APP.matchAll(new RegExp('\\btn\\(([^,]+?),\\s*' + LIT + ',\\s*' + LIT, 'g'))];
   for (const m of calls) plurals.set(unquote(m[3]), unquote(m[2]));
-  const decode = s => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  const decode = s => s.replace(/&(amp|lt|gt|quot|#39);/g, (m, name) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[name]);
   for (const m of HTML.matchAll(/<([a-z0-9]+)\b[^>]*\sdata-i18n(?=[\s>])[^>]*>([^<]*)</g)) keys.add(decode(m[2]).replace(/\s+/g, ' ').trim());
   for (const m of HTML.matchAll(/<[^>]*data-i18n-attr="([^"]*)"[^>]*>/g)) {
     for (const name of m[1].split(/\s+/)) {

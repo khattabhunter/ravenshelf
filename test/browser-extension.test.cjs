@@ -733,7 +733,8 @@ test('every text of the extension has an Arabic version that starts with an Arab
   for(const html of ['popup.html','blocked.html'])for(const m of read(html).matchAll(/<[a-z0-9]+\b[^>]*\sdata-i18n(?=[\s>])[^>]*>([^<]*)</g))keys.add(m[1].replace(/\s+/g,' ').trim());
   // The texts that are kept in the extension's tables.
   const background=read('background.js'),popup=read('popup.js'),blocked=read('blocked.js');
-  for(const m of /CATEGORY_TEXT = Object\.freeze\((\{[^}]+\})\)/.exec(background)[1].matchAll(/'([^']+)'/g))if(/ /.test(m[1]))keys.add(`{host} is on a list of ${m[1]}.`);
+  const categories=background.slice(background.indexOf('const CATEGORY_TEXT = '),background.indexOf('\n',background.indexOf('const CATEGORY_TEXT = ')));
+  for(const m of categories.matchAll(new RegExp(LIT,'g')))if(m[1].includes(' '))keys.add('{host} is on a list of '+m[1]+'.');
   for(const m of popup.matchAll(/title: '([^']+)'/g))keys.add(m[1]);
   for(const m of blocked.matchAll(new RegExp(LIT,'g')))if(/^[A-Z{].* /.test(m[1]))keys.add(m[1]);
   for(const reply of [{ok:true,action:'queued'},{ok:true,action:'duplicate'},{ok:true,action:'setup'},{ok:true,action:'busy'},...['not-running','not-installed','not-allowed','private','busy','invalid','x'].map(error=>({ok:false,error}))]){

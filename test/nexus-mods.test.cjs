@@ -1282,8 +1282,8 @@ test('what Ravenshelf 0.7.0 still kept of a finished or cancelled mod downloadâ€
   const ordinary=(name,status)=>{const {mod,...rest}=entry(name,status);return {...rest,url:`https://cdn.example/${name}?token=1`,sourceUrl:`https://cdn.example/${name}?token=1`,folder:path.join(downloadDir,'Browser downloads')};};
   const stored=[entry('cancelled.7z','cancelled'),entry('done.7z','completed',{url:plainAddress('done.7z'),sourceUrl:plainAddress('done.7z')}),entry('paused.7z','paused'),entry('failed.7z','error',{error:'Host returned HTTP 500. Check the source link or retry.'}),
     ordinary('plain.zip','cancelled'),ordinary('plain-done.zip','completed'),entry('elsewhere.7z','cancelled',{mod:{...LABEL,site:'elsewhere'}}),entry('tidy.7z','cancelled',{url:plainAddress('tidy.7z'),sourceUrl:plainAddress('tidy.7z'),headers:{},needsNewLink:true})];
-  fs.writeFileSync(stateFile,JSON.stringify({settings:{},downloads:stored}));
-  const before=fs.statSync(stateFile).mtimeMs;
+  const written=JSON.stringify({settings:{},downloads:stored});
+  fs.writeFileSync(stateFile,written);
   manager=new DownloadManager({stateFile,downloadDir,fetcher:async()=>{throw new Error('This test uses no network.');}});
   const now=Object.fromEntries(manager.downloads.map(d=>[d.name,d]));
   // Cancelled: the signed link and the page address go, and the entry is marked as needing a new link.
@@ -1301,7 +1301,7 @@ test('what Ravenshelf 0.7.0 still kept of a finished or cancelled mod downloadâ€
   assert.equal(saved['cancelled.7z'].url,plainAddress('cancelled.7z'));assert.equal(saved['cancelled.7z'].needsNewLink,true);
   assert.equal(saved['paused.7z'].url,cdnFile('paused.7z'));
   assert.doesNotMatch(JSON.stringify([saved['cancelled.7z'],saved['done.7z']]),/user_id|md5=|expires=|file_id|Referer/);
-  assert.ok(fs.statSync(stateFile).mtimeMs>=before);
+  assert.notEqual(fs.readFileSync(stateFile,'utf8'),written,'the file was written again');
   // The cancelled entry now behaves like one that 0.7.1 cancelled.
   manager.action('id-cancelled.7z','retry');
   assert.equal(now['cancelled.7z'].status,'error');assert.equal(now['cancelled.7z'].error,DROPPED);
