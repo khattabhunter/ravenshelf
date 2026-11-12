@@ -157,3 +157,24 @@ test('a free-space check that never answers lets the download go after a few sec
   assert.ok(delays.includes(4000));
   assert.equal(f.button('Download all 1 file').disabled,false);
 });
+test('a free-space check that cannot be made is said quietly, and files already queued are not counted',async()=>{
+  const f=fixture({getDownloadSpace:async()=>({freeBytes:null,pendingBytes:0})});
+  f.render([sized('one',3000)]);
+  await settle();await settle();
+  assert.match(f.withClass('space-check')[0].textContent,/Free space could not be checked\./);
+  assert.equal(f.withClass('space-warning').length,0);
+  assert.equal(f.button('Download all 1 file').disabled,false);
+  // The same file set checked again: the queued files count once, in what the queue still needs.
+  const g=fixture({getDownloadSpace:async()=>({freeBytes:5000,pendingBytes:3000})});
+  g.run("state.downloads.push({sourceUrl:'https://fuckingfast.co/one#one.rar',status:'paused'},{sourceUrl:'https://fuckingfast.co/two#two.rar',status:'cancelled'})");
+  g.render([sized('one',3000)]);
+  await settle();await settle();
+  assert.equal(g.withClass('space-warning').length,0);
+  assert.equal(g.button('Download all 1 file').disabled,false);
+  // A cancelled entry is downloaded again, so it counts.
+  const h=fixture({getDownloadSpace:async()=>({freeBytes:5000,pendingBytes:3000})});
+  h.run("state.downloads.push({sourceUrl:'https://fuckingfast.co/two#two.rar',status:'cancelled'})");
+  h.render([sized('two',3000)]);
+  await settle();await settle();
+  assert.equal(h.withClass('space-warning').length,1);
+});

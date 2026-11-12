@@ -69,6 +69,7 @@ test('Can You Run It: a button above the requirement lists, and only the game ad
   assert.match(text,/Windows 10.*Windows 11/);
   assert.match(text,/64-bit Windows.*Requires a 64-bit processor and operating system.*64-bit/);
   assert.match(text,/Example CPU 6700.*Example Core i7/);
+  assert.match(text,/GraphicsExample GTX 1060 6GBExample RTX/);
   assert.match(text,/16 GB/);
   // Graphics memory read from the card line is shown as its figure; 5.875 GB reads as 6 GB.
   const vram=f.all(section).filter(node=>node.tagName==='tr').find(node=>/Graphics memory/.test(node.textContent));
@@ -200,4 +201,57 @@ test('Can You Run It: what this PC has, written out',()=>{
   assert.equal(f.run(`checkNeeds(${JSON.stringify(row('videoMemory','meets',{needs:'Example 4GB',need:4*GIB,derived:false}))})`),'Example 4GB');
   assert.equal(f.run(`checkNeeds(${JSON.stringify(row('videoMemory','meets',{needs:'Example',need:null,derived:true}))})`),'Example');
   assert.equal(f.run(`checkNeeds({key:'memory',needs:7})`),'');
+});
+
+test('Can You Run It: Compare again reads this PC again',async()=>{
+  const asked=[];
+  const f=fixture({getGameMetadata:async()=>METADATA,checkGame:async value=>{asked.push(JSON.parse(JSON.stringify(value)));return ANSWER;}});
+  await f.open();
+  const section=f.withClass('fit-check')[0];
+  await f.find('Compare with this PC',section).emit('click');
+  await f.find('Compare again',section).emit('click');
+  assert.deepEqual(asked,[{url:'https://fitgirl-repacks.site/game/'},{url:'https://fitgirl-repacks.site/game/',refresh:true}]);
+});
+
+test('Can You Run It: a list that could not be loaded says so',async()=>{
+  const f=fixture({getGameMetadata:async()=>METADATA,checkGame:async()=>({schema:1,status:'details-unavailable',tiers:{},notes:[]})});
+  await f.open();await f.find('Compare with this PC').emit('click');
+  assert.match(f.withClass('fit-check')[0].textContent,/requirement list could not be loaded\. Try again later\./);
+});
+
+test('Can You Run It: a broken answer shows a fixed message, and the verdict comes from the rows shown',async()=>{
+  for(const tiers of [{minimum:{verdict:'meets',rows:'x'}},{minimum:{verdict:'meets',rows:{length:2}}},'x',null]){
+    const f=fixture({getGameMetadata:async()=>METADATA,checkGame:async()=>({schema:1,status:'complete',tiers,notes:[]})});
+    await f.open();await f.find('Compare with this PC').emit('click');
+    assert.match(f.withClass('fit-check')[0].textContent,/no requirement list to compare/);
+  }
+  // A tier that claims "meets" over a row that is below is shown as below.
+  const f=fixture({getGameMetadata:async()=>METADATA,checkGame:async()=>({schema:1,status:'complete',notes:[],tiers:{minimum:{verdict:'meets',rows:[row('memory','below',{need:8*GIB,have:4*GIB})]}}})});
+  await f.open();await f.find('Compare with this PC').emit('click');
+  assert.equal(f.withClass('fit-tier')[0].className,'fit-tier below');
+  assert.match(f.withClass('fit-check')[0].textContent,/below the minimum requirements in: Memory\./);
+  // A failure while drawing: a fixed message, and later games are not compared at once.
+  const g=fixture({getGameMetadata:async()=>METADATA,checkGame:async()=>ANSWER});
+  g.run('renderGameCheck=()=>{throw new Error("internal detail")}');
+  await g.open();await g.find('Compare with this PC').emit('click');
+  const error=g.withClass('inline-error')[0];
+  assert.match(error.textContent,/This PC could not be compared with the game\. Try again\./);
+  assert.doesNotMatch(error.textContent,/internal detail/);
+  assert.equal(g.run('gameCheckReady'),false);
+});
+
+test('Can You Run It: the notes for unclear lines, updates, unknown kinds and older feature levels',async()=>{
+  const answer={schema:1,status:'complete',notes:[],tiers:{minimum:{verdict:'unknown',rows:[
+    row('windows','unknown',{needs:'Windows 10 (7 not supported)',note:'unclear'}),
+    row('memory','unknown',{needs:'8 GB',note:'update'}),
+    row('videoMemory','unknown',{needs:'2 GB',note:'kind'}),
+    row('directx','unknown',{needs:'Version 12',note:'level'})]}}};
+  const f=fixture({getGameMetadata:async()=>METADATA,checkGame:async()=>answer});
+  await f.open();await f.find('Compare with this PC').emit('click');
+  const text=f.withClass('fit-check')[0].textContent;
+  assert.match(text,/can be read more than one way/);
+  assert.match(text,/particular update of this Windows version/);
+  assert.match(text,/card or built-in, so less memory is not judged/);
+  assert.match(text,/older feature level/);
+  assert.match(text,/The minimum requirements could not be checked\./);
 });
