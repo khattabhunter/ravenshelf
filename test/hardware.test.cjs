@@ -18,6 +18,8 @@ const options={osApi,now:()=>Date.UTC(2026,10,10)};
 // DirectX records write their numbers in decimal.
 const dx=(name,vendor,device,dedicated,type,extra={})=>({name,vendor:String(vendor),device:String(device),dedicated:String(dedicated),dedicatedSystem:'0',shared:String(8*GIB),d3d11:String(0xc100),d3d12:String(0xc200),type:String(type),seen:NEWER,...extra});
 const video=(name,vendor,device,extra={})=>({name,maker:'',bus:vendor?'PCI':'',vendor,device,memory:CAPPED,driver:'1.2.3.4',inf:'oem12.inf',section:'Section042',status:'0',width:'1920',height:'1080',refresh:'144',...extra});
+// A made-up laptop: the names and figures are put together for these tests and
+// do not describe any one real PC.
 function laptop(){
   return {schema:1,
     system:{caption:'Microsoft Windows 11 Home',version:'10.0.22631',build:'22631',architecture:'64-bit'},
@@ -57,7 +59,14 @@ test('Windows’ stand-in drivers and screen-only adapters are not listed as gra
   raw.directx.push(dx('Software Renderer X',0x1af4,1,0,0x5),dx('Indirect Thing',0x1af4,2,0,0x41),dx('Screen Only Thing',0x1af4,3,0,0x2));
   const result=summarize(raw,options);
   assert.deepEqual(names(result),['NVIDIA GeForce RTX 3060 Laptop GPU','Intel Iris Xe Graphics']);
-  assert.deepEqual(result.notes,[],'a missing driver is only reported when no real adapter was found');
+  assert.deepEqual(result.notes,['basic-display-extra'],'a device on the basic display driver beside working adapters is mentioned, not listed');
+  // The same beside an adapter that Windows reports a problem with, and said once however many there are.
+  const beside=summarize({...laptop(),video:[video('NVIDIA GeForce RTX 3060 Laptop GPU','10DE','2520',{status:'43'}),video('Microsoft Basic Display Adapter','',''),video('Microsoft Basic Display Adapter','','')]},options);
+  assert.deepEqual([names(beside),beside.notes],[['NVIDIA GeForce RTX 3060 Laptop GPU'],['basic-display-extra']]);
+  // With nothing but stand-ins next to it, the basic driver is the whole story.
+  const alone=summarize({...laptop(),video:[video('Dock Screen','','',{bus:'USB'}),video('Microsoft Basic Display Adapter','',''),video('Microsoft Remote Display Adapter','','')],directx:[]},options);
+  assert.deepEqual([alone.graphics,alone.notes],[[],['basic-display']]);
+  assert.deepEqual(summarize(laptop(),options).notes,[],'and no note at all without it');
   // A PC whose graphics driver is missing: Windows shows only its basic driver.
   const bare={...laptop(),video:[video('Microsoft Basic Display Adapter','','',{width:'1024',height:'768',refresh:'64'})],directx:[]};
   const basic=summarize(bare,options);
@@ -113,6 +122,11 @@ test('a card is called built-in or separate only when that is certain',()=>{
   // Windows says which is which on laptops that have both.
   assert.equal(kind('1002',512*MIB,0x2313),'discrete');assert.equal(kind('1002',8*GIB,0x232b),'integrated');
   assert.equal(kind('8086',128*MIB,0x2313),'discrete','what Windows says outranks every rule of thumb');
+  // A record that claims to be both says nothing, so the rules below decide.
+  assert.equal(kind('1002',8*GIB,0x2333),'unknown');assert.equal(kind('10DE',8*GIB,0x2333),'discrete');assert.equal(kind('8086',128*MIB,0x2333),'integrated');
+  // Newer versions of Windows add higher bits to this number; they do not hide the ones read here.
+  assert.equal(kind('1002',512*MIB,0x12313),'discrete');assert.equal(kind('1002',8*GIB,0x8000232b),'integrated');assert.equal(kind('1002',512*MIB,0xffffff9b),'discrete');
+  assert.equal(kind('1002',512*MIB,2**32+0x13),'unknown','a number too large to be this field is not read at all');
   // NVIDIA: an adapter with 2 GB or more of its own is a card. Below that it may be an old card
   // or graphics built into an old motherboard, so it is not guessed.
   assert.equal(kind('10DE',2*GIB),'discrete');assert.equal(kind('10DE',24*GIB),'discrete');
@@ -144,6 +158,14 @@ test('of several DirectX records the right one is used, and the main adapter is 
   assert.equal(swapped(same,[{name:'Radeon RX 480 Graphics',memory:String(4*GIB)}]),4*GIB-64*MIB);
   assert.equal(swapped(same),4*GIB-64*MIB,'with nothing to tell them apart, the first');
   assert.equal(swapped([{...same[0],seen:''},{...same[1],seen:''}],[{name:'Radeon RX 480 Graphics',memory:String(8*GIB)}]),8*GIB-64*MIB,'records without a date are compared the same way');
+  // The exact name comes before the driver's figure: a record under another name does not win by being closer to it.
+  const renamed=[dx('Radeon RX 480 Graphics',0x1002,0x67df,4*GIB,0x3),dx('Radeon (TM) RX 480',0x1002,0x67df,8*GIB,0x3)];
+  assert.equal(swapped(renamed,[{name:'Radeon RX 480 Graphics',memory:String(8*GIB)}]),4*GIB);
+  assert.equal(swapped([...renamed].reverse(),[{name:'Radeon RX 480 Graphics',memory:String(8*GIB)}]),4*GIB);
+  // A record without a memory figure is never the closer one.
+  const blank=[dx('Radeon RX 480 Graphics',0x1002,0x67df,'',0x3),dx('Radeon RX 480 Graphics',0x1002,0x67df,16*GIB,0x3)];
+  assert.equal(swapped(blank,[{name:'Radeon RX 480 Graphics',memory:String(6*GIB)}]),16*GIB);
+  assert.equal(swapped([...blank].reverse(),[{name:'Radeon RX 480 Graphics',memory:String(6*GIB)}]),16*GIB);
   const twin={...laptop(),video:[video('NVIDIA GeForce RTX 4090','10DE','2684'),video('NVIDIA GeForce RTX 4090','10DE','2684')],directx:[dx('NVIDIA GeForce RTX 4090',0x10de,0x2684,24*GIB,0x3)]};
   const twins=summarize(twin,options).graphics;
   assert.equal(twins.length,2);assert.deepEqual(twins.map(adapter=>adapter.dedicatedBytes),[24*GIB,24*GIB]);assert.deepEqual(twins.map(adapter=>adapter.main),[true,false],'exactly one main adapter');
@@ -195,6 +217,15 @@ test('Direct3D levels map to the DirectX version a game can ask for',()=>{
   assert.deepEqual(level(0x9300,0),[9,'9.3']);
   assert.deepEqual(level(0,0),[null,null]);
   assert.deepEqual(level(12345,67890),[null,null],'unknown level numbers are not guessed');
+  // The level shown is the one of the version shown, never the other record's.
+  assert.deepEqual(level(0xb100,0xa000),[11,'11.1']);assert.deepEqual(level(0x9300,0xa100),[9,'9.3']);
+  assert.deepEqual(level(0,0xc000),[12,'12.0'],'a Direct3D 12 record alone is enough');
+  assert.deepEqual(level(0,0xa000),[null,null]);
+  // A Direct3D 12 level newer than the newest one known here is still DirectX 12; only its name is left out.
+  assert.deepEqual(level(0xc100,0xc300),[12,null]);assert.deepEqual(level(0xc100,0xc201),[12,null]);assert.deepEqual(level(0,0xffff),[12,null]);
+  // A number between the known levels is not a level, and one too large to be this field is not read.
+  assert.deepEqual(level(0xb100,0xb200),[11,'11.1']);assert.deepEqual(level(0xb100,0xc1ff),[11,'11.1']);assert.deepEqual(level(0xb100,0x10000),[11,'11.1']);
+  assert.deepEqual(level(0xc300,0),[null,null],'the Direct3D 11 record is not read that way');
 });
 
 test('installed memory is the sum of the modules unless it contradicts what Windows can use',()=>{
@@ -242,12 +273,19 @@ test('drives show their type, connection and free space, and unreadable volumes 
   assert.deepEqual([disagree.kind,disagree.bus,disagree.model],['unknown','NVMe',''],'details that may belong to another drive are not shown');
   const agree=summarize({...laptop(),connections:[{disk:'0',bus:'17'},{disk:'0',bus:'11'}]},options).drives[0];
   assert.deepEqual([agree.kind,agree.bus],['ssd','NVMe'],'the first line for a disk number counts');
+  // The same when Windows lists no drive under that disk's number: only the connection is named.
+  const absent=connections=>{const drive=summarize({...laptop(),disks:[],connections},options).drives[0];return [drive.kind,drive.bus,drive.model];};
+  assert.deepEqual(absent([{disk:'0',bus:'7'}]),['unknown','USB','']);assert.deepEqual(absent([{disk:'0',bus:'17'}]),['unknown','NVMe','']);
+  assert.deepEqual(absent([{disk:'0',bus:'8'}]),['unknown','',''],'a connection without a name worth showing');
+  assert.deepEqual(absent([]),['unknown','','']);
   for(const connections of [undefined,[],[{disk:'1',bus:'11'}],[{disk:'0',bus:'x'}],'x'])assert.deepEqual([summarize({...laptop(),connections},options).drives[0].kind,summarize({...laptop(),connections},options).drives[0].bus],['ssd','NVMe'],'without a second opinion the drive’s own details stand');
   // A Storage Spaces disk shares its number with one of the drives it is made of; that drive does not describe it.
   const pool={...laptop(),disks:[{id:'0',model:'Boot SSD',media:'4',bus:'17',spindle:'0',size:'1'},{id:'1',model:'Pool Member HDD',media:'3',bus:'11',spindle:'7200',size:'1'}],
     connections:[{disk:'0',bus:'17'},{disk:'1',bus:'16'}],partitions:[{letter:'C',disk:'0'},{letter:'D',disk:'1'}],
     volumes:[{letter:'C:',type:'3',format:'NTFS',size:'100',free:'1'},{letter:'D:',type:'3',format:'ReFS',size:'200',free:'2'}]};
   assert.deepEqual(summarize(pool,options).drives.map(drive=>[drive.letter,drive.kind,drive.bus,drive.model]),[['C','ssd','NVMe','Boot SSD'],['D','unknown','Storage Spaces','']]);
+  // The same when the entry under the pool's disk number says "Storage Spaces" itself.
+  assert.deepEqual(summarize({...pool,disks:[pool.disks[0],{id:'1',model:'Pool Disk',media:'4',bus:'16',spindle:'0'}]},options).drives.map(drive=>[drive.letter,drive.kind,drive.bus,drive.model]),[['C','ssd','NVMe','Boot SSD'],['D','unknown','Storage Spaces','']]);
   // The same when no drive shares the pool's disk number.
   assert.deepEqual(summarize({...pool,disks:[pool.disks[0]]},options).drives.map(drive=>[drive.letter,drive.kind,drive.bus,drive.model]),[['C','ssd','NVMe','Boot SSD'],['D','unknown','Storage Spaces','']]);
 });
@@ -350,6 +388,34 @@ test('the probe runs Windows PowerShell from System32 with the fixed script and 
   child.emit('close',0);await planted;
   assert.deepEqual(calls[1].settings.env,{PSModulePath:'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\Modules',TEMP:'T'},'a module folder from the environment is replaced, the rest is passed on');
   assert.equal(child.killed,0);
+  // Windows compares the names of environment variables without case, and of two spellings only one reaches
+  // the program. So every spelling is left out, and exactly one is passed on: Ravenshelf's.
+  const inherited={PSMODULEPATH:'X:\\one',psmodulepath:'X:\\two',PsModulePath:'X:\\three',PSModulePath:'X:\\four',PSModulePath2:'kept',Path:'P'};
+  const before=JSON.stringify(inherited);
+  const spelled=runProbe({systemRoot:'D:\\Win',env:inherited,spawnImpl:(file,args,options)=>{calls.push({file,args,settings:options});child=fakeChild();return child;}});
+  child.emit('close',0);await spelled;
+  assert.deepEqual(Object.entries(calls[2].settings.env).sort(),[['PSModulePath','D:\\Win\\System32\\WindowsPowerShell\\v1.0\\Modules'],['PSModulePath2','kept'],['Path','P']].sort());
+  assert.notEqual(calls[2].settings.env,inherited);assert.equal(JSON.stringify(inherited),before,'the app’s own environment is left as it was');
+  for(const env of [null,{}]){
+    const empty=runProbe({systemRoot:'D:\\Win',env,spawnImpl:(file,args,options)=>{calls.push({file,args,settings:options});child=fakeChild();return child;}});
+    child.emit('close',0);await empty;
+    assert.deepEqual(calls.at(-1).settings.env,{PSModulePath:'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\Modules'});
+  }
+  // Windows' folder is taken from the environment only as a full path on a drive. Anything else could
+  // point at a folder next to wherever Ravenshelf was started, or at another computer.
+  const started=async systemRoot=>{
+    let file,modules;
+    const probe=runProbe({systemRoot,spawnImpl:(executable,args,options)=>{file=executable;modules=options.env.PSModulePath;child=fakeChild();return child;},env:{}});
+    child.emit('close',0);await probe;
+    assert.equal(modules,file.replace(/powershell\.exe$/,'Modules'),'the module folder is the one beside that PowerShell');
+    return file;
+  };
+  assert.equal(await started('D:\\WINNT'),'D:\\WINNT\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.equal(await started('c:\\windows'),'c:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.equal(await started('E:\\'),'E:\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.equal(await started('z:\\My Windows (2)\\'),'z:\\My Windows (2)\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  for(const odd of ['windows','.','..\\Windows','\\Windows','\\\\server\\share\\Windows','\\\\?\\C:\\Windows','C:','C:Windows','C:/Windows','/c/Windows',' C:\\Windows','CD:\\Windows','1:\\Windows','C:\\Win\0dows','C:\\Win\ndows','C:\\Windows\t','C:\\Win\x1fdows','',null,5,true,{},['C:\\Windows']])
+    assert.equal(await started(odd),'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',JSON.stringify(odd));
   // Windows refuses a command line longer than 32,767 characters. The script is
   // sent as one argument, so it must stay well under that with Windows line endings too.
   const windowsText=fs.readFileSync(PROBE_FILE,'utf8').replace(/\r?\n/g,'\r\n');
@@ -373,6 +439,17 @@ test('the probe stops on a time-out, on too much output, on a failed start and o
   await assert.rejects(missing,/ENOENT/);
   await assert.rejects(runProbe({spawnImpl:()=>{throw new Error('blocked');}}),/blocked/);
   await assert.rejects(runProbe({spawnImpl,readFile:()=>{throw new Error('no script');}}),/no script/);
+  // A check that could not start leaves no timer behind; one that started has exactly one, for its time limit.
+  const realSetTimeout=globalThis.setTimeout;let armed=0,refused,unreadable,running;
+  globalThis.setTimeout=(...args)=>{armed++;return realSetTimeout(...args);};
+  try{
+    refused=runProbe({spawnImpl:()=>{throw new Error('blocked');}});unreadable=runProbe({spawnImpl,readFile:()=>{throw new Error('no script');}});
+    assert.equal(armed,0);
+    running=runProbe({spawnImpl});
+    assert.equal(armed,1);
+  }finally{globalThis.setTimeout=realSetTimeout;}
+  child.emit('close',0);await running;
+  await assert.rejects(refused,/blocked/);await assert.rejects(unreadable,/no script/);
   // A program that could not start has no output to read and reports the
   // failure a moment later; neither may crash the app.
   let bare;
@@ -404,7 +481,23 @@ test('the service checks once, shares a running check, checks again on request a
   // A clock that jumps backwards cannot hold the page on an old answer for long.
   clock-=60000;
   const afterJump=service.get({refresh:true});release();
-  assert.notEqual(await afterJump,fresh);assert.equal(runs,3);
+  const jumped=await afterJump;
+  assert.notEqual(jumped,fresh);assert.equal(runs,3);
+  // Three seconds, counted in either direction of the clock.
+  assert.equal(MIN_REFRESH_MS,3000);
+  clock-=2999;assert.equal(await service.get({refresh:true}),jumped);assert.equal(runs,3);
+  clock-=1;
+  const setBack=service.get({refresh:true});release();
+  assert.notEqual(await setBack,jumped);assert.equal(runs,4);
+  // An answer that is not complete is never held on to: its note says to choose Check again, and that checks at once.
+  let attempts=0;
+  const flaky=createHardwareService({platform:'win32',osApi,now:()=>clock,probe:()=>++attempts===1?Promise.reject(new Error('blocked')):Promise.resolve(JSON.stringify(laptop()))});
+  const basics=await flaky.get();
+  assert.equal(basics.status,'basic');assert.equal(attempts,1);
+  assert.equal(await flaky.get(),basics,'opening the page again shows what there is');assert.equal(attempts,1);
+  const full=await flaky.get({refresh:true});
+  assert.equal(full.status,'complete');assert.equal(attempts,2,'no three-second wait after a check that failed');
+  assert.equal(await flaky.get({refresh:true}),full);assert.equal(attempts,2,'the full answer is then kept for three seconds as usual');
   for(const probe of [()=>Promise.reject(new Error('blocked')),()=>Promise.resolve('not json'),()=>Promise.resolve('{"schema":1}'),()=>{throw new Error('sync');}]){
     const broken=await createHardwareService({platform:'win32',osApi,now:()=>0,probe}).get();
     assert.equal(broken.status,'basic');assert.deepEqual(broken.notes,['probe-failed']);assert.equal(broken.processor.name,'Fallback CPU');
@@ -437,7 +530,7 @@ test('numbers are accepted up to their limit and refused one above it',()=>{
   const display=item=>read({video:[video('Card','ABCD','0001',item)]}).display;
   assert.deepEqual(display({width:'100000',height:'100000',refresh:'1000'}),{width:100000,height:100000,refreshHz:1000});
   assert.deepEqual(display({refresh:'1001'}),{width:1920,height:1080,refreshHz:null});
-  assert.equal(display({width:'100001'}),null);
+  assert.equal(display({width:'100001'}),null);assert.equal(display({height:'100001'}),null);
   // Sizes above 1 PiB are unreadable.
   const sizes=read({volumes:[{letter:'C:',type:'3',size:String(2**50),free:'1'},{letter:'D:',type:'3',size:String(2**50+1),free:'1'}]}).drives;
   assert.deepEqual(sizes.map(drive=>drive.letter),['C']);
@@ -449,6 +542,14 @@ test('numbers are accepted up to their limit and refused one above it',()=>{
 });
 
 test('lists and texts are cut at their limits',()=>{
+  // Connections and partitions: 64 lines each, counted before anything is checked.
+  const onDisk=extra=>read({disks:[{id:'0',model:'M',media:'4',bus:'17'}],partitions:[{letter:'C',disk:'0'}],volumes:[{letter:'C:',type:'3',size:'10',free:'1'}],...extra}).drives[0];
+  const elsewhere=Array.from({length:63},(_,index)=>({disk:String(100+index),bus:'11'}));
+  assert.equal(onDisk({connections:[...elsewhere,{disk:'0',bus:'16'}]}).bus,'Storage Spaces','the 64th connection is read');
+  assert.equal(onDisk({connections:[...elsewhere,{disk:'200',bus:'11'},{disk:'0',bus:'16'}]}).bus,'NVMe','the 65th is not');
+  const unlettered=Array.from({length:63},()=>({letter:'',disk:'9'}));
+  assert.equal(onDisk({partitions:[...unlettered,{letter:'C',disk:'0'}]}).model,'M','the 64th partition is read');
+  assert.equal(onDisk({partitions:[...unlettered,{letter:'',disk:'9'},{letter:'C',disk:'0'}]}).model,'','the 65th is not');
   const socket={name:'CPU',cores:'2',threads:'4',megahertz:'2000'};
   assert.equal(read({processors:Array(5).fill(socket)}).processor.sockets,5);
   assert.deepEqual(read({processors:Array(9).fill(socket)}).processor,{name:'CPU',sockets:8,cores:16,threads:32,megahertz:2000});
@@ -499,6 +600,10 @@ test('only a real PowerShell list wrapper is unwrapped, and short hex numbers ar
   assert.equal(summarize({schema:1,system:{caption:'Windows'},processors:{value:[{name:'Wrapped'}],Count:1}},options).processor.name,'Wrapped');
   const card=adaptersOf({video:[video('Card','10D','1')],directx:[dx('Other name',0x10d,1,8*GIB,0x3)]})[0];
   assert.equal(card.dedicatedBytes,null,'"10D" and "1" are not four-digit numbers, so nothing matches by number');
+  // Nor is a longer text read as a number by its first four digits.
+  assert.equal(adaptersOf({video:[video('Card','10DE5','0001')],directx:[dx('Other name',0x10de5,1,8*GIB,0x3)]})[0].dedicatedBytes,null);
+  assert.equal(adaptersOf({video:[video('Card','10DE','00015')],directx:[dx('Other name',0x10de,0x15,8*GIB,0x3)]})[0].dedicatedBytes,null);
+  assert.equal(adaptersOf({video:[video('Card','10DE','0015')],directx:[dx('Other name',0x10de,0x15,8*GIB,0x3)]})[0].dedicatedBytes,8*GIB,'four digits are');
 });
 
 test('a missing count on one processor leaves the total unknown, and a speed of zero is unknown',()=>{
@@ -549,6 +654,11 @@ test('screen-only adapters are recognised by each known name, unless DirectX say
     assert.deepEqual(listed({video:[video(name,'','')]}),[],name);
   assert.deepEqual(listed({video:[video('Fancy Virtual Display GPU','ABCD','0009')],directx:[dx('Fancy Virtual Display GPU',0xabcd,9,8*GIB,0x3)]}),['Fancy Virtual Display GPU']);
   assert.deepEqual(listed({video:[video('','ABCD','0001'),video('Real','ABCD','0002')]}),['Real'],'an adapter without a name is not listed');
+  // Windows' own stand-ins are known by how their name begins, not by those words somewhere in a name.
+  const lookalikes=['Acme Microsoft Hyper-V Video Card','Acme Microsoft Basic Display Bridge','Acme Microsoft Basic Render Card','Acme Microsoft Remote Display Card'];
+  const records=lookalikes.map((name,index)=>dx(name,0xabcd,index+1,GIB,0x3));
+  assert.deepEqual(listed({video:lookalikes.map((name,index)=>video(name,'ABCD',`000${index+1}`)),directx:records}),lookalikes);
+  assert.deepEqual(read({video:[video(lookalikes[1],'ABCD','0002')],directx:records}).notes,[]);
   // The connection is read in any letter case.
   for(const bus of ['root','Swd','usb','VmBus'])assert.deepEqual(listed({video:[video('Plain Screen','','',{bus})]}),[],bus);
   assert.deepEqual(listed({video:[video('Plain Card','','',{bus:'PCI'}),video('ARM Card','','',{bus:'ACPI'})]}),['Plain Card','ARM Card']);
@@ -695,29 +805,40 @@ const PROBE={
     ['MSFT_Partition',['DriveLetter','DiskNumber']],
     ['Win32_LogicalDisk',['DeviceID','DriveType','FileSystem','Size','FreeSpace']]],
   // Every quoted text: two settings, the two patterns applied to a device path,
-  // the two registry keys, one value name, the storage namespace and the drive filter.
+  // the two registry keys, one value name, the storage namespace, the pattern
+  // for a drive letter and the drive filter.
   quoted:['','SilentlyContinue','^([A-Za-z]+)\\\\','VEN_([0-9A-Fa-f]{4})&DEV_([0-9A-Fa-f]{4})','HKLM:\\SOFTWARE\\Microsoft\\DirectX',
-    'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}','^\\d{4}$','HardwareInformation.qwMemorySize','root/Microsoft/Windows/Storage','DriveType=2 OR DriveType=3'],
+    'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}','^\\d{4}$','HardwareInformation.qwMemorySize','root/Microsoft/Windows/Storage','[A-Za-z]','DriveType=2 OR DriveType=3'],
   commands:['ConvertTo-Json','ForEach-Object','Get-ChildItem','Get-CimInstance','Get-ItemProperty','Where-Object'],
   options:['-ClassName','-Compress','-Depth','-Filter','-LiteralPath','-Namespace','-Property','-match','-ne'],
   variables:['$ErrorActionPreference','$Matches','$ProgressPreference','$_','$bus','$device','$false','$null','$os','$path','$record','$result','$vendor'],
-  // Registry values read from the two keys, and the two item properties used to walk them.
-  registry:['Description','VendorId','DeviceId','DedicatedVideoMemory','DedicatedSystemMemory','SharedSystemMemory','MaxD3D11FeatureLevel','MaxD3D12FeatureLevel','AdapterType','LastSeen','DriverDesc','PSPath','PSChildName'],
+  // The registry values read from the two keys. Each is printed only in its own section.
+  registryValues:{directx:['Description','VendorId','DeviceId','DedicatedVideoMemory','DedicatedSystemMemory','SharedSystemMemory','MaxD3D11FeatureLevel','MaxD3D12FeatureLevel','AdapterType','LastSeen'],drivers:['DriverDesc']},
+  // The two item properties used to walk the keys. They are never printed: the
+  // name or path of a key can identify one device.
+  walking:['PSPath','PSChildName'],
+  // The two walks through the registry, word for word.
+  walks:["$result.directx = @(Get-ChildItem -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\DirectX' | ForEach-Object {",
+    "$result.drivers = @(Get-ChildItem -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}' | Where-Object { $_.PSChildName -match '^\\d{4}$' } | ForEach-Object {"],
   language:['try','catch','if','string','Console','OutputEncoding','Text','UTF8Encoding','new'],
   // The sections of the answer and the names inside them.
   sections:['system','processors','memory','video','directx','drivers','disks','connections','partitions','volumes'],
   keys:['schema','caption','version','build','architecture','name','cores','threads','megahertz','modules','maker','bus','vendor','device','memory','driver','inf','section','status','width','height','refresh',
     'dedicated','dedicatedSystem','shared','d3d11','d3d12','type','seen','id','model','media','spindle','disk','letter','format','size','free'],
   // The statements that are neither a question to Windows nor a printed value.
-  statements:['try','catch','@',')','| ForEach-Object','[string]$_.Capacity',"$_.PSChildName -match ''",'$_.DriveLetter',"if ($path -match '')",'if ($null -ne $record.Description)',
+  statements:['try','catch','@',')','| ForEach-Object','[string]$_.Capacity',"$_.PSChildName -match ''","$_.DriveLetter -match ''","if ($path -match '')",'if ($null -ne $record.Description)',
     '$result = @','$result | ConvertTo-Json -Depth 4 -Compress','[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',"$ErrorActionPreference = ''","$ProgressPreference = ''",
     "$bus = ''","$vendor = ''","$device = ''",'$bus = $Matches[1]','$vendor = $Matches[1]','$device = $Matches[2]','$path = [string]$_.PNPDeviceID','$record = Get-ItemProperty -LiteralPath $_.PSPath'],
   // Changing the script changes this. Before updating it, check every list above
   // against the new script and against docs/PRIVACY.md.
-  fingerprint:'e39a40b2c387a1d67f3f8061188d74c3ee2da102f8c77d206513b7791d3c4cb0'
+  fingerprint:'7ac4549300816e168f54736b9da21b4dd116d2145c45e19ac17a7437a9dae222'
 };
 function probeProblems(script){
   const problems=[],text=script.replace(/\r\n/g,'\n');
+  // Plain printable characters and line breaks only, in the comments too. A lone
+  // carriage return ends a comment line for PowerShell, and what follows it would
+  // run as code that the line-by-line reading below takes for part of the comment.
+  if(/[^\n\x20-\x7e]/.test(text))problems.push('a character that is not plain text');
   const code=text.split('\n').filter(line=>!line.trim().startsWith('#')).join('\n');
   const quoted=[];
   const bare=code.replace(/'[^'\n]*'/g,match=>{quoted.push(match.slice(1,-1));return "''";});
@@ -728,20 +849,38 @@ function probeProblems(script){
   if(odd)problems.push(`characters: ${[...new Set(odd)].join(' ')}`);
   for(const [pattern,label] of [[/\$\(/,'$('],[/\.\s*\$/,'.$'],[/\$\{/,'${'],[/::(?!OutputEncoding = \[Text\.UTF8Encoding\]::new\(\$false\))(?!new\(\$false\))/,'::'],[/\.\s*\(/,'.('],[/\)\s*\./,').'],[/\]\s*\./,'].'],[/''\s*\./,"''."]])if(pattern.test(bare))problems.push(`construct: ${label}`);
   const properties=new Set(PROBE.questions.flatMap(([,names])=>names)),classes=new Set(PROBE.questions.map(([name])=>name));
-  const allowed=new Set([...PROBE.commands,...PROBE.options,...PROBE.variables,...PROBE.registry,...PROBE.language,...PROBE.sections,...PROBE.keys,...properties,...classes]);
+  const allowed=new Set([...PROBE.commands,...PROBE.options,...PROBE.variables,...Object.values(PROBE.registryValues).flat(),...PROBE.walking,...PROBE.language,...PROBE.sections,...PROBE.keys,...properties,...classes]);
   for(const word of new Set(bare.match(/\$[A-Za-z_]\w*|-[A-Za-z]+|[A-Za-z]+-[A-Za-z]+|[A-Za-z_]\w*/g)))if(!allowed.has(word))problems.push(`word: ${word}`);
   // Every question to Windows names its class and the exact properties wanted.
   const questions=[...bare.matchAll(/Get-CimInstance(?: -Namespace '')? -ClassName (\w+)(?: -Filter '')? -Property ([\w,]+)(?= \||\n)/g)].map(match=>[match[1],match[2].split(',')]);
   if(JSON.stringify(questions)!==JSON.stringify(PROBE.questions))problems.push('the questions to Windows changed');
   if((bare.match(/Get-CimInstance/g)||[]).length!==PROBE.questions.length)problems.push('a question to Windows without its exact property list');
-  // Every value that is printed is one property, as text; nothing is printed whole.
-  const source='(?:_|os|record)',value=new RegExp(`^(?:\\[string\\]\\$${source}\\.(?:[A-Za-z0-9]+|'')|\\$bus|\\$vendor|\\$device|1|@\\(Get-CimInstance -ClassName Win32_PhysicalMemory -Property Capacity \\| ForEach-Object)$`);
-  // And every statement is one of the few shapes the script is made of.
+  // The registry is walked twice, each time exactly as written above, and the
+  // properties that name a key are used for that walk and nothing else.
+  for(const walk of PROBE.walks)if(!code.includes(`\n  ${walk}\n`))problems.push('a walk through the registry changed');
+  if((bare.match(/Get-ChildItem/g)||[]).length!==PROBE.walks.length||(bare.match(/Get-ItemProperty/g)||[]).length!==PROBE.walks.length)problems.push('another walk through the registry');
+  if((bare.match(/PSPath/g)||[]).length!==2||(bare.match(/PSChildName/g)||[]).length!==1)problems.push('the name or path of a registry key used for something else');
+  // Every value that is printed is one property, as text, of what its own section
+  // asked for: nothing is printed whole, and nothing that was not asked for there.
+  let from=null;
   for(const piece of bare.split(/[;{}\n]/).map(part=>part.trim()).filter(Boolean)){
     let match;
+    const asked=/Get-CimInstance(?: -Namespace '')? -ClassName \w+(?: -Filter '')? -Property ([\w,]+)/.exec(piece);
+    if(asked)from={object:piece.startsWith('$os = ')?'os':'_',names:asked[1].split(',')};
+    const walked=/^\$result\.(directx|drivers) = @\(Get-ChildItem /.exec(piece);
+    if(walked)from={object:'record',names:[...PROBE.registryValues[walked[1]],...(walked[1]==='drivers'?["''"]:[])]};
+    // And every statement is one of the few shapes the script is made of.
     if(PROBE.statements.includes(piece))continue;
-    if((match=/^([a-z][A-Za-z0-9]*) = (.+)$/.exec(piece))){if(!PROBE.keys.includes(match[1])||!value.test(match[2]))problems.push(`printed value: ${piece}`);}
-    else if((match=/^\$result\.(\w+) = (.+)$/.exec(piece))){if(!PROBE.sections.includes(match[1])||!/^@(?:\((?:Get-CimInstance|Get-ChildItem) .*)?$/.test(match[2]))problems.push(`section: ${piece}`);}
+    if((match=/^([a-z][A-Za-z0-9]*) = (.+)$/.exec(piece))){
+      const printed=/^\[string\]\$(_|os|record)\.([A-Za-z0-9]+|'')$/.exec(match[2]);
+      const fits=printed?Boolean(from)&&printed[1]===from.object&&from.names.includes(printed[2])
+        :/^(?:\$bus|\$vendor|\$device|1|@\(Get-CimInstance -ClassName Win32_PhysicalMemory -Property Capacity \| ForEach-Object)$/.test(match[2]);
+      if(!PROBE.keys.includes(match[1])||!fits)problems.push(`printed value: ${piece}`);
+    }
+    else if((match=/^\$result\.(\w+) = (.+)$/.exec(piece))){
+      const shape=/^@(?:\(Get-CimInstance(?: -Namespace '')? -ClassName \w+(?: -Filter '')? -Property [\w,]+ \| (?:ForEach-Object|Where-Object)|\(Get-ChildItem -LiteralPath '' \| (?:ForEach-Object|Where-Object))?$/;
+      if(!PROBE.sections.includes(match[1])||!shape.test(match[2]))problems.push(`section: ${piece}`);
+    }
     else if(!/^\$os = Get-CimInstance -ClassName Win32_OperatingSystem -Property [\w,]+$/.test(piece))problems.push(`statement: ${piece}`);
   }
   if(!text.endsWith('\n$result | ConvertTo-Json -Depth 4 -Compress\n'))problems.push('the script must end by printing the answer');
@@ -758,7 +897,7 @@ test('the probe script asks Windows only for what the page shows, and prints not
   assert.deepEqual(code.match(/\$path\b[^;\n]*/g),["$path = [string]$_.PNPDeviceID","$path -match '^([A-Za-z]+)\\\\') { $bus = $Matches[1] }","$path -match 'VEN_([0-9A-Fa-f]{4})&DEV_([0-9A-Fa-f]{4})') { $vendor = $Matches[1]"]);
   assert.equal(code.match(/PNPDeviceID/g).length,2,'asked for once, used once');
   // Nothing that identifies one PC or person is among the allowed words.
-  for(const word of [...PROBE.questions.flatMap(([name,properties])=>[name,...properties]),...PROBE.registry,...PROBE.quoted])
+  for(const word of [...PROBE.questions.flatMap(([name,properties])=>[name,...properties]),...Object.values(PROBE.registryValues).flat(),...PROBE.quoted])
     assert.doesNotMatch(word,/Serial|UUID|GUID|MAC|Address|IdentifyingNumber|User|Owner|Host|Computer|CSName|Registered|ProductId|InstallDate|Volume|Label|Luid|Account|SID|Network|BIOS|BaseBoard|Asset|Tag/i,word);
 });
 
@@ -794,6 +933,23 @@ test('the probe check itself catches every way of reading or printing something 
     'a comment hiding code':s=>s.replace('$result = @{ schema = 1 }','$result = @{ schema = 1 } <# #>'),
     'an unlisted answer name':s=>s.replace('caption = [string]$os.Caption','computer = [string]$os.Caption'),
     'something printed beside the answer':s=>s.replace("\n$result | ConvertTo-Json","\n[string]$os.Caption\n$result | ConvertTo-Json"),
+    'code after a lone carriage return in a comment':s=>s.replace('# Fixed and removable drives only, so network drives are never contacted.','# Fixed and removable drives only.\r$result.who = [string](whoami)'),
+    'a tab':s=>s.replace('$result = @{ schema = 1 }','$result = @{\tschema = 1 }'),
+    'a character outside plain text in a comment':s=>s.replace('# Graphics adapters','# Graphics adapters'),
+    'a listing of folders in place of a walk through the registry':s=>s.replace(PROBE.walks[1],'$result.drivers = @(Get-ChildItem .. -Depth 4 | ForEach-Object {'),
+    'another registry key walked the same way':s=>s.replace(PROBE.walks[0],PROBE.walks[0].replace('DirectX','Cryptography')),
+    'a third walk through the registry':s=>s.replace('\n$result | ConvertTo-Json',"\ntry { $result.volumes = @(Get-ChildItem -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\DirectX' | ForEach-Object { 1 }) } catch { }\n$result | ConvertTo-Json"),
+    // Three edits made only of words, texts and statements the script already has, each caught by one rule alone.
+    'the two registry keys swapped between their sections':s=>{const [first,second]=PROBE.quoted.filter(text=>text.startsWith('HKLM:'));return s.replace(first,'<key>').replace(second,first).replace('<key>',second);},
+    'another walk that prints a value the section before it may print':s=>s.replace("memory = [string]$record.'HardwareInformation.qwMemorySize' }\n  })\n} catch { }\n","memory = [string]$record.'HardwareInformation.qwMemorySize' }\n  })\n} catch { }\ntry {\n  $result.volumes = @(Get-ChildItem -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\DirectX' | ForEach-Object {\n    @{ name = [string]$record.DriverDesc }\n  })\n} catch { }\n"),
+    'the registry filter put on another question':s=>s.replace('-Property DeviceID,DriveType,FileSystem,Size,FreeSpace | ForEach-Object {',()=>"-Property DeviceID,DriveType,FileSystem,Size,FreeSpace | Where-Object { $_.PSChildName -match '^\\d{4}$' } | ForEach-Object {"),
+    'the name of a registry key printed':s=>s.replace('seen = [string]$record.LastSeen','seen = [string]$_.PSChildName'),
+    'the path of a registry key printed':s=>s.replace('name = [string]$record.Description;','name = [string]$_.PSPath;'),
+    'the full name of a registry key printed':s=>s.replace('name = [string]$record.Description;','name = [string]$_.Name;'),
+    'a registry value of the other key':s=>s.replace('name = [string]$record.DriverDesc;','name = [string]$record.Description;'),
+    'a property that another section asked for':s=>s.replace('cores = [string]$_.NumberOfCores','cores = [string]$_.PNPDeviceID'),
+    'a property of the wrong thing':s=>s.replace('caption = [string]$os.Caption','caption = [string]$_.Caption'),
+    'a drive letter test that lets everything through':s=>s.replace("{ $_.DriveLetter -match '[A-Za-z]' }",'{ $_.DriveLetter }'),
     'any other change at all':s=>s.replace('# Graphics adapters','#  Graphics adapters')
   };
   for(const [label,edit] of Object.entries(edits)){
@@ -815,6 +971,10 @@ test('on Windows the real probe describes this PC within the time limit',{skip:p
     for(const row of rows)for(const key of Object.keys(row))assert.ok(PROBE.keys.includes(key),`${section}.${key}`);
   }
   for(const personal of [os.hostname(),os.userInfo().username])if(personal.length>=4)assert.equal(raw.toLowerCase().includes(personal.toLowerCase()),false,'the answer does not name this PC or its user');
+  // Only partitions that have a drive letter are printed.
+  const partitions=answer.partitions===undefined?[]:Array.isArray(answer.partitions)?answer.partitions:[answer.partitions];
+  for(const partition of partitions)assert.match(String(partition.letter),/^[A-Za-z]$/,'a partition without a drive letter is left out');
+  assert.ok(partitions.length>=1,'the drive Windows runs from has a letter, so at least one partition is printed');
   assert.doesNotMatch(raw,/VEN_|DEV_|SUBSYS|\\\\\?\\/,'no device paths are printed');
   const result=await createHardwareService().get();
   assert.equal(result.status,'complete',`notes: ${result.notes.join(', ')}`);

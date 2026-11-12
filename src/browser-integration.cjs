@@ -11,12 +11,12 @@ const browserSetup=require('./browser-setup.cjs');
 const {safeURL}=require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
 const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
-const {MODS_FOLDER,modFolder}=require('./mods.cjs');
+const {MODS_FOLDER}=require('./mods.cjs');
 
 const EXTENSION_BROWSERS=Object.freeze(['chromium','firefox']);
 const FOLDER_NOT_UPDATED='The extension folder could not be updated, so your browser keeps the previous version. Restart Ravenshelf to try again.';
 
-function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,queueMedia=null,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
+function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,queueMedia=null,local=null,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
   manager.settings={browserIntegrationEnabled:false,...manager.settings};
   const profile=app.getPath('userData'),version=app.getVersion();
   const hostDir=path.join(profile,'browser-host'),extensionRoot=path.join(profile,'browser-extension');
@@ -33,8 +33,13 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   try{threatLists.load();}catch{}
   try{virusTotal.load();}catch{}
   const bridge=new BrowserBridge({hostDir,threatLists,virusTotal,resolveProvider,appVersion:version,platform,
+    // The extension uses the app's language: it is told which, and the reasons
+    // the app gives it are in that language.
+    ...(typeof local==='function'?{language:()=>{const tr=local();return {language:tr.language,digits:tr.digitStyle};},localText:text=>local().localText(text)}:{}),
     // A file downloaded on Nexus Mods goes to Mods\<game>; everything else to Browser downloads.
-    queueDownload:entry=>{assertQueueAvailable();return entry.mod?manager.add({links:[entry],gameTitle:modFolder(entry.mod),group:MODS_FOLDER}):manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
+    // Mod files of one game stay together: the queue says which title the game's folder goes by.
+    queueDownload:entry=>{assertQueueAvailable();return entry.mod?manager.add({links:[entry],gameTitle:manager.modTitle(entry.mod),group:MODS_FOLDER}):manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
+    modTitle:mod=>manager.modTitle(mod),
     queueMedia,
     openExternal:url=>shell.openExternal(safeURL(url).href),
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});

@@ -20,6 +20,7 @@ function fixture(api={}){
   const elements=new Map();
   const document={createElement:tag=>new Element(tag),querySelector:selector=>{if(!elements.has(selector))elements.set(selector,new Element());return elements.get(selector);}};
   const context=vm.createContext({document,window:{atlas:api},URL,console,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/i18n.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8').replace(/start\(\);\s*$/,''),context);
   const run=code=>vm.runInContext(code,context);
   run('toast=()=>{};showView=()=>{};applyState=()=>{};');

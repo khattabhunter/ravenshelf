@@ -77,6 +77,7 @@ function rendererFixture(api={}){
   const get=selector=>{if(!nodes.has(selector))nodes.set(selector,node());return nodes.get(selector);};
   const document={querySelector:get,querySelectorAll:()=>[],createElement:node,activeElement:null,addEventListener(){}};
   const context=vm.createContext({window:{atlas:api},document,URL,console,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/i18n.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8').replace(/start\(\);\s*$/,''),context);
   const run=source=>vm.runInContext(source,context);
   return {get,document,context,run};

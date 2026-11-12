@@ -25,21 +25,15 @@ const REQUESTS_PER_MINUTE=240;
 const hostOf=value=>{try{return new URL(value).hostname.toLowerCase();}catch{return '';}};
 const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||host.endsWith('.'+root));};
 const baseName=value=>String(value||'').split(/[\\/]/).filter(Boolean).at(-1)?.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240)||undefined;
-// The name a download would be saved under. The checks judge this form and the
-// review shows it, so a name cannot pass as one thing and be saved as another
-// (full-width letters, for example, are saved as plain ones). One cleaning can
-// leave something for the next: a name that Windows reserves gets a "_" in
-// front, which can push a long name over the limit, so that cleaning it again
-// cuts its ending. The queue cleans every name once more before it saves, so
-// the cleaning is repeated here until the name no longer changes. Every pass
-// that changes a name shortens it or adds that one "_", so 400 passes are more
-// than any name can need; the plain fallback name only keeps that certain.
-function savedName(value){
-  if(!value)return undefined;
-  let name=safeName(value);
-  for(let pass=0;pass<400;pass++){const again=safeName(name);if(again===name)return name;name=again;}
-  return safeName('');
-}
+// The name a download is saved under. The queue cleans the name it is handed
+// once, with safeName(), before it saves the file. So the checks here judge,
+// and the review shows, safeName() of the very name that is handed over: the
+// name that was checked is the name that is saved (full-width letters, for
+// example, are saved as plain ones).
+const savedAs=value=>value?safeName(value):undefined;
+// An address without what follows the "?": enough to show where a file comes
+// from. A signed link has no business in the window.
+const plainAddress=value=>{try{const url=new URL(value);url.search='';url.hash='';return url.href;}catch{return '';}};
 const https=value=>{try{return new URL(value).protocol==='https:'?value:undefined;}catch{return undefined;}};
 
 async function writeJSONAtomic(file,value){
@@ -50,10 +44,10 @@ async function writeJSONAtomic(file,value){
 }
 
 class BrowserBridge extends EventEmitter{
-  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
+  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},language=()=>({language:'en',digits:'latn'}),localText=text=>text,appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
     super();
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
-    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,queueMedia,openExternal,reveal,notify,setReputation,appVersion,now,platform,listenPath});
+    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
     this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
   }
@@ -108,15 +102,25 @@ class BrowserBridge extends EventEmitter{
     if(this.requests.length>=REQUESTS_PER_MINUTE)return false;
     this.requests.push(now);return true;
   }
+  // The app's language, for the extension. Only the two known values are sent.
+  appLanguage(){
+    try{const {language,digits}=this.language()||{};return {language:language==='ar'?'ar':'en',digits:digits==='arab'?'arab':'latn'};}
+    catch{return {language:'en',digits:'latn'};}
+  }
+  localReason(reason){try{const local=this.localText(reason);return typeof local==='string'&&local?local.slice(0,1000):reason;}catch{return reason;}}
   async respond(browser,raw){
     if(!this.allowRequest())return {ok:false,error:'busy'};
     let message;try{message=validateRequest(raw);}catch{return {ok:false,error:'invalid'};}
     try{
       if(message.type==='hello'){
         this.contact={browser,extensionVersion:message.extensionVersion,at:new Date(this.now()).toISOString()};this.emit('change');
-        return {ok:true,app:'Ravenshelf',version:this.appVersion,capture:true,protection:this.threatLists?{version:this.threatLists.version,total:this.threatLists.total}:null};
+        return {ok:true,app:'Ravenshelf',version:this.appVersion,capture:true,protection:this.threatLists?{version:this.threatLists.version,total:this.threatLists.total}:null,...this.appLanguage()};
       }
-      if(message.type==='capture'||message.type==='send')return {ok:true,...this.receive(browser,message)};
+      if(message.type==='capture'||message.type==='send'){
+        // The extension shows the reason as it comes, so it is sent in the app's language.
+        const result=this.receive(browser,message);
+        return {ok:true,...result,...(typeof result?.reason==='string'?{reason:this.localReason(result.reason)}:{})};
+      }
       // YouTube videos skip the review: the user chose the video and quality
       // themselves, and nothing but its video ID reaches Ravenshelf.
       if(message.type==='media'){
@@ -136,7 +140,9 @@ class BrowserBridge extends EventEmitter{
   // Quick blocks are recorded here; the extension shows their notification.
   receive(browser,message){
     this.expire();
-    const request={url:message.url,finalUrl:message.finalUrl,referrer:message.referrer,pageUrl:message.pageUrl,filename:savedName(baseName(message.filename)),mime:message.mime,totalBytes:message.totalBytes};
+    // `given` is the browser's name for the file as it arrived; `filename` is that name as it would be saved.
+    const given=baseName(message.filename);
+    const request={url:message.url,finalUrl:message.finalUrl,referrer:message.referrer,pageUrl:message.pageUrl,filename:savedAs(given),given,mime:message.mime,totalBytes:message.totalBytes};
     // The extension's game-and-mod label is kept only for a file from Nexus Mods' own file servers.
     if(message.mod&&fromNexus(request))request.mod={...message.mod};
     const source=message.type==='send'?message.kind:'download';
@@ -156,9 +162,9 @@ class BrowserBridge extends EventEmitter{
     }
     const target=request.finalUrl||request.url;
     if(new URL(target).protocol==='http:'){
-      const verdict=assessDownload({filename:request.filename||savedName(nameFromURL(target)),insecure:true});
+      const verdict=assessDownload({filename:request.filename||safeName(nameFromURL(target)),insecure:true});
       if(verdict.level==='blocked'){
-        const capture=this.record(browser,source,request,{status:'blocked',verdict,filename:request.filename||savedName(nameFromURL(target))});
+        const capture=this.record(browser,source,request,{status:'blocked',verdict,filename:request.filename||safeName(nameFromURL(target))});
         return {action:'block',id:capture.id,reason:verdict.reasons.find(item=>item.level==='blocked').message};
       }
       return {action:'browser'};
@@ -175,7 +181,7 @@ class BrowserBridge extends EventEmitter{
   }
   record(browser,source,request,fields){
     const capture={id:crypto.randomUUID(),createdAt:this.now(),browser,source,request,status:'checking',verdict:null,chain:[],virusTotal:[],filename:request.filename,size:request.totalBytes||0,message:'',entry:null,...fields};
-    capture.displayName=capture.filename||savedName(nameFromURL(request.finalUrl||request.url));
+    capture.displayName=capture.filename||safeName(nameFromURL(request.finalUrl||request.url));
     this.captures.set(capture.id,capture);this.emit('change');return capture;
   }
   pendingCount(){return [...this.captures.values()].filter(capture=>['checking','ready','manual'].includes(capture.status)).length;}
@@ -213,7 +219,10 @@ class BrowserBridge extends EventEmitter{
         else if(report.reason==='limit'){virusTotal.push(report);break;}
       }
     }
-    const filename=savedName(baseName(result.filename))||request.filename||savedName(nameFromURL(start));
+    // The name as it arrived: the server's, else the browser's, else the one in the address.
+    // The queue is handed exactly this, and saves it as safeName() of it.
+    const given=baseName(result.filename)||request.given||nameFromURL(start);
+    const filename=safeName(given);
     const verdict=assessDownload({filename,sniffed:result.sniffed,chain:result.chain,insecure:Boolean(result.insecure),virusTotal});
     Object.assign(capture,{filename,displayName:filename,size:Number(result.size)||request.totalBytes||0,message:String(result.message||'').slice(0,300),verdict,virusTotal,
       chain:result.chain.map(hop=>({host:hop.host,listed:hop.listed?{category:hop.listed.category,label:hop.listed.label}:null}))});
@@ -221,7 +230,7 @@ class BrowserBridge extends EventEmitter{
     capture.status=['ready','manual','unavailable'].includes(result.status)?result.status:'manual';
     if(capture.status==='ready'){
       const referer=result.provider?result.referer:https(request.referrer)||https(request.pageUrl);
-      capture.entry={...(result.provider?{headers:result.headers&&typeof result.headers==='object'?{...result.headers}:{}}:{}),status:'ready',url:result.url,sourceUrl:start,filename,size:capture.size,host:hostOf(result.url),...(referer?{referer}:{}),...(request.mod?{mod:{...request.mod}}:{})};
+      capture.entry={...(result.provider?{headers:result.headers&&typeof result.headers==='object'?{...result.headers}:{}}:{}),status:'ready',url:result.url,sourceUrl:start,filename:given,size:capture.size,host:hostOf(result.url),...(referer?{referer}:{}),...(request.mod?{mod:{...request.mod}}:{})};
     }
   }
   alertBlocked(capture){
@@ -264,7 +273,7 @@ class BrowserBridge extends EventEmitter{
       // The queue skips a link it already holds (finished, failed or paused),
       // so say so instead of reporting a download that will never start.
       if(added)capture.status='queued';
-      else{capture.status='duplicate';capture.message='This file is already in your Downloads list. Use Retry there, or remove the old entry and download it again.';}
+      else{capture.status='duplicate';capture.message='This file is already in your Downloads list. Resume or retry it there, or remove the old entry and download it again.';}
       this.emit('change');
       return {...this.snapshot(),added};
     }
@@ -283,21 +292,22 @@ class BrowserBridge extends EventEmitter{
     if(!['ok','not-found'].includes(report.status))return null;
     const virusTotal={status:report.status,malicious:report.malicious??0,suspicious:report.suspicious??0,harmless:report.harmless??0,undetected:report.undetected??0,link:report.link,checkedAt:new Date(this.now()).toISOString()};
     this.setReputation(download.id,{virusTotal});
-    if(report.status==='ok'&&report.malicious>=2){try{this.notify({title:'Check this download before opening it',body:`${report.malicious} security vendors on VirusTotal flagged ${download.name||'a downloaded file'}.`});}catch{}}
+    if(report.status==='ok'&&report.malicious>=2){try{this.notify({title:'Check this download before opening it',body:download.name?`${report.malicious} security vendors on VirusTotal flagged ${download.name}.`:`${report.malicious} security vendors on VirusTotal flagged a downloaded file.`});}catch{}}
     return virusTotal;
   }
   snapshot(){
     this.expire();
     const captures=[...this.captures.values()].sort((a,b)=>b.createdAt-a.createdAt).slice(0,MAX_PENDING).map(capture=>({
       id:capture.id,createdAt:new Date(capture.createdAt).toISOString(),browser:capture.browser,source:capture.source,status:capture.status,
-      name:capture.displayName,size:capture.size,address:capture.request.finalUrl||capture.request.url,pageHost:hostOf(capture.request.pageUrl||capture.request.referrer||''),
+      name:capture.displayName,size:capture.size,address:plainAddress(capture.request.finalUrl||capture.request.url),pageHost:hostOf(capture.request.pageUrl||capture.request.referrer||''),
       chain:capture.chain.map(hop=>({...hop})),verdict:capture.verdict?{level:capture.verdict.level,reasons:capture.verdict.reasons.map(item=>({...item}))}:null,
       virusTotal:capture.virusTotal.map(item=>({kind:item.kind,subject:item.subject,status:item.status,reason:item.reason,malicious:item.malicious,suspicious:item.suspicious,harmless:item.harmless,undetected:item.undetected,link:item.link})),
       message:capture.message,mod:capture.request.mod?{...capture.request.mod}:null,
-      // Where a mod file would be saved inside the download folder, named exactly as the queue names it.
-      modFolder:capture.request.mod?`${folderName(MODS_FOLDER)} › ${folderName(gameFolder(capture.request.mod))}`:''
+      // Where a mod file would be saved inside the download folder, named exactly as the queue names it,
+      // from the title the queue files that game's mods under.
+      modFolder:capture.request.mod?`${folderName(MODS_FOLDER)} › ${folderName(this.modTitle(capture.request.mod))}`:''
     }));
     return {running:Boolean(this.server),contact:this.contact?{...this.contact}:null,pending:this.pendingCount(),captures};
   }
 }
-module.exports={BrowserBridge,PROVIDER_ROOTS,MAX_PENDING,isProvider,baseName,savedName};
+module.exports={BrowserBridge,PROVIDER_ROOTS,MAX_PENDING,isProvider,baseName};

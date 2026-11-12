@@ -120,14 +120,15 @@ test('extension files are local, script-free in markup, and never contact the ne
 const own=value=>value===undefined?value:JSON.parse(JSON.stringify(value));
 function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),matched=[]}={}){
   const event=()=>{const listeners=[];return {listeners,addListener:fn=>listeners.push(fn),emit:(...args)=>listeners.map(fn=>fn(...args))};};
-  const calls=[],store={local:{},session:{}},dynamic=new Map();
+  const calls=[],store={local:{},session:{}},dynamic=new Map(),hang={session:false};
   const onChanged=event();
   const area=name=>({
-    get:async keys=>{const out={};for(const key of [].concat(keys))if(key in store[name])out[key]=structuredClone(store[name][key]);return out;},
+    // With `hang` set, the browser never answers a read of that store.
+    get:async keys=>{if(hang[name])await new Promise(()=>{});const out={};for(const key of [].concat(keys))if(key in store[name])out[key]=structuredClone(store[name][key]);return out;},
     set:async values=>{Object.assign(store[name],structuredClone(values));onChanged.emit(values,name);}
   });
   const origin=firefox?'moz-extension://uuid/':'chrome-extension://ccgeallihglgkgpokepckdejgbfojcnh/';
-  const menu={removeAll:async()=>{},create:(props,done)=>{calls.push(['menu',props.id]);done&&done();},onClicked:event()};
+  const menu={removeAll:async()=>{calls.push(['menus-cleared']);},create:(props,done)=>{calls.push(['menu',props.id,props.title]);done&&done();},onClicked:event()};
   const api={
     runtime:{id:'self',getManifest:()=>({version:'0.5.0'}),getURL:file=>origin+file,onMessage:event(),onInstalled:event(),onStartup:event(),
       sendNativeMessage:async(host,message)=>{assert.equal(host,P.HOST_NAME);message=own(message);calls.push(['native',message]);const reply=await native(message);if(reply instanceof Error)throw reply;return reply;}},
@@ -146,9 +147,10 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
   if(firefox){api.runtime.getBrowserInfo=async()=>({name:'Firefox'});api.menus=menu;}else api.contextMenus=menu;
   const context=vm.createContext({console,setTimeout,clearTimeout,URL,URLSearchParams,structuredClone,[firefox?'browser':'chrome']:api});
   vm.runInContext(read('policy.js'),context,{filename:'policy.js'});
+  vm.runInContext(read('text.js'),context,{filename:'text.js'});
   vm.runInContext(read('background.js'),context,{filename:'background.js'});
   const message=async(msg,url=origin+'popup.html',tab)=>new Promise(resolve=>{const handled=api.runtime.onMessage.emit(msg,{id:'self',url,tab},value=>resolve(own(value)))[0];if(handled!==true)resolve(undefined);});
-  return {api,calls,store,dynamic,message,of:kind=>calls.filter(call=>call[0]===kind)};
+  return {api,calls,store,dynamic,hang,message,of:kind=>calls.filter(call=>call[0]===kind)};
 }
 
 test('Chrome: Ravenshelf takes, blocks or leaves each download, and an unanswered one stays in the browser',async()=>{
@@ -450,11 +452,15 @@ test('the Nexus Mods note survives the browser putting the extension to sleep',a
 test('Firefox labels Nexus Mods downloads the same way',async()=>{
   const b=fakeBrowser({firefox:true,native:()=>({ok:true,action:'take'})});
   await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
-  b.api.downloads.onCreated.emit({id:1,...CDN_ITEM,filename:`/home/p/Downloads/${MOD_FILE.replace('.7z','(1).7z')}`,incognito:false});await tick();
+  // An address without the game and mod numbers in it: only the file's name can find the page.
+  const unnumbered=`https://files.nexus-cdn.com/8f14e45f-ceea-467f-9a36-dedd4bea2543/${encodeURIComponent(MOD_FILE)}?md5=abc&expires=1&user_id=2`;
+  b.api.downloads.onCreated.emit({id:1,...CDN_ITEM,url:unnumbered,filename:`/home/p/Downloads/${MOD_FILE.replace('.7z','(1).7z')}`,incognito:false});await tick();
   assert.deepEqual(captures(b)[0].mod,MOD_LABEL,'Firefox’s "(1)" for a second copy does not hide the file name');
-  b.api.downloads.onCreated.emit({id:2,...CDN_ITEM,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
-  assert.deepEqual(captures(b)[1].mod,MOD_LABEL,'matched by the game and mod numbers in the address when the name differs');
-  assert.deepEqual(b.calls.filter(call=>['pause','cancel','resume'].includes(call[0])),[['pause',1],['cancel',1],['pause',2],['cancel',2]]);
+  b.api.downloads.onCreated.emit({id:2,...CDN_ITEM,url:unnumbered,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
+  assert.equal(captures(b)[1].mod,undefined,'a name no page showed, at an address without numbers: no label');
+  b.api.downloads.onCreated.emit({id:3,...CDN_ITEM,filename:'/home/p/Downloads/renamed by the browser.7z',incognito:false});await tick();
+  assert.deepEqual(captures(b)[2].mod,(({fileId,fileName,...rest})=>rest)(MOD_LABEL),'the game and mod numbers in an older address name the mod, not the file');
+  assert.deepEqual(b.calls.filter(call=>['pause','cancel','resume'].includes(call[0])),[['pause',1],['cancel',1],['pause',2],['cancel',2],['pause',3],['cancel',3]]);
 });
 
 test('an older Ravenshelf that does not know about mods still gets the download',async()=>{
@@ -484,6 +490,8 @@ test('only Ravenshelf’s own script on a Nexus Mods page can leave a note, and 
   assert.equal(await fromNexus(b,note,{frameId:2}),undefined,'frames inside the page are ignored');
   assert.equal(await fromNexus(b,note,{url:'https://www.nexusmods.com.evil.example/skyrimspecialedition/mods/12604'}),undefined);
   assert.equal(await fromNexus(b,note,{url:'https://evil.example/'}),undefined);
+  assert.equal(await fromNexus(b,note,{url:'https://evil.example/?next=https://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined,'an address that only contains the site’s address');
+  assert.equal(await fromNexus(b,note,{url:'https://evil.example/https://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined);
   assert.equal(await fromNexus(b,note,{url:'http://www.nexusmods.com/skyrimspecialedition/mods/12604'}),undefined);
   assert.equal(await fromNexus(b,note,{tab:null}),undefined,'only a page in a tab');
   assert.equal(await fromNexus(b,note,{id:'another-extension'}),undefined,'only this extension’s own script');
@@ -631,4 +639,166 @@ test('what the browser kept while the extension slept is still there after the f
   const off=asleep();
   await off.message({cmd:'set',key:'nexus',value:false});await tick(150);
   assert.deepEqual(off.store.session.modPages,{});assert.equal(off.store.session.tabInfo[5].host,'fuckingfast.co');
+});
+
+// ---------- 0.7.1 ----------
+test('a download never waits for the browser’s storage, except a Nexus Mods file, and that one only briefly',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  // The browser does not answer the read of its session store, where the notes of Nexus Mods pages are kept.
+  b.hang.session=true;
+  assert.equal(await startDownload(b,{id:1,url:'https://cdn.example/game.zip',filename:'game.zip'}),0,'an ordinary download is decided at once');
+  assert.equal(captures(b).length,1);
+  assert.equal(await startDownload(b,{id:2,url:'https://mirror.example/x.7z',referrer:MOD_URL,filename:'x.7z'}),0,'also one that was started on a Nexus Mods page but is kept elsewhere');
+  assert.equal(captures(b).length,2);
+  assert.equal(await startDownload(b,{id:3,url:'https://short.example/x',finalUrl:CDN_ITEM.url,filename:MOD_FILE}),0,'and one that only ended up on a file server');
+  assert.equal(captures(b).length,3);
+  // With the switch off, a Nexus Mods file has no use for the notes either.
+  await b.api.storage.local.set({nexus:false});
+  assert.equal(await startDownload(b,{id:4,...CDN_ITEM}),0);
+  assert.equal(captures(b).length,4);assert.equal(captures(b)[3].mod,undefined);
+  await b.api.storage.local.set({nexus:true});
+  // A Nexus Mods file waits for the notes, but not for long. It is then sent as it is, without a label.
+  const started=Date.now();
+  b.api.downloads.onDeterminingFilename.emit({id:5,...CDN_ITEM},()=>{});
+  await tick(1000);
+  assert.equal(captures(b).length,4,'still waiting after a second');
+  for(let i=0;i<120&&captures(b).length<5;i++)await tick(20);
+  assert.equal(captures(b).length,5,'sent after a second and a half');assert.ok(Date.now()-started<3000);
+  assert.equal(captures(b)[4].mod,undefined);assert.equal(captures(b)[4].url,CDN_ITEM.url);
+  assert.deepEqual(b.of('cancel').map(call=>call[1]),[1,2,3,4,5],'each was taken by Ravenshelf');
+  // When the store does answer, nothing waits.
+  const quick=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  await fromNexus(quick,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
+  const before=Date.now();
+  assert.equal(await startDownload(quick,{id:1,...CDN_ITEM}),0);
+  assert.deepEqual(captures(quick)[0].mod,MOD_LABEL);assert.ok(Date.now()-before<500);
+});
+
+test('notes that are too old are dropped as soon as another note arrives',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  const page=P.nexusPage(MOD_PAGE,P.nexusAddress(MOD_URL)),other=P.nexusPage({gameId:'1151',gameName:'Fallout 4',modName:'Another Mod',files:[]},P.nexusAddress('https://www.nexusmods.com/fallout4/mods/77'));
+  // What the browser kept from before it put the extension to sleep: one note that is too old, one from a clock that was since set back, one that is fresh.
+  b.store.session.modPages={3:{...page,at:Date.now()-P.NEXUS_PAGE_MS-1000},4:{...page,at:Date.now()+60000},5:{...page,at:Date.now()-60000}};
+  assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:'https://www.nexusmods.com/fallout4/mods/77',page:{gameId:'1151',gameName:'Fallout 4',modName:'Another Mod',files:[]}},{url:'https://www.nexusmods.com/fallout4/mods/77',tab:{id:9,incognito:false}}),{ok:true});
+  await tick(150);
+  assert.deepEqual(Object.keys(b.store.session.modPages).sort(),['5','9'],'only the fresh note and the new one are kept, with no download in between');
+  assert.equal(b.store.session.modPages[9].modName,other.modName);
+});
+
+test('the toolbar window hides a switch that the running extension does not know',async()=>{
+  const SWITCHES=['capture','protection','guard','youtube','nexus'];
+  const state={version:'0.7.1',browser:'chromium',status:'connected',appVersion:'0.7.1',capture:true,protection:true,guard:false,youtube:true,nexus:true,pausedUntil:0,listTotal:5,listSyncedAt:0};
+  // popup.js against a page that only records what is done to it.
+  const open=async reply=>{
+    const elements=new Map(),sent=[];
+    const element=id=>{
+      if(!elements.has(id)){const label={hidden:false};elements.set(id,{id,label,checked:false,hidden:false,disabled:false,textContent:'',className:'',listeners:{},addEventListener(type,fn){this.listeners[type]=fn;},closest(selector){assert.equal(selector,'label');return label;}});}
+      return elements.get(id);
+    };
+    const api={runtime:{sendMessage:async message=>{sent.push(message);return typeof reply==='function'?reply(message):reply;}},storage:{onChanged:{addListener(){}}},tabs:{query:async()=>[{url:'https://example.com/',incognito:false}]}};
+    const context=vm.createContext({chrome:api,document:{getElementById:element},Date,Number});
+    vm.runInContext(read('policy.js'),context,{filename:'policy.js'});vm.runInContext(read('text.js'),context,{filename:'text.js'});vm.runInContext(read('popup.js'),context,{filename:'popup.js'});
+    await tick(30);
+    return {element,sent};
+  };
+  const current=await open({ok:true,state});
+  for(const key of SWITCHES){assert.equal(current.element(key).label.hidden,false,key);assert.equal(current.element(key).checked,state[key],key);}
+  // A copy from before 0.7.0 is still running: it has never heard of the Nexus Mods switch, and would refuse it.
+  const {nexus,...earlier}=state;
+  const older=await open({ok:true,state:earlier});
+  assert.equal(older.element('nexus').label.hidden,true);
+  for(const key of SWITCHES.filter(key=>key!=='nexus'))assert.equal(older.element(key).label.hidden,false,key);
+  // A switch that is merely off is still shown.
+  const off=await open({ok:true,state:{...state,nexus:false,youtube:false}});
+  assert.equal(off.element('nexus').label.hidden,false);assert.equal(off.element('nexus').checked,false);assert.equal(off.element('youtube').checked,false);
+  // Turning a switch tells the extension, with the key and the new value.
+  off.element('nexus').listeners.change({target:{checked:true}});await tick(20);
+  assert.deepEqual(JSON.parse(JSON.stringify(off.sent.at(-1))),{cmd:'set',key:'nexus',value:true});
+});
+
+// ---- the extension in the app's language ----
+const TEXT=require('../src/browser-extension/text.js');
+test('every text of the extension has an Arabic version that starts with an Arabic word',()=>{
+  const LIT="'((?:[^'\\\\]|\\\\.)*)'";
+  const keys=new Set(),plurals=new Map();
+  for(const file of ['background.js','popup.js','blocked.js','youtube.js']){
+    const source=read(file);
+    for(const m of source.matchAll(new RegExp('\\bt\\(\\s*'+LIT,'g')))keys.add(m[1]);
+    for(const m of source.matchAll(new RegExp('\\btn\\([^,]+,\\s*'+LIT+',\\s*'+LIT,'g')))plurals.set(m[2],m[1]);
+    // The English titles and messages that are translated where they are shown.
+    for(const m of source.matchAll(/notify\([^,]+,\s*'([^']+)',\s*'([^']*)'/g)){keys.add(m[1]);if(m[2])keys.add(m[2]);}
+    for(const m of source.matchAll(/notify\([^,]+,\s*'([^']+)',\s*`([^`]*)`/g)){keys.add(m[1]);}
+    for(const m of source.matchAll(/showMessage\(\s*'([^']+)'/g))keys.add(m[1]);
+  }
+  for(const html of ['popup.html','blocked.html'])for(const m of read(html).matchAll(/<[a-z0-9]+\b[^>]*\sdata-i18n(?=[\s>])[^>]*>([^<]*)</g))keys.add(m[1].replace(/\s+/g,' ').trim());
+  // The texts that are kept in the extension's tables.
+  const background=read('background.js'),popup=read('popup.js'),blocked=read('blocked.js');
+  const categories=background.slice(background.indexOf('const CATEGORY_TEXT = '),background.indexOf('\n',background.indexOf('const CATEGORY_TEXT = ')));
+  for(const m of categories.matchAll(new RegExp(LIT,'g')))if(m[1].includes(' '))keys.add('{host} is on a list of '+m[1]+'.');
+  for(const m of popup.matchAll(/title: '([^']+)'/g))keys.add(m[1]);
+  for(const m of blocked.matchAll(new RegExp(LIT,'g')))if(/^[A-Z{].* /.test(m[1]))keys.add(m[1]);
+  for(const reply of [{ok:true,action:'queued'},{ok:true,action:'duplicate'},{ok:true,action:'setup'},{ok:true,action:'busy'},...['not-running','not-installed','not-allowed','private','busy','invalid','x'].map(error=>({ok:false,error}))]){
+    const text=P.mediaReplyText(reply);keys.add(text.title);keys.add(text.text);
+  }
+  for(const choice of P.PLAYER_CHOICES){if(!/^\d+p$|^M4A$|^MP3$/.test(choice.label))keys.add(choice.label);keys.add(choice.hint);}
+  for(const label of ['Video','Audio only','Download with Ravenshelf','Saved to Ravenshelf › YouTube'])keys.add(label);
+  assert.ok(keys.size>80,`found ${keys.size}`);
+  const missing=[...keys].filter(key=>!plurals.has(key)&&typeof TEXT.AR[key]!=='string'&&!TEXT.AR_PLURAL[key]);
+  assert.deepEqual(missing,[]);
+  for(const [other] of plurals)assert.ok(TEXT.AR_PLURAL[other],other);
+  const holders=text=>[...text.matchAll(/\{(\w+)\}/g)].map(m=>m[1]).sort();
+  const check=(key,value,form)=>{
+    // A notification or a menu takes its direction from its first letter.
+    assert.match(value,/^[^A-Za-z{]*[\u0600-\u06ff]/,`${key}: starts with an Arabic word`);
+    assert.doesNotMatch(value,/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/,key);
+    if(['zero','one','two'].includes(form))assert.deepEqual(holders(value).filter(n=>n!=='n'),holders(key).filter(n=>n!=='n'),key);
+    else assert.deepEqual(holders(value),holders(key),key);
+  };
+  for(const [key,value] of Object.entries(TEXT.AR))check(key,value);
+  for(const [key,forms] of Object.entries(TEXT.AR_PLURAL)){assert.deepEqual(Object.keys(forms),['zero','one','two','few','many','other']);for(const [form,value] of Object.entries(forms))check(key,value,form);}
+});
+
+test('the extension texts follow the app, then the browser, and stay English otherwise',()=>{
+  assert.equal(TEXT.pick('ar','en-US'),'ar');assert.equal(TEXT.pick('en','ar'),'en');
+  assert.equal(TEXT.pick(undefined,'ar'),'ar');assert.equal(TEXT.pick(undefined,'ar-IQ'),'ar');assert.equal(TEXT.pick('fr','en-GB'),'en');assert.equal(TEXT.pick(null,undefined),'en');
+  const en=TEXT.create('en'),ar=TEXT.create('ar'),arab=TEXT.create('ar','arab');
+  assert.equal(en.t('{source} tried to open {target}. File hosts use pop-ups for ads and fake downloads.',{source:'a.test',target:'b.test'}),'a.test tried to open b.test. File hosts use pop-ups for ads and fake downloads.');
+  assert.equal(en.tn(1,'{n} min ago','{n} min ago'),'1 min ago');assert.equal(en.count(12345),'12,345');
+  assert.equal(ar.t('Private window'),TEXT.AR['Private window']);
+  assert.ok(ar.t('Back to {host}',{host:'a.test'}).includes('\u2068a.test\u2069'),'a site keeps its own direction');
+  assert.equal(ar.tn(2,'{n} days ago','{n} days ago'),TEXT.AR_PLURAL['{n} days ago'].two);
+  assert.equal(arab.tn(5,'{n} min ago','{n} min ago'),'\u0642\u0628\u0644 \u0665 \u062f\u0642\u0627\u0626\u0642');
+  assert.equal(arab.t('Pause protection for 10 minutes'),TEXT.AR['Pause protection for 10 minutes'].replace('10','\u0661\u0660'));
+  assert.equal(arab.t('Up to 4K'),TEXT.AR['Up to 4K'],'digits of a name stay as they are');
+  assert.equal(ar.t('Something the app already wrote in Arabic'),'Something the app already wrote in Arabic');
+});
+
+test('the extension learns the app language when it says hello, and its menu and notices follow',async()=>{
+  let language='ar';
+  const b=fakeBrowser({native:message=>message.type==='hello'?{ok:true,version:'0.8.0',language,digits:'arab'}:message.type==='send'?{ok:true,action:'block',reason:'\u0646\u0635 \u0645\u0646 \u0627\u0644\u062a\u0637\u0628\u064a\u0642'}:{ok:false,error:'invalid'}});
+  await b.message({cmd:'status'});await tick(30);
+  assert.equal(b.store.local.appLanguage,'ar');assert.equal(b.store.local.appDigits,'arab');
+  const titles=b.of('menu').map(call=>call[2]);
+  assert.deepEqual(titles.slice(-3),[TEXT.AR['Download with Ravenshelf'],TEXT.AR['Download this file with Ravenshelf'],TEXT.AR['Download this video with Ravenshelf']]);
+  // A reason the app sends is already in its language and is shown as it is.
+  b.api.contextMenus.onClicked.emit({menuItemId:'ravenshelf-link',linkUrl:'https://cdn.example/a.zip',pageUrl:'https://example.com/'},{incognito:false});await tick(30);
+  assert.deepEqual(b.of('notify').at(-1),['notify',TEXT.AR['Ravenshelf blocked this link'],'\u0646\u0635 \u0645\u0646 \u0627\u0644\u062a\u0637\u0628\u064a\u0642']);
+  // Back to English: the menu is made again in English.
+  language='en';const before=b.of('menu').length;
+  await b.message({cmd:'status'});await tick(30);
+  assert.equal(b.store.local.appLanguage,'en');
+  assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
+  // An answer with an unknown language changes nothing.
+  language='fr';await b.message({cmd:'status'});await tick(30);assert.equal(b.store.local.appLanguage,'en');
+});
+
+test('a program that a page made itself is blocked with a text that can be shown in Arabic',()=>{
+  const plan=P.downloadPlan({id:1,url:'blob:https://site.example/1',filename:'C:\\Downloads\\setup.exe'},{capture:true});
+  assert.equal(plan.kind,'block');
+  assert.equal(plan.reason,'Ravenshelf stopped setup.exe that a web page created for download. Programs made this way are a common malware trick.');
+  assert.equal(TEXT.create('en').t(plan.template,plan.params),plan.reason,'English is unchanged');
+  assert.ok(TEXT.create('ar').t(plan.template,plan.params).includes('\u2068setup.exe\u2069'));
+  assert.match(TEXT.create('ar').t(plan.template,plan.params),/^[\u0600-\u06ff]/);
+  const unnamed=P.downloadPlan({id:2,url:'data:application/octet-stream;base64,AA',filename:'.exe'},{capture:true});
+  if(unnamed.kind==='block')assert.equal(TEXT.create('en').t(unnamed.template,unnamed.params),unnamed.reason);
 });

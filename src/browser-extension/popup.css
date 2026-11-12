@@ -29,7 +29,7 @@ body.popup{width:340px;padding:16px}
 .toggle strong{display:block;font-size:12.5px;font-weight:600}
 .toggle small{display:block;color:var(--muted);font-size:11px;margin-top:1px}
 .toggle input{appearance:none;-webkit-appearance:none;flex:0 0 34px;width:34px;height:20px;margin:1px 0 0;border-radius:20px;background:#2a2f41;border:1px solid #3a4057;position:relative;cursor:pointer;transition:background .15s}
-.toggle input::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#aeb6c9;transition:transform .15s,background .15s}
+.toggle input::after{content:'';position:absolute;top:2px;inset-inline-start:2px;width:14px;height:14px;border-radius:50%;background:#aeb6c9;transition:transform .15s,background .15s}
 .toggle input:checked{background:var(--accent);border-color:var(--accent-line)}
 .toggle input:checked::after{transform:translateX(14px);background:#fff}
 .actions{margin-bottom:10px}
@@ -46,4 +46,8 @@ body.page{min-height:100vh;display:flex;align-items:center;justify-content:cente
 .card .host{font:600 15px/1.4 ui-monospace,Consolas,monospace;background:#0d111d;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-wrap:anywhere;color:#f1c2cd}
 .row{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 14px}
 .row button{width:auto;flex:1 1 auto}
+/* Arabic: right to left. The switch knob moves the other way, and letter
+   spacing is not used because it breaks the joining of Arabic letters. */
+html[dir="rtl"] .toggle input:checked::after{transform:translateX(-14px)}
+html:lang(ar) .card h1{letter-spacing:0}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}

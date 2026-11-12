@@ -73,3 +73,27 @@ test('manual redirect mode leaves the host form destination for the caller',asyn
  const result=await h.safeFetch('https://example.org/form',{redirect:'manual'});
  assert.equal(result.status,302);assert.equal(calls,1);await result.body?.cancel();
 });
+test('a caller can refuse where a request is sent on to, before that address is contacted',async()=>{
+ const hops={'https://a.example.org/1':'https://b.example.org/2','https://b.example.org/2':'/3?x=1','https://b.example.org/3?x=1':'https://c.example.net/4'};
+ const calls=[];
+ const h=harness(async(url,init)=>{calls.push({url:String(url),keys:Object.keys(init)});const next=hops[String(url)];return next?new Response(null,{status:302,headers:{location:next}}):new Response('the file');});
+ const seen=[];
+ const response=await h.safeFetch('https://a.example.org/1',{checkRedirect:next=>{seen.push(next);}});
+ assert.equal(await response.text(),'the file');
+ assert.deepEqual(seen,['https://b.example.org/2','https://b.example.org/3?x=1','https://c.example.net/4'],'asked about each address in turn, in full');
+ assert.deepEqual(calls.map(call=>call.url),['https://a.example.org/1','https://b.example.org/2','https://b.example.org/3?x=1','https://c.example.net/4']);
+ assert.ok(calls.every(call=>!call.keys.includes('checkRedirect')),'the rule itself is not passed on to the network library');
+ // Refusing stops the request there: the refused address is never contacted.
+ calls.length=0;
+ await assert.rejects(h.safeFetch('https://a.example.org/1',{checkRedirect:next=>{if(next.startsWith('https://c.example.net/'))throw new Error('Not there.');}}),/^Error: Not there\.$/);
+ assert.deepEqual(calls.map(call=>call.url),['https://a.example.org/1','https://b.example.org/2','https://b.example.org/3?x=1']);
+ // It is asked only about addresses that pass the checks every request gets, and not at all without a hand-over.
+ let asked=0;
+ const local=harness(async()=>new Response(null,{status:302,headers:{location:'https://127.0.0.1/private'}}));
+ await assert.rejects(local.safeFetch('https://example.org/file',{checkRedirect:()=>{asked++;}}),/Only public HTTPS/);
+ const direct=harness(async()=>new Response('ok'));
+ await direct.safeFetch('https://example.org/file',{checkRedirect:()=>{asked++;}});
+ const manual=harness(async()=>new Response(null,{status:302,headers:{location:'https://example.net/next'}}));
+ assert.equal((await manual.safeFetch('https://example.org/file',{redirect:'manual',checkRedirect:()=>{asked++;}})).status,302);
+ assert.equal(asked,0);
+});

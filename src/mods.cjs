@@ -20,6 +20,14 @@ const ONE_CONNECTION_NOTE='Nexus Mods files download over one connection.';
 // answer with one of these. Shown instead of a bare status number.
 const LINK_REFUSED=Object.freeze([401,403,404,410]);
 const LINK_EXPIRED_NOTE='Nexus Mods did not accept this download link. Its links expire after a while: start the download again from the mod’s page.';
+// A mod file's download may be passed on from one of Nexus Mods' file servers
+// to another, and nowhere else.
+const LINK_MOVED_NOTE='Nexus Mods sent this download on to another site, so Ravenshelf stopped it. Start the download again from the mod’s page.';
+// A cancelled mod download does not keep its link (see the queue).
+const LINK_DROPPED_NOTE='Ravenshelf does not keep the link of a cancelled Nexus Mods download. Start the download again from the mod’s page.';
+// The site itself. A download can begin at an address there and be handed on
+// to a file server.
+const SITE_HOST='www.nexusmods.com';
 const invalid=()=>{throw new Error('Invalid browser request.');};
 
 const onFileServer=value=>{
@@ -27,14 +35,20 @@ const onFileServer=value=>{
   const host=url.hostname.toLowerCase();
   return url.protocol==='https:'&&FILE_ROOTS.some(root=>host===root||host.endsWith('.'+root));
 };
+const onSite=value=>{
+  let url;try{url=new URL(value);}catch{return false;}
+  return url.protocol==='https:'&&url.hostname.toLowerCase()===SITE_HOST;
+};
 // Text for display: no control characters, no invisible, blank or
-// text-direction characters, no private-use characters or broken character
-// pairs, and single spaces only. A value that is not usable text is refused,
-// never repaired.
+// text-direction characters, no private-use or unassigned characters or
+// broken character pairs, and single spaces only. Marks that sit on the letter
+// before them (accents, for example) may not come more than three in a row,
+// and not first. A value that is not usable text is refused, never repaired.
 function label(value,max){
   if(value===undefined)return undefined;
   if(typeof value!=='string'||!value||value.length>max||value!==value.trim()||/\s{2,}/.test(value))invalid();
-  if(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffd]/u.test(value))invalid();
+  if(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffc\ufffd]/u.test(value))invalid();
+  if(/^\p{M}|\p{M}{4}/u.test(value))invalid();
   return value;
 }
 function number(value,{optional=false}={}){
@@ -53,12 +67,19 @@ function modContext(value){
   for(const [key,max] of [['gameName',100],['modName',200],['fileName',200]]){const text=label(value[key],max);if(text!==undefined)mod[key]=text;}
   return mod;
 }
-// True when a download is fetched from one of Nexus Mods' file servers. The
-// page that started it does not count: any page can link to any file.
+// True when a download is a Nexus Mods file: it is fetched from one of the
+// site's file servers, and the address the browser first asked for is on a
+// file server or on the site itself. A download that began anywhere else and
+// only ended up on a file server is not labelled: "Download in browser
+// instead" would open that first address again. The page that started the
+// download does not count either way: any page can link to any file.
 function fromNexus(request){
   if(!request||typeof request!=='object')return false;
-  return onFileServer(request.finalUrl||request.url);
+  return onFileServer(request.finalUrl||request.url)&&(onFileServer(request.url)||onSite(request.url));
 }
+// Refuses an address a mod file's download is being sent on to, unless it is
+// one of Nexus Mods' file servers.
+function assertFileServer(address){if(!onFileServer(address))throw new Error(LINK_MOVED_NOTE);}
 // The folder a mod download is saved in, inside Mods: the game's name.
 const modFolder=mod=>mod.gameName||mod.game;
-module.exports={SITE,MODS_FOLDER,FILE_ROOTS,ONE_CONNECTION_NOTE,LINK_REFUSED,LINK_EXPIRED_NOTE,modContext,fromNexus,modFolder};
+module.exports={SITE,MODS_FOLDER,FILE_ROOTS,ONE_CONNECTION_NOTE,LINK_REFUSED,LINK_EXPIRED_NOTE,LINK_MOVED_NOTE,LINK_DROPPED_NOTE,modContext,fromNexus,assertFileServer,modFolder};

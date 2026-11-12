@@ -64,7 +64,10 @@
     const filename = baseName(item.filename);
     if (scheme === 'blob:' || scheme === 'data:') {
       // A web page built this file itself, so Ravenshelf cannot fetch it again.
-      if (LOCAL_DANGEROUS.has(extensionOf(filename))) return { kind: 'block', reason: `Ravenshelf stopped ${filename || 'a program'} that a web page created for download. Programs made this way are a common malware trick.` };
+      // The reason is English; template and params let it be shown in the app's language.
+      if (LOCAL_DANGEROUS.has(extensionOf(filename))) return filename
+        ? { kind: 'block', reason: `Ravenshelf stopped ${filename} that a web page created for download. Programs made this way are a common malware trick.`, template: 'Ravenshelf stopped {name} that a web page created for download. Programs made this way are a common malware trick.', params: { name: filename } }
+        : { kind: 'block', reason: 'Ravenshelf stopped a program that a web page created for download. Programs made this way are a common malware trick.', template: 'Ravenshelf stopped a program that a web page created for download. Programs made this way are a common malware trick.' };
       return { kind: 'ignore' };
     }
     if (!['http:', 'https:'].includes(schemeOf(url)) || url.length > MAX_URL || (finalUrl && (finalUrl.length > MAX_URL || !['http:', 'https:'].includes(scheme)))) return { kind: 'ignore' };
@@ -92,15 +95,20 @@
     return Number.isSafeInteger(number) && number >= 1 && number <= NEXUS_MAX_ID ? number : undefined;
   }
   // Text a page showed, made safe to pass on: control characters, invisible,
-  // blank and text-direction characters, private-use characters and broken
-  // character pairs removed, spaces collapsed, length limited without cutting
-  // a character in half. Empty gives undefined. The app refuses the same
-  // characters (src/mods.cjs).
+  // blank and text-direction characters, private-use and unassigned characters
+  // and broken character pairs removed, spaces collapsed, length limited
+  // without cutting a character in half. Accents and other marks that sit on
+  // the letter before them are kept, but no more than three in a row, and none
+  // at the very start, where one would sit on whatever stands in front of the
+  // name. Empty gives undefined. The app refuses what is removed here
+  // (src/mods.cjs).
   function nexusText(value, max) {
     if (typeof value !== 'string') return undefined;
     const text = value.slice(0, 4000)
-      .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffd]/gu, ' ')
-      .replace(/\s+/g, ' ').trim().slice(0, max).replace(/[\ud800-\udbff]$/, '').trim();
+      .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffc\ufffd]/gu, ' ')
+      .replace(/(\p{M}{3})\p{M}+/gu, '$1')
+      .replace(/\s+/g, ' ').trim().slice(0, max).replace(/[\ud800-\udbff]$/, '').trim()
+      .replace(/^[\p{M} ]+/u, '');
     return text || undefined;
   }
   // The game and mod a Nexus Mods address is about: /{game}/mods/{number},
@@ -163,17 +171,28 @@
     if (file && file.fileName) mod.fileName = file.fileName;
     return mod;
   }
+  // Whether a download can be a Nexus Mods file at all. It is fetched from one
+  // of the site's file servers, and the address the browser first asked for is
+  // Nexus Mods' too: a file server, or the site itself. A download that began
+  // somewhere else and only ended up on a file server is not the site's own.
+  // The app checks the same (src/mods.cjs).
+  function nexusFile(item) {
+    if (!item || typeof item !== 'object') return false;
+    const target = typeof item.finalUrl === 'string' && item.finalUrl ? item.finalUrl : item.url;
+    if (schemeOf(target) !== 'https:' || !onHosts(hostOf(target), NEXUS_FILE_ROOTS)) return false;
+    return schemeOf(item.url) === 'https:' && (onHosts(hostOf(item.url), NEXUS_FILE_ROOTS) || hostOf(item.url) === NEXUS_HOST);
+  }
   // Which mod a browser download belongs to, or null. Only a file that comes
   // from Nexus Mods' own file servers can be labelled: a page on the site can
-  // link to files kept anywhere. Then the evidence is, in this order: the
+  // link to files kept anywhere, and a download that began on another site is
+  // not the site's own either. Then the evidence is, in this order: the
   // file's name is one a Nexus Mods page showed in the last half hour; the
   // download was started from a mod's own address; or the file's address
   // carries the game and mod numbers of such a page. Evidence that points at
   // more than one mod gives no label.
   function nexusMatch(item, pages, now) {
-    if (!item || typeof item !== 'object' || !Array.isArray(pages)) return null;
+    if (!nexusFile(item) || !Array.isArray(pages)) return null;
     const target = typeof item.finalUrl === 'string' && item.finalUrl ? item.finalUrl : item.url;
-    if (schemeOf(target) !== 'https:' || !onHosts(hostOf(target), NEXUS_FILE_ROOTS)) return null;
     const recent = pages.filter(page => page && typeof page === 'object' && page.game && page.modId && Array.isArray(page.files) && Number.isFinite(page.at) && now - page.at >= 0 && now - page.at < NEXUS_PAGE_MS).sort((a, b) => b.at - a.at);
     const sameMod = (a, b) => a.game === b.game && a.modId === b.modId;
     // Older files sit at /{game number}/{mod number}/{file name} on the file servers.
@@ -198,13 +217,17 @@
       return nexusMod(chosen[0], fileIn(chosen[0], key));
     }
     if (address) {
-      const same = recent.filter(page => sameMod(page, address) && agrees(page));
+      const same = recent.filter(page => sameMod(page, address));
+      // A note of that very page whose game number is not the one in the file's
+      // address: the file belongs to another game's mod of the same number.
+      if (!same.every(agrees)) return null;
       const file = address.fileId && same.length ? same[0].files.find(candidate => candidate && candidate.fileId === address.fileId) : null;
       return nexusMod(same[0] || address, file || address);
     }
     if (numbers) {
+      // The numbers name the mod. They do not say which of its files this is.
       const page = recent.find(candidate => candidate.gameId === numbers.gameId && candidate.modId === numbers.modId);
-      if (page) return nexusMod(page, page.files.length === 1 ? page.files[0] : null);
+      if (page) return nexusMod(page, null);
     }
     return null;
   }
@@ -280,7 +303,7 @@
     if (/forbidden/i.test(text)) return 'not-allowed';
     return 'unavailable';
   }
-  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusMatch };
+  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusFile, nexusMatch };
   if (typeof module === 'object' && module.exports) module.exports = policy;
   else root.RavenshelfPolicy = Object.freeze(policy);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

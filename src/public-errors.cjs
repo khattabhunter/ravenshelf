@@ -1,7 +1,7 @@
 'use strict';
 const {MESSAGES:TOOL_MESSAGES}=require('./media-tools.cjs');
 const {MESSAGES:MEDIA_MESSAGES}=require('./media-downloads.cjs');
-const {LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED}=require('./mods.cjs');
+const {LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_MOVED_NOTE:MOD_LINK_MOVED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED}=require('./mods.cjs');
 
 // Only developer-authored messages cross the main-process error boundary.
 // Do not redact arbitrary exception text: paths, credentials and response data
@@ -155,10 +155,14 @@ const MESSAGES=new Map([
   'Only YouTube video addresses can be downloaded this way.',
   'Too many YouTube downloads are waiting. Let some finish first.',
   'Choose a YouTube download quality.',
+  'Choose a language from the list.',
+  'This download has no Nexus Mods page.',
+  'No mods have been downloaded yet.',
+  'Choose how numbers are written from the list.',
   // Fixed messages of the YouTube helper programs and yt-dlp runner.
   ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES),
-  // A mod file's download link that Nexus Mods no longer accepts.
-  MOD_LINK_EXPIRED
+  // Fixed messages about a mod file's download link.
+  MOD_LINK_EXPIRED,MOD_LINK_MOVED,MOD_LINK_DROPPED
 ].map(message=>[message,message]));
 // The connector check failing means this copy of the app was altered or damaged.
 const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';
@@ -198,7 +202,10 @@ const ACTIONS=new Map([
   ['removeYouTubeTools','The YouTube helper programs could not be removed. Pause YouTube downloads and try again.'],
   ['saveYouTubeSettings','The YouTube preference could not be saved. Try again.'],
   ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.'],
-  ['getHardware','This PC’s specs could not be read. Try again.']
+  ['getHardware','This PC’s specs could not be read. Try again.'],
+  ['setLanguage','The language could not be changed. Try again.'],
+  ['openModPage','The mod’s page could not be opened.'],
+  ['openModsFolder','The Mods folder could not be opened.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],

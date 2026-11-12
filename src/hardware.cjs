@@ -27,6 +27,7 @@ const NVIDIA=0x10de,AMD=0x1002,INTEL=0x8086,MICROSOFT=0x1414;
 const VENDORS=new Map([[NVIDIA,'NVIDIA'],[AMD,'AMD'],[0x1022,'AMD'],[INTEL,'Intel'],[0x17cb,'Qualcomm'],[0x5143,'Qualcomm'],[0x4d4f4351,'Qualcomm']]);
 // D3D_FEATURE_LEVEL values as DirectX records them.
 const FEATURE_LEVELS=new Map([[0x9100,'9.1'],[0x9200,'9.2'],[0x9300,'9.3'],[0xa000,'10.0'],[0xa100,'10.1'],[0xb000,'11.0'],[0xb100,'11.1'],[0xc000,'12.0'],[0xc100,'12.1'],[0xc200,'12.2']]);
+const NEWEST_LEVEL=0xc200;
 // D3DKMT_ADAPTERTYPE bits in a DirectX adapter record.
 const TYPE={render:0x1,software:0x4,hybridDiscrete:0x10,hybridIntegrated:0x20,indirectDisplay:0x40};
 // Windows' own stand-in drivers: shown when a graphics driver is missing, or
@@ -139,22 +140,26 @@ function pickRecord(records,{vendorId,deviceId,name,driverMemory}){
   }
   return best;
 }
-// The DirectX version a game can ask for, from the adapter's feature levels.
-function directxVersion(d3d11,d3d12){
-  if(FEATURE_LEVELS.has(d3d12)&&d3d12>=0xb000)return 12;
-  if(!FEATURE_LEVELS.has(d3d11))return null;
-  return d3d11>=0xb000?11:d3d11>=0xa000?10:9;
+// The DirectX version a game can ask for and the adapter's feature level, both
+// from the same one of its two records. A Direct3D 12 level newer than any
+// listed here is still DirectX 12; only the name of the level is left out.
+function directxSupport(d3d11,d3d12){
+  if(FEATURE_LEVELS.has(d3d12)&&d3d12>=0xb000)return {version:12,level:FEATURE_LEVELS.get(d3d12)};
+  if(d3d12>NEWEST_LEVEL)return {version:12,level:null};
+  if(!FEATURE_LEVELS.has(d3d11))return {version:null,level:null};
+  return {version:d3d11>=0xb000?11:d3d11>=0xa000?10:9,level:FEATURE_LEVELS.get(d3d11)};
 }
 // A separate graphics card, built-in graphics, or unknown. Windows says which
-// on laptops that have both. Otherwise only what is certain is used. Built-in
-// graphics from Intel and NVIDIA have almost no memory of their own, so one of
-// their adapters with 2 GB or more is a card; and Intel has made no card with
-// less than 1 GB, so an Intel adapter below that is built in. AMD makes both
-// with every amount of memory, so an AMD adapter stays unknown, not guessed.
+// on laptops that have both; a record that says both at once says nothing.
+// Otherwise only what is certain is used. Built-in graphics from Intel and
+// NVIDIA have almost no memory of their own, so one of their adapters with
+// 2 GB or more is a card; and Intel has made no card with less than 1 GB, so
+// an Intel adapter below that is built in. AMD makes both with every amount of
+// memory, so an AMD adapter stays unknown, not guessed.
 function adapterKind(entry,vendorId,dedicated){
   if(entry?.type!==null&&entry?.type!==undefined){
-    if(entry.type&TYPE.hybridDiscrete)return 'discrete';
-    if(entry.type&TYPE.hybridIntegrated)return 'integrated';
+    const card=Boolean(entry.type&TYPE.hybridDiscrete),builtIn=Boolean(entry.type&TYPE.hybridIntegrated);
+    if(card!==builtIn)return card?'discrete':'integrated';
   }
   if(dedicated===null||(vendorId!==NVIDIA&&vendorId!==INTEL))return 'unknown';
   if(dedicated>=2*GIB)return 'discrete';
@@ -203,16 +208,18 @@ function readGraphics(raw){
     // device or a driver problem, and what DirectX recorded may be out of date.
     const status=count(item.status,9999),problem=status!==null&&status!==0;
     const maker=VENDORS.get(vendorId)||text(item.maker,60).replace(/(?:,\s*|\s+)(?:Inc\.?|Corporation|Corp\.?|Ltd\.?|Incorporated)$/i,'').trim()||'';
+    const support=entry&&!problem?directxSupport(entry.d3d11,entry.d3d12):{version:null,level:null};
     adapters.push({name:tidy(name),maker,kind:adapterKind(entry,vendorId,dedicated),dedicatedBytes:dedicated,memorySource:source,
-      sharedBytes:entry?.shared||null,directx:entry&&!problem?directxVersion(entry.d3d11,entry.d3d12):null,
-      featureLevel:entry&&!problem?FEATURE_LEVELS.get(FEATURE_LEVELS.has(entry.d3d12)?entry.d3d12:entry.d3d11)||null:null,
+      sharedBytes:entry?.shared||null,directx:support.version,featureLevel:support.level,
       driver:text(item.driver,40),problem,main:false});
   }
   let main=null;
   for(const adapter of adapters)if(!main||outranks(adapter,main))main=adapter;
   if(main)main.main=true;
-  // The screen size comes from a listed adapter when one reports it.
-  return {adapters,display:display||otherDisplay,basicDisplay:basicDisplay&&!adapters.length};
+  // The screen size comes from a listed adapter when one reports it. A device
+  // on the basic display driver is the whole story when nothing else is
+  // listed, and one more thing to say when something is.
+  return {adapters,display:display||otherDisplay,basicDisplay:basicDisplay?(adapters.length?'beside':'only'):''};
 }
 
 const driveLetter=value=>{const match=/^([a-z]):?$/i.exec(text(value,4));return match?match[1].toUpperCase():null;};
@@ -241,9 +248,9 @@ function readDrives(raw){
     // describes it. And the drive's own details are used only when they are
     // for the same connection as the disk the letter is on; otherwise they
     // may belong to a different drive.
-    const details=connection===BUS_STORAGE_SPACES?{kind:'unknown',bus:BUSES.get(BUS_STORAGE_SPACES),model:''}
-      :physical&&connection!==undefined&&count(physical.bus,99)!==connection?{kind:'unknown',bus:BUSES.get(connection)||'',model:''}
-      :diskDetails(physical);
+    // Without a drive's own details, the same holds: only the connection is named.
+    const connectionOnly={kind:'unknown',bus:BUSES.get(connection)||'',model:''};
+    const details=connection===BUS_STORAGE_SPACES||!physical||(connection!==undefined&&count(physical.bus,99)!==connection)?connectionOnly:diskDetails(physical);
     drives.push({letter,totalBytes:total,freeBytes:free!==null&&free<=total?free:null,format:text(item.format,16),removable:text(item.type,4)==='2',...details});
   }
   // Plain A to Z: the order must not depend on the system language.
@@ -261,7 +268,8 @@ function summarize(raw,{osApi=os,now=Date.now,windows=true}={}){
   const graphics=readGraphics(source);
   const notes=[];
   if(!windows)notes.push('not-windows');else if(!complete)notes.push('probe-failed');
-  if(graphics.basicDisplay)notes.push('basic-display');
+  if(graphics.basicDisplay==='only')notes.push('basic-display');
+  if(graphics.basicDisplay==='beside')notes.push('basic-display-extra');
   return {schema:1,status:complete?'complete':'basic',checkedAt:new Date(now()).toISOString(),
     system:readSystem(source,osApi),processor:readProcessor(source,osApi),memory:readMemory(source,osApi),
     graphics:graphics.adapters,display:graphics.display,drives:readDrives(source),notes};
@@ -272,10 +280,26 @@ function parseProbe(output){
   if(!value||typeof value!=='object'||Array.isArray(value)||value.schema!==1)throw new Error('Unexpected hardware answer.');
   return value;
 }
+// Windows' own folder. The value comes from the environment, so anything that
+// is not a full path on a drive, in plain characters, is not believed.
+const windowsFolder=value=>typeof value==='string'&&/^[A-Za-z]:\\[^\0-\x1f]*$/.test(value)?value:'C:\\Windows';
+// The environment the probe runs in: the app's own, with the place PowerShell
+// looks for its commands set to the module folder inside Windows' own folder.
+// Windows compares the names of environment variables without case, and of two
+// spellings only one reaches the program, so every spelling of this one is
+// left out first.
+function probeEnvironment(env,modules){
+  const own={};
+  for(const [name,value] of Object.entries(env||{}))if(name.toUpperCase()!=='PSMODULEPATH')own[name]=value;
+  own.PSModulePath=modules;
+  return own;
+}
 // Runs the fixed probe script with Windows PowerShell and returns its output.
 // The script takes no input, so nothing from outside Ravenshelf reaches it, and
-// PowerShell loads its commands from Windows' own folder only, never from a
-// module folder in the user's profile.
+// PowerShell is told to look for its commands in the module folder inside
+// Windows' own folder. Windows PowerShell adds its module folder under Program
+// Files by itself. Both can be changed only by an administrator; a module
+// folder in the user's profile is not used.
 function runProbe({spawnImpl=spawn,systemRoot=process.env.SystemRoot||'C:\\Windows',readFile=fs.readFileSync,timeoutMs=TIMEOUT_MS,env=process.env}={}){
   return new Promise((resolve,reject)=>{
     let child,timer=null,done=false,size=0;const chunks=[];
@@ -283,9 +307,9 @@ function runProbe({spawnImpl=spawn,systemRoot=process.env.SystemRoot||'C:\\Windo
     const stop=()=>{try{child.kill();}catch{}};
     try{
       const script=readFile(PROBE_FILE,'utf8');
-      const home=path.win32.join(systemRoot,'System32','WindowsPowerShell','v1.0');
+      const home=path.win32.join(windowsFolder(systemRoot),'System32','WindowsPowerShell','v1.0');
       child=spawnImpl(path.win32.join(home,'powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],
-        {windowsHide:true,stdio:['ignore','pipe','ignore'],env:{...env,PSModulePath:path.win32.join(home,'Modules')}});
+        {windowsHide:true,stdio:['ignore','pipe','ignore'],env:probeEnvironment(env,path.win32.join(home,'Modules'))});
       // A program that could not start reports it through this event, so it is
       // listened for before anything else can fail.
       child.on('error',error=>finish(error));
@@ -316,7 +340,9 @@ function createHardwareService({platform=process.platform,probe=runProbe,osApi=o
   return {
     get({refresh=false}={}){
       if(pending)return pending;
-      if(last&&(!refresh||Math.abs(now()-lastAt)<MIN_REFRESH_MS))return Promise.resolve(last);
+      // "Check again" straight after a full answer gives that answer. After an
+      // answer that is not complete, it always checks again.
+      if(last&&(!refresh||(last.status==='complete'&&Math.abs(now()-lastAt)<MIN_REFRESH_MS)))return Promise.resolve(last);
       pending=detect().then(value=>{last=value;lastAt=now();return value;}).finally(()=>{pending=null;});
       return pending;
     }

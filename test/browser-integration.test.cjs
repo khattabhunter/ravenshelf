@@ -13,9 +13,11 @@ const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
 function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={}}={}){
   const profile=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-integration-'));
   t.after(()=>fs.rmSync(profile,{recursive:true,force:true}));
-  const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[]};
+  const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[],placed:[],place:null};
   const manager={settings:{downloadDir:profile,notificationsEnabled:true,...(enabled?{browserIntegrationEnabled:true}:{})},downloads:[],
-    updateSettings(changes){Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){}};
+    updateSettings(changes){Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){},
+    // The title the queue files a game's mods under: by default as for a game it has not seen yet.
+    modTitle(mod){events.placed.push(mod);return events.place?events.place(mod):mod.gameName||mod.game;}};
   const versions={...existingVersions};
   const setup={
     exportedVersion:(root,browser)=>versions[browser]||null,
@@ -186,6 +188,15 @@ test('a file downloaded on Nexus Mods is queued into Mods under its game; other 
   const bare=await fromExtension(f,{type:'capture',url:cdn+'&again=1',referrer:'https://www.nexusmods.com/',filename:'other.7z',mod:{site:'nexusmods',game:'fallout4',modId:7}});
   await ready(bare.id);await f.call('browserCaptureAction',{id:bare.id,action:'download'});
   assert.deepEqual([f.events.added[1].group,f.events.added[1].gameTitle],['Mods','fallout4']);
+  // A game that already has mod files in the queue: the queue says which title its folder goes by, and the review and the download both use it.
+  f.events.place=mod=>mod.game==='fallout4'?'Fallout 4: kept':mod.gameName||mod.game;
+  const again=await fromExtension(f,{type:'capture',url:cdn+'&third=1',referrer:'https://www.nexusmods.com/',filename:'third.7z',mod:{site:'nexusmods',game:'fallout4',modId:8}});
+  assert.equal((await ready(again.id)).modFolder,'Mods › Fallout 4_ kept','named as the queue will name the folder');
+  await f.call('browserCaptureAction',{id:again.id,action:'download'});
+  const kept=f.events.added.at(-1);
+  assert.deepEqual([kept.group,kept.gameTitle,Object.keys(kept).sort()],['Mods','Fallout 4: kept',['gameTitle','group','links']]);
+  assert.ok(f.events.placed.some(mod=>mod.game==='fallout4'&&mod.modId===8),'the queue was asked with the label of this download');
+  f.events.place=null;f.events.added.pop();
   // Everything else from the browser is queued exactly as before.
   const plain=await fromExtension(f,{type:'capture',url:'https://cdn.example/game.zip',filename:'game.zip'});
   await ready(plain.id);await f.call('browserCaptureAction',{id:plain.id,action:'download'});
@@ -193,6 +204,6 @@ test('a file downloaded on Nexus Mods is queued into Mods under its game; other 
   assert.equal(Object.hasOwn(f.events.added[2].links[0],'mod'),false);
   // A malformed label is refused whole, so the extension sends the download again without it.
   assert.deepEqual(await fromExtension(f,{type:'capture',url:cdn+'&bad=1',mod:{...label,folder:'..\\..'}}),{ok:false,error:'invalid'});
-  assert.equal(f.events.queueChecks,3,'the queue is checked for availability each time');
+  assert.equal(f.events.queueChecks,4,'the queue is checked for availability each time');
 });
 

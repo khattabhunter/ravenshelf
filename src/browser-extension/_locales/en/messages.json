@@ -1,0 +1,6 @@
+{
+  "extDescription": {
+    "message": "Checks downloads in Ravenshelf first, blocks dangerous sites and pop-ups, adds a YouTube button, sorts Nexus Mods files by game.",
+    "description": "The extension description that the browser shows in its list of extensions."
+  }
+}

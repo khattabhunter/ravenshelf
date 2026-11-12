@@ -107,7 +107,8 @@ test('the real bridge and the real connector work together',{skip},async t=>{
   t.after(()=>bridge.stop());
   await bridge.start();
   const hello=await run(dir,frame({v:1,type:'hello',extensionVersion:'0.5.0',browser:'chromium'}));
-  assert.deepEqual(hello.reply,{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v',total:0}});
+  // The connector passes the app's reply on unchanged, including the app's language (0.8.0).
+  assert.deepEqual(hello.reply,{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v',total:0},language:'en',digits:'latn'});
   const wrong=await run(dir,frame({v:1,type:'hello',extensionVersion:'0.5.0',browser:'chromium'}),['chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/']);
   assert.deepEqual(wrong.reply,{ok:false,error:'failed'},'an extension that is not allowed gets no answer from the app');
   await bridge.stop();

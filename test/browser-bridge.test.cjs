@@ -8,10 +8,14 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const protocol=require('../src/browser-protocol.cjs');
 const setup=require('../src/browser-setup.cjs');
-const {BrowserBridge,MAX_PENDING,isProvider,baseName,savedName}=require('../src/browser-bridge.cjs');
+const {BrowserBridge,MAX_PENDING,isProvider,baseName}=require('../src/browser-bridge.cjs');
+const {DownloadManager}=require('../src/downloads.cjs');
 
 const CHROME=`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`,FIREFOX=`firefox:${protocol.FIREFOX_EXTENSION_ID}`;
-const temp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-bridge-'));
+// Scratch folders of this file; they are removed when its tests have finished.
+const made=[];
+const temp=()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-bridge-'));made.push(dir);return dir;};
+test.after(()=>{for(const dir of made)fs.rmSync(dir,{recursive:true,force:true});});
 async function until(predicate,label='condition'){const end=Date.now()+3000;while(!predicate()){if(Date.now()>end)throw new Error('Timed out waiting for '+label);await new Promise(resolve=>setTimeout(resolve,5));}}
 
 // ---------- protocol ----------
@@ -61,17 +65,23 @@ test('browser requests must match an exact shape',()=>{
 test('extension manifests request only what the features need',()=>{
   const chrome=setup.extensionManifest('chromium','0.5.0'),firefox=setup.extensionManifest('firefox','0.5.0');
   assert.equal(chrome.manifest_version,3);assert.equal(chrome.key,protocol.CHROMIUM_EXTENSION_KEY);assert.equal(chrome.background.service_worker,'background.js');
-  assert.deepEqual(firefox.background,{scripts:['policy.js','background.js']});
+  assert.deepEqual(firefox.background,{scripts:['policy.js','text.js','background.js']});
   assert.equal(firefox.browser_specific_settings.gecko.id,protocol.FIREFOX_EXTENSION_ID);assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions,{required:['browsingActivity','websiteContent']},'addresses, and the names a Nexus Mods page showed');
   for(const manifest of [chrome,firefox]){
     assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
     // The two page scripts, top frame only: the download button in YouTube's
     // player, and the reader that notes which mod a Nexus Mods page is about.
     assert.deepEqual(manifest.content_scripts,[
-      {matches:['https://www.youtube.com/*'],js:['policy.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false},
+      {matches:['https://www.youtube.com/*'],js:['policy.js','text.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false},
       {matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false}]);
     for(const script of manifest.content_scripts)for(const file of [...script.js,...(script.css||[])])assert.ok(setup.EXTENSION_FILES.includes(file),file);
-    assert.ok(manifest.description.length<=132,'browsers cut a longer description short');assert.match(manifest.description,/YouTube and Nexus Mods/);
+    // The description comes from the extension's language files, in English and Arabic.
+    assert.equal(manifest.description,'__MSG_extDescription__');assert.equal(manifest.default_locale,'en');
+    for(const language of ['en','ar']){
+      const file=`_locales/${language}/messages.json`;assert.ok(setup.EXTENSION_FILES.includes(file),file);
+      const text=JSON.parse(fs.readFileSync(path.join(__dirname,'../src/browser-extension',file),'utf8')).extDescription.message;
+      assert.ok(text.length<=132,'browsers cut a longer description short');assert.match(text,/YouTube/);assert.match(text,/Nexus Mods/);
+    }
     assert.equal(manifest.externally_connectable,undefined);assert.equal(manifest.web_accessible_resources,undefined);
     assert.ok(!manifest.permissions.some(permission=>/cookies|tabs|history|scripting|webRequest|<all_urls>|\*/.test(permission)),manifest.permissions.join());
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
@@ -149,7 +159,8 @@ function bridgeFixture(t,options={}){
     inspect:options.inspect||(async(url,{lookupHost,referer})=>({status:'ready',url,sourceUrl:url,filename:new URL(url).pathname.split('/').pop()||'file',size:10,chain:[{url,host:new URL(url).hostname,listed:lookupHost(new URL(url).hostname)}],sniffed:'zip',referer})),
     resolveProvider:options.resolveProvider||null,virusTotal:options.virusTotal||null,now:options.now||Date.now,
     queueDownload:async entry=>{events.queued.push(entry);return options.queueResult||{added:1};},openExternal:async url=>{events.opened.push(url);},
-    reveal:()=>{events.revealed++;},notify:note=>events.notes.push(note),setReputation:(id,value)=>events.reputation.push([id,value])});
+    reveal:()=>{events.revealed++;},notify:note=>events.notes.push(note),setReputation:(id,value)=>events.reputation.push([id,value]),
+    ...(options.language?{language:options.language}:{}),...(options.localText?{localText:options.localText}:{})});
   t.after(()=>bridge.stop());
   return {bridge,dir,events};
 }
@@ -173,7 +184,7 @@ test('the bridge answers only connections that present this session’s token an
   const endpoint=JSON.parse(fs.readFileSync(path.join(dir,'endpoint.json'),'utf8'));
   assert.equal(endpoint.schema,1);assert.match(endpoint.pipe,/^ravenshelf-[a-f0-9]{32}$/);assert.match(endpoint.token,/^[a-f0-9]{64}$/);
   const hello=await ask(dir,{type:'hello',extensionVersion:'0.5.0',browser:'chromium'});
-  assert.deepEqual(hello,{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v1',total:3}});
+  assert.deepEqual(hello,{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v1',total:3},language:'en',digits:'latn'});
   assert.equal(bridge.snapshot().contact.browser,'chromium');
   assert.equal((await ask(dir,{type:'hello',extensionVersion:'0.5.0',browser:'firefox'},{origin:FIREFOX})).ok,true);
   assert.equal(bridge.snapshot().contact.browser,'firefox');
@@ -234,7 +245,7 @@ test('downloading a link the queue already holds says so instead of claiming it 
   const result=await bridge.action({id:decision.id,action:'download'});
   assert.equal(result.added,0);assert.equal(events.queued.length,1);
   const capture=bridge.snapshot().captures[0];
-  assert.equal(capture.status,'duplicate');assert.match(capture.message,/already in your Downloads list/);
+  assert.equal(capture.status,'duplicate');assert.equal(capture.message,'This file is already in your Downloads list. Resume or retry it there, or remove the old entry and download it again.');
   assert.equal(bridge.snapshot().pending,0,'a duplicate no longer waits for a decision');
   await assert.rejects(bridge.action({id:decision.id,action:'download'}),/cannot download/);
 });
@@ -354,10 +365,10 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   assert.equal(byId[dotted].name,'setup.exe');assert.equal(byId[dotted].verdict.level,'warning');
   await assert.rejects(bridge.action({id,action:'download'}),/Confirm that you understand/);
   await bridge.action({id,action:'download',acknowledgeRisk:true});
-  assert.equal(events.queued[0].filename,'SkyUI patch.exe');
-  assert.equal(safeName(events.queued[0].filename),events.queued[0].filename,'the queue saves it under exactly this name');
+  assert.equal(events.queued[0].filename,FULLWIDTH_EXE,'the queue is handed the name as it arrived');
+  assert.equal(safeName(events.queued[0].filename),'SkyUI patch.exe','and cleans it once: that is the name that was judged and shown');
   // With no name from the browser or the server, the name comes from the address, and is judged in its saved form too.
-  decision=decide({url:`http://plain.example/${encodeURIComponent('tool.\uff45\uff58\uff45')}`});
+  decision=decide({url:`http://plain.example/${encodeURIComponent('tool.'+FULLWIDTH_EXE.slice(-3))}`});
   assert.equal(decision.action,'block','a program over plain HTTP whose name is only in the address');
   assert.equal(bridge.snapshot().captures.find(capture=>capture.id===decision.id).name,'tool.exe');
   const bare=bridgeFixture(t,{inspect:async url=>({status:'ready',url,sourceUrl:url,size:5,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'windows-program'})});
@@ -366,37 +377,23 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   await until(()=>bare.bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'inspection');
   const [named]=bare.bridge.snapshot().captures;
   assert.equal(named.id,taken.id);assert.equal(named.name,'SkyUI patch.exe');assert.equal(named.verdict.level,'warning');
-  // Every name the review can show is already in its saved form.
-  for(const capture of bridge.snapshot().captures)assert.equal(safeName(capture.name),capture.name,capture.name);
-  // Cleaning a name can uncover something to clean again. The judged name is the one that no longer
-  // changes, because the queue cleans every name once more before it saves the file.
-  const LONG_DEVICE='con.'+'a'.repeat(171)+'.exex';
-  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE).slice(-5),'.exex','cleaned once, it still looks harmless');
-  assert.equal(safeName(safeName(LONG_DEVICE)).slice(-4),'.exe','cleaned again, as the queue would, it is a program');
-  assert.equal(savedName(LONG_DEVICE),'_con.'+'a'.repeat(171)+'.exe');
-  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id;
-  decide({url:'https://cdn.example/d',filename:'run.bat'+'\ufeff.'.repeat(3)});
-  assert.match(events.notes.at(-1).body,/^run\.bat was sent from your browser/,'layers of invisible characters and dots are gone from the first moment');
+  await bare.bridge.action({id:named.id,action:'download',acknowledgeRisk:true});
+  assert.equal(safeName(bare.events.queued[0].filename),'SkyUI patch.exe');
+  // The queue cleans a name once. What is judged and shown is that one cleaning of that very name, also for a
+  // name that a second cleaning would change: a Windows device name gets a "_" in front, which makes it longer.
+  const LONG_DEVICE='con.'+'a'.repeat(171)+'.exex',LONG_PROGRAM='con.'+'x'.repeat(172)+'.exe';
+  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE),'_'+LONG_DEVICE);assert.notEqual(safeName(safeName(LONG_DEVICE)),safeName(LONG_DEVICE),'cleaned twice, its ending would be cut');
+  assert.equal(LONG_PROGRAM.length,180);assert.equal(safeName(LONG_PROGRAM),'_'+LONG_PROGRAM);
+  const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id,program=decide({url:`https://cdn.example/${LONG_PROGRAM}`}).id;
   await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'more inspections');
   const later=Object.fromEntries(bridge.snapshot().captures.map(capture=>[capture.id,capture]));
-  assert.equal(later[device].name,'_con.'+'a'.repeat(171)+'.exe');assert.equal(later[device].verdict.level,'warning');
-  assert.ok(later[device].verdict.reasons.some(reason=>reason.code==='program'),JSON.stringify(later[device].verdict));
-  await bridge.action({id:device,action:'download',acknowledgeRisk:true});
-  assert.equal(events.queued.at(-1).filename,later[device].name);assert.equal(safeName(events.queued.at(-1).filename),later[device].name,'saved under the judged name');
-  assert.equal(savedName('run.bat'+'\ufeff.'.repeat(3)),'run.bat');assert.equal(savedName('a'+'\ufeff.'.repeat(119)),'a','however deep the layers go');
-  assert.equal(savedName(''),undefined);assert.equal(savedName(undefined),undefined);assert.equal(savedName('game.zip'),'game.zip');
-  // The same holds for names made of the awkward pieces in any order, and ordinary names are not touched.
-  const pieces=['con','NUL','com1','.','..',' ','a','.exe','.bat','x','\ufeff','\u2028','\u1680','\u00a0','\u3000','\uff0e','\uff23\uff2f\uff2e','\ud83d\ude00','_',':','/','*','\t','\u200b','e\u0301','\ufdfa','\ufeff.'];
-  let seed=20261111,unsettled=0,uncovered=0;const pick=n=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed%n;};
-  for(let i=0;i<20000;i++){
-    let odd='';for(let j=1+pick(6);j>0;j--){const piece=pieces[pick(pieces.length)];odd+=pick(4)?piece:piece.repeat(1+pick(190));}
-    const name=savedName(odd);
-    if(name===undefined){assert.equal(odd,'');continue;}
-    if(safeName(name)!==name)unsettled++;
-    if(safeName(odd)!==name)uncovered++;
-  }
-  assert.equal(unsettled,0,'every judged name is saved unchanged');assert.ok(uncovered>50,`${uncovered} of these names needed more than one cleaning`);
-  for(const plain of ['game.zip','Setup (1).exe','My Mod v1.2-12604-1-2.7z','\u0633\u0643\u0627\u064a.rar','archive.part01.rar'])assert.equal(savedName(plain),safeName(plain));
+  assert.equal(later[device].name,'_'+LONG_DEVICE);assert.equal(later[device].verdict.level,'ok','it is saved with the ending .exex, which is no program');
+  assert.equal(later[program].name,'_'+LONG_PROGRAM);assert.equal(later[program].verdict.level,'warning');
+  assert.ok(later[program].verdict.reasons.some(reason=>reason.code==='program'),JSON.stringify(later[program].verdict));
+  await bridge.action({id:device,action:'download'});
+  assert.equal(events.queued.at(-1).filename,LONG_DEVICE);assert.equal(safeName(events.queued.at(-1).filename),later[device].name);
+  await bridge.action({id:program,action:'download',acknowledgeRisk:true});
+  assert.equal(events.queued.at(-1).filename,LONG_PROGRAM);assert.equal(safeName(events.queued.at(-1).filename),later[program].name,'saved as the program it was shown to be');
   // Folder names: cut to 100 characters, and still without a trailing dot or space after the cut.
   assert.equal(folderName('a'.repeat(97)+'\u2026b'),'a'.repeat(97));
   assert.equal(folderName('\u2025'.repeat(50)+'x'),'Imported files');
@@ -414,4 +411,65 @@ test('a name is judged in the form it will be saved in, and the review shows tha
 test('file names from the browser are reduced to a safe base name',()=>{
   assert.equal(baseName('C:\\Users\\Player\\Downloads\\game.zip'),'game.zip');
   assert.equal(baseName('/home/user/file.rar'),'file.rar');assert.equal(baseName('name\u0007.zip'),'name.zip');assert.equal(baseName(''),undefined);assert.equal(baseName(undefined),undefined);
+});
+
+test('the name the review shows is the name the queue then saves the file under',async t=>{
+  // The real queue behind the real bridge. Its downloads fail at once: only their names matter here.
+  const root=temp(),folder=path.join(root,'downloads','Browser downloads');
+  const manager=new DownloadManager({stateFile:path.join(root,'state.json'),downloadDir:path.join(root,'downloads'),fetcher:async()=>new Response('no',{status:500,headers:{'content-type':'text/html'}})});
+  manager.updateSettings({concurrency:2,defenderScan:false});
+  let served;
+  const bridge=new BrowserBridge({hostDir:temp(),threatLists:null,openExternal:async()=>{},
+    inspect:async url=>({status:'ready',url,sourceUrl:url,...(served===undefined?{}:{filename:served}),size:5,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'unknown'}),
+    queueDownload:async entry=>manager.add({links:[entry],gameTitle:'Browser downloads'})});
+  t.after(async()=>{await bridge.stop();await manager.stop();});
+  const wide=text=>text.split('').map(char=>char==='.'?char:String.fromCharCode(char.charCodeAt(0)+0xfee0)).join('');
+  const slash=String.fromCharCode(92);
+  // [the server's name, the browser's name, the last part of the address]
+  const cases=[
+    ['../../escaped.rar'],[`..${slash}..${slash}escaped2.rar`],[`C:${slash}Windows${slash}evil.dll`],['sub/dir/inner.rar'],['CON'],['nul.7z'],['x.rar. '],['  spaced name.zip  '],['colon:and?marks*.zip'],
+    [wide('setup.exe')],['con.'+'x'.repeat(172)+'.exe'],['con.'+'a'.repeat(171)+'.exex'],['a'.repeat(260)+'.bat'],['dots...'],['.hidden'],['..'],['archive.part01.rar'],
+    [undefined,'from-browser.zip'],[undefined,wide('browser.exe')],[undefined,`C:${slash}Users${slash}Someone${slash}Downloads${slash}kept.7z`],[undefined,undefined,'from-address.zip'],[undefined,undefined,encodeURIComponent('aux')],
+    [undefined,undefined,encodeURIComponent(wide('address.scr'))],['server-wins.zip','browser-loses.exe','address-loses.bat'],['',"browser's.zip",'ignored.bat']];
+  let warned=0;
+  for(const [index,[fromServer,fromBrowser,fromAddress]] of cases.entries()){
+    served=fromServer;
+    const message={v:1,type:'capture',url:`https://cdn.example/${index}/${fromAddress||'file'}`,...(fromBrowser?{filename:fromBrowser}:{})};
+    const decision=bridge.receive('chromium',protocol.validateRequest(message)),label=JSON.stringify(cases[index]).slice(0,80);
+    assert.equal(decision.action,'take',label);
+    await until(()=>bridge.snapshot().captures.find(capture=>capture.id===decision.id).status!=='checking','the check of '+label);
+    const shown=bridge.snapshot().captures.find(capture=>capture.id===decision.id);
+    assert.equal(shown.status,'ready',label);
+    if(shown.verdict.level==='warning')warned++;
+    const result=await bridge.action({id:decision.id,action:'download',acknowledgeRisk:true});
+    assert.equal(result.added,1,label);
+    const saved=manager.downloads.at(-1);
+    assert.equal(saved.name,shown.name,label);
+    assert.equal(saved.folder,folder,label);assert.equal(path.dirname(path.resolve(saved.folder,saved.name)),folder,label);
+    assert.doesNotMatch(saved.name,/[<>:"/|?*]/,label);assert.equal(saved.name.includes(slash),false,label);assert.doesNotMatch(saved.name,/[. ]$/,label);
+    await bridge.action({id:decision.id,action:'dismiss'});
+  }
+  assert.deepEqual(manager.downloads.slice(0,6).map(d=>d.name),['escaped.rar','escaped2.rar','evil.dll','inner.rar','_CON','_nul.7z']);
+  assert.equal(manager.downloads[9].name,'setup.exe');assert.equal(manager.downloads[10].name,'_con.'+'x'.repeat(172)+'.exe');assert.equal(manager.downloads[12].name.length,180);
+  assert.equal(manager.downloads.at(-2).name,'server-wins.zip');assert.equal(manager.downloads.at(-1).name,"browser's.zip");
+  assert.equal(warned,4,'setup.exe, the long .exe, browser.exe and address.scr were shown with their warning');
+  for(let i=0;i<600&&manager.running.size;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.deepEqual(fs.readdirSync(path.join(root,'downloads')),['Browser downloads'],'nothing was written beside the folder');
+});
+
+test('the extension is told the app language, and block reasons come in that language',async t=>{
+  const {bridge,dir}=bridgeFixture(t,{language:()=>({language:'ar',digits:'arab'}),localText:text=>text==='It failed Ravenshelf\u2019s safety checks.'||/is on Ravenshelf/.test(text)?'AR:'+text:text});
+  await bridge.start();
+  const hello=await ask(dir,{type:'hello',extensionVersion:'0.5.0',browser:'chromium'});
+  assert.equal(hello.language,'ar');assert.equal(hello.digits,'arab');
+  const blocked=await ask(dir,{type:'send',kind:'link',url:'https://bad.example/file.zip'});
+  assert.equal(blocked.action,'block');assert.match(blocked.reason,/^AR:bad\.example is on Ravenshelf/);
+  // Only the two known values ever leave the app, whatever the setting says.
+  for(const [given,expected] of [[{language:'fr',digits:'roman'},{language:'en',digits:'latn'}],[null,{language:'en',digits:'latn'}],['x',{language:'en',digits:'latn'}]]){
+    bridge.language=()=>given;assert.deepEqual(bridge.appLanguage(),expected);
+  }
+  bridge.language=()=>{throw new Error('no');};assert.deepEqual(bridge.appLanguage(),{language:'en',digits:'latn'});
+  // A failing translation keeps the English reason.
+  bridge.localText=()=>{throw new Error('no');};assert.equal(bridge.localReason('Plain reason.'),'Plain reason.');
+  bridge.localText=()=>'';assert.equal(bridge.localReason('Plain reason.'),'Plain reason.');
 });

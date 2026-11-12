@@ -33,6 +33,7 @@ function rendererFixture(){
   const get=selector=>{if(!nodes.has(selector)){const node=new Element();if(selector.startsWith('#'))node.id=selector.slice(1);nodes.set(selector,node);}return nodes.get(selector);};
   const document={querySelector:get,querySelectorAll:()=>[],createElement:tag=>new Element(tag),activeElement:null,addEventListener(){}};
   const context=vm.createContext({window:{atlas:{},scrollTo(){}},document,URL,console,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/i18n.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8').replace(/start\(\);\s*$/,''),context);
   const run=source=>vm.runInContext(source,context);
   const call=(name,value)=>{context.payload=structuredClone(value);return run(`${name}(payload)`);};

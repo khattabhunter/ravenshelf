@@ -77,7 +77,7 @@ Version 0.4.1 extends checks for missing file sizes, bounded storage discovery, 
 
 Version 0.4.2 adds tests for approval-gated updates, the build-record verifier (including GitHub's real 0.4.1 record checked offline, plus tampered and mismatched variants), the release gate scripts and leftover cleanup with real temporary folders, links and read-only files. The verifier is also tested inside Electron's runtime, whose BoringSSL differs from Node's OpenSSL. Those tests are skipped until the development Electron binary is installed with `node node_modules/electron/install.js` (it checks the download against the checksums in the locked `electron` package); the **Test** workflow installs it and requires them.
 
-Version 0.5.0 adds tests for the extension's decisions and its background script (run against simulated Chrome and Firefox APIs), the protocol and bridge, the connector on Windows, protection lists, download checks, VirusTotal, the internet-zone mark and the new settings and review screens.
+Version 0.5.0 adds tests for the extension's decisions and its background script (run against simulated Chrome and Firefox APIs), the protocol and bridge, the connector on Windows, protection lists, download checks, VirusTotal, the internet-zone mark and the new settings and review screens. Versions 0.6.0 to 0.8.0 add tests for YouTube addresses, the helper programs and YouTube jobs, the PC specs probe (its allowed commands and fingerprint) and page, Nexus Mods labels, the mod queue rules and the Mods page, and the Arabic texts of the window, the main process and the extension.
 
 Passing tests establish the exercised cases, not that every host response, Windows setup or third-party file is safe. Keep live checks separate and bounded; do not make the normal test command depend on file-host availability or personal download links.
 
@@ -87,7 +87,8 @@ Passing tests establish the exercised cases, not that every host response, Windo
 | --- | --- |
 | `src/main.cjs` | Electron windows, app lifecycle and renderer messaging. |
 | `src/preload.cjs` | Narrow bridge between the isolated renderer and main process. |
-| `src/renderer/` | Catalogue, library, settings and download interface. |
+| `src/renderer/` | Catalogue, library, Mods, PC specs, settings and download interface; `i18n.js` holds the translation code shared with the main process. |
+| `src/i18n.cjs`, `src/locales/ar.json` | The language setting and the Arabic texts. A new English text in the window or the main process needs its Arabic version in `ar.json`; `test/i18n.test.cjs` checks this. The extension's texts are in `src/browser-extension/text.js`. |
 | `src/providers.cjs` | Source-page, paste and file-host adapters. |
 | `src/fast-session.cjs` | Restricted FuckingFast browser-session requests. |
 | `src/net.cjs`, `src/ff-policy.cjs` | Address, redirect and host-file checks. |
