@@ -6,7 +6,8 @@
 function safeName(value,fallback='download') {
   let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
   if(!s || s==='.' || s==='..') s=fallback;
-  if(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(s)) s='_'+s;
+  // Windows ignores spaces between a device name and its dot ("con .txt").
+  if(/^(con|prn|aux|nul|com[0-9]|lpt[0-9]) *(?:\.|$)/i.test(s)) s='_'+s;
   return s;
 }
 // A folder name: at most 100 characters and, after that cut, still without a

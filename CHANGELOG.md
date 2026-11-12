@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 — Safer file names
+
+- A file or folder named like a Windows device with spaces before its dot (for example `con .txt` or `NUL .zip`) now gets a `_` in front, like `con.txt` already did. Windows ignores those spaces, so the name meant the device, not a file. Other names are unchanged.
+
+See [the release notes](docs/RELEASE-0.9.1.md).
+
 ## 0.9.0 — Can you run it?
 
 - New **Can you run it?** panel in a game's details, above its Steam requirement lists. **Compare with this PC** sets each line it recognises in the **Minimum** and **Recommended** lists (Windows, 64-bit, processor, memory, graphics, graphics memory, DirectX, storage) beside this PC's specs and says **Meets**, **Below** or **Can’t tell**, with a sentence for each list. After this PC's specs have been read once (here or on the **PC specs** page), later games are compared as soon as they open.
