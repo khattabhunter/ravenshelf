@@ -22,6 +22,7 @@ const {createMediaIntegration}=require('./media-integration.cjs');
 const {markFromInternet}=require('./motw.cjs');
 const {createHardwareService}=require('./hardware.cjs');
 const i18n=require('./i18n.cjs');
+const {modContext,MODS_FOLDER}=require('./mods.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media;
 // The app's language outside the window: notifications, file dialogs, window
@@ -306,6 +307,20 @@ app.whenReady().then(async()=>{
     manager.updateSettings(changes);features.configure(changes);return appState();
   });
   handle('openExternal',url=>shell.openExternal(safeURL(url).href));
+  // The Mods section. A mod's page opens in your own browser, at an address
+  // made only from the checked game and mod number saved with the download;
+  // Ravenshelf itself never contacts Nexus Mods.
+  handle('openModPage',options=>{
+    const d=manager.downloads.find(x=>x.id===options?.id);
+    let mod=null;try{mod=modContext(d?.mod);}catch{mod=null;}
+    if(!mod)throw new Error('This download has no Nexus Mods page.');
+    return shell.openExternal(`https://www.nexusmods.com/${mod.game}/mods/${mod.modId}`);
+  });
+  handle('openModsFolder',()=>{
+    const folder=path.join(manager.settings.downloadDir,MODS_FOLDER);
+    if(!fs.existsSync(folder))throw new Error('No mods have been downloaded yet.');
+    return shell.openPath(folder);
+  });
   handle('openDownloadsFolder',()=>{fs.mkdirSync(manager.settings.downloadDir,{recursive:true});return shell.openPath(manager.settings.downloadDir);});
   handle('copyText',text=>{if(typeof text!=='string'||text.length>1000000)throw new Error('Text is too long.');clipboard.writeText(text);return true;});
   handle('exportLinks',async({urls,gameTitle})=>{const clean=validateLinks(urls);const result=await localDialog.showSaveDialog(win,{title:'Export download links',defaultPath:path.join(app.getPath('downloads'),safeName(gameTitle,'Ravenshelf links')+'.txt'),filters:[{name:'Link list',extensions:['txt']}]});if(result.canceled)return {cancelled:true};await fs.promises.writeFile(result.filePath,clean.join('\r\n')+'\r\n','utf8');return {saved:true,path:result.filePath};});

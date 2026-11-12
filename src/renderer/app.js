@@ -23,6 +23,7 @@ const icons = {
   folder: '<path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m4 18 5-5 4 4 4-7 4 5"/>',
   layers: '<path d="m12 3 10 5-10 5L2 8zM2 12l10 5 10-5M2 16l10 5 10-5"/>',
+  puzzle: '<path d="M4 8h4V6.5a2 2 0 1 1 4 0V8h4v4h1.5a2 2 0 1 1 0 4H16v4H4z"/>',
   pause: '<path d="M8 5v14M16 5v14"/>',
   play: '<path d="m8 4 12 8-12 8z"/>',
   refresh: '<path d="M20 8a8 8 0 1 0 .2 8M20 3v5h-5"/>',
@@ -175,12 +176,13 @@ function busyLine(message) {
   line.setAttribute('role', 'status'); return line;
 }
 function showView(view) {
-  if (!['discover', 'downloads', 'library', 'installed', 'hardware', 'settings'].includes(view)) return;
+  if (!['discover', 'downloads', 'library', 'mods', 'installed', 'hardware', 'settings'].includes(view)) return;
   currentView = view;
   $$('.view').forEach(node => { node.hidden = node.id !== `${view}-view`; });
   $$('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.view === view));
-  $('#current-view-label').textContent = { discover: t('Discover'), downloads: t('Downloads'), library: t('My library'), installed: t('On this PC'), hardware: t('PC specs'), settings: t('Settings') }[view];
+  $('#current-view-label').textContent = { discover: t('Discover'), downloads: t('Downloads'), library: t('My library'), mods: t('Mods'), installed: t('On this PC'), hardware: t('PC specs'), settings: t('Settings') }[view];
   if (view === 'library') renderLibrary();
+  if (view === 'mods') renderMods();
   if (view === 'downloads') renderDownloads();
   if (view === 'downloads' && featureUIAvailable()) refreshStorage();
   if (view === 'settings') renderSettings();
@@ -1037,6 +1039,8 @@ function updateBadges() {
   $('#queue-badge').textContent = i18n.digits(pending); $('#queue-badge').hidden = !pending;
   const favorites = state.settings.favorites?.length || 0;
   $('#library-badge').textContent = i18n.digits(favorites); $('#library-badge').hidden = !favorites;
+  const mods = modDownloads().length, modsBadge = $('#mods-badge');
+  if (modsBadge) { modsBadge.textContent = i18n.digits(mods); modsBadge.hidden = !mods; }
   $('#status-queue').textContent = active ? tn(active, '{n} file downloading', '{n} files downloading') : pending ? tn(pending, '{n} file in your queue', '{n} files in your queue') : t('No active downloads');
 }
 function applyState(next) {
@@ -1073,6 +1077,7 @@ function applyState(next) {
   updateBadges();
   renderCompletionAction();
   if (currentView === 'downloads') renderDownloads();
+  if (currentView === 'mods') renderMods();
   if (currentView === 'settings') renderSettings();
   if (JSON.stringify(state.settings.favorites || []) !== previousFavorites) {
     if (!catalog.loading) renderGames();
@@ -1381,6 +1386,8 @@ function wireEvents() {
   $('#scan-games').addEventListener('click',()=>scanInstalled(false));
   $('#add-game-folder').addEventListener('click',()=>scanInstalled(true));
   $('#installed-search').addEventListener('input',renderInstalled);
+  $('#mods-search').addEventListener('input', renderMods);
+  $('#open-mods-folder').addEventListener('click', () => attempt(() => api.openModsFolder()));
   $('#check-hardware').addEventListener('click', () => loadHardware(true));
   for (const id of ['language', 'digits']) $('#' + id).addEventListener('change', () => changeLanguage({ [id]: $('#' + id).value }, $('#' + id)));
   $('#completion-mode').addEventListener('change',()=>{
@@ -1474,6 +1481,53 @@ function captureStateLabel(item) {
 // speaking, not even with two marks that look like one closing quote.
 const QUOTE_LIKE = /[\p{Pi}\p{Pf}"'`\u00b4\u02ba\u02bb\u02bc\u02dd\u02ee\u05f3\u05f4\u201a\u201e\u2032-\u2037\u275b-\u275e\u276e\u276f\u2e42\u3003\u301d-\u301f\uff02\uff07\uff40]+/gu;
 function modText(value) { return typeof value === 'string' ? value.replace(QUOTE_LIKE, "'").trim() : ''; }
+// ---- Mods: files downloaded on Nexus Mods, by game ----
+// Everything shown here is what Ravenshelf saved with each download; nothing is
+// fetched from Nexus Mods. A mod's page opens in the user's own browser.
+function modDownloads() {
+  return (state.downloads || []).filter(item => modParts(item.mod));
+}
+function renderMods() {
+  const list = $('#mods-list'), empty = $('#mods-empty'), summary = $('#mods-summary');
+  if (!list) return;
+  const all = modDownloads();
+  const query = $('#mods-search').value.trim().toLocaleLowerCase();
+  const matches = all.filter(item => !query || [item.mod.modName, item.mod.gameName, item.mod.game, item.mod.fileName, item.name]
+    .some(value => typeof value === 'string' && value.toLocaleLowerCase().includes(query)));
+  const games = new Map();
+  for (const item of matches) {
+    const parts = modParts(item.mod), key = item.mod.game;
+    if (!games.has(key)) games.set(key, { title: parts.game || key, items: [] });
+    games.get(key).items.push(item);
+  }
+  const sorted = [...games.values()].sort((a, b) => a.title.localeCompare(b.title, i18n.locale));
+  list.replaceChildren(...sorted.map(game => {
+    const section = el('section', 'mods-game'), head = el('header', 'mods-game-head');
+    head.append(el('h2', '', own(game.title)), el('span', 'pill', tn(game.items.length, '{n} file', '{n} files')));
+    const items = el('div', 'mods-items');
+    items.append(...game.items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).map(modCard));
+    section.append(head, items);
+    return section;
+  }));
+  summary.textContent = all.length ? (query ? t('{shown} of {total} mod files', { shown: matches.length, total: all.length }) : tn(all.length, '{n} mod file', '{n} mod files')) : '';
+  if (!all.length) emptyState(empty, t('No mods yet'), t('Turn on the browser extension and its Nexus Mods switch, then download a mod on Nexus Mods in your browser. It appears here, sorted by game.'), 'puzzle', { label: t('Browser extension settings'), icon: 'settings', run: () => { showView('settings'); $('#browser-card')?.scrollIntoView({ block: 'start' }); } });
+  else if (!matches.length) emptyState(empty, t('No matching mods'), t('Try another mod, file or game name.'), 'search');
+  else empty.hidden = true;
+}
+function modCard(item) {
+  const parts = modParts(item.mod), card = el('article', 'mod-card');
+  card.append(el('h3', '', parts.name ? own(parts.name) : parts.number ? t('Mod {number}', { number: parts.number }) : t('Nexus Mods file')));
+  const file = item.mod.fileName && item.mod.fileName !== parts.name ? item.mod.fileName : '';
+  card.append(el('p', 'mod-file', [...new Set([file, item.name].filter(Boolean))].map(own).join(' \u00b7 ')));
+  const total = Number(item.total) || 0;
+  card.append(el('p', `mod-status ${item.status === 'completed' ? 'completed' : item.status === 'error' ? 'error' : ''}`.trim(), [statusLabel(item), total ? formatBytes(total) : ''].filter(Boolean).join(' \u00b7 ')));
+  const actions = el('div', 'mod-actions');
+  if (parts.number) actions.append(button(t('Mod page'), 'button secondary compact', 'external', () => attempt(() => api.openModPage({ id: item.id }))));
+  if (item.status === 'completed') actions.append(button(t('Show file'), 'button secondary compact', 'folder', () => attempt(() => api.downloadAction({ id: item.id, action: 'openFolder' }))));
+  else actions.append(button(t('See in Downloads'), 'button secondary compact', 'download', () => showView('downloads')));
+  card.append(actions);
+  return card;
+}
 function modParts(mod) {
   if (!mod || mod.site !== 'nexusmods') return null;
   const name = modText(mod.modName), game = modText(mod.gameName) || modText(mod.game);

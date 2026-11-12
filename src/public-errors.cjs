@@ -156,6 +156,8 @@ const MESSAGES=new Map([
   'Too many YouTube downloads are waiting. Let some finish first.',
   'Choose a YouTube download quality.',
   'Choose a language from the list.',
+  'This download has no Nexus Mods page.',
+  'No mods have been downloaded yet.',
   'Choose how numbers are written from the list.',
   // Fixed messages of the YouTube helper programs and yt-dlp runner.
   ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES),
@@ -201,7 +203,9 @@ const ACTIONS=new Map([
   ['saveYouTubeSettings','The YouTube preference could not be saved. Try again.'],
   ['dismissYouTubeRequests','The waiting YouTube videos could not be dismissed. Try again.'],
   ['getHardware','This PC’s specs could not be read. Try again.'],
-  ['setLanguage','The language could not be changed. Try again.']
+  ['setLanguage','The language could not be changed. Try again.'],
+  ['openModPage','The mod’s page could not be opened.'],
+  ['openModsFolder','The Mods folder could not be opened.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],
