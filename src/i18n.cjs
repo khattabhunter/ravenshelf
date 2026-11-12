@@ -20,7 +20,10 @@ const digitSetting=value=>core.DIGITS.includes(value)?value:'latn';
 // What the window and the main process use, for the saved settings and the
 // languages Windows lists for this user.
 function bundle(settings,preferred){
-  const language=core.resolveLanguage(languageSetting(settings?.language),preferred);
+  let language=core.resolveLanguage(languageSetting(settings?.language),preferred);
+  // Without its Arabic texts (an unreadable file), the app stays in English
+  // rather than showing English laid out right to left.
+  if(language==='ar'&&!Object.keys(arabicMessages()).length)language='en';
   return {language,digits:digitSetting(settings?.digits),messages:language==='ar'?arabicMessages():{}};
 }
 function translator(settings,preferred){return core.createTranslator(bundle(settings,preferred));}

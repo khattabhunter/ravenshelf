@@ -767,7 +767,7 @@ test('the extension texts follow the app, then the browser, and stay English oth
   assert.equal(ar.t('Private window'),TEXT.AR['Private window']);
   assert.ok(ar.t('Back to {host}',{host:'a.test'}).includes('\u2068a.test\u2069'),'a site keeps its own direction');
   assert.equal(ar.tn(2,'{n} days ago','{n} days ago'),TEXT.AR_PLURAL['{n} days ago'].two);
-  assert.equal(arab.tn(5,'{n} min ago','{n} min ago'),'\u0645\u0646\u0630 \u0665 \u062f\u0642\u0627\u0626\u0642');
+  assert.equal(arab.tn(5,'{n} min ago','{n} min ago'),'\u0642\u0628\u0644 \u0665 \u062f\u0642\u0627\u0626\u0642');
   assert.equal(arab.t('Pause protection for 10 minutes'),TEXT.AR['Pause protection for 10 minutes'].replace('10','\u0661\u0660'));
   assert.equal(arab.t('Up to 4K'),TEXT.AR['Up to 4K'],'digits of a name stay as they are');
   assert.equal(ar.t('Something the app already wrote in Arabic'),'Something the app already wrote in Arabic');
@@ -790,4 +790,15 @@ test('the extension learns the app language when it says hello, and its menu and
   assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
   // An answer with an unknown language changes nothing.
   language='fr';await b.message({cmd:'status'});await tick(30);assert.equal(b.store.local.appLanguage,'en');
+});
+
+test('a program that a page made itself is blocked with a text that can be shown in Arabic',()=>{
+  const plan=P.downloadPlan({id:1,url:'blob:https://site.example/1',filename:'C:\\Downloads\\setup.exe'},{capture:true});
+  assert.equal(plan.kind,'block');
+  assert.equal(plan.reason,'Ravenshelf stopped setup.exe that a web page created for download. Programs made this way are a common malware trick.');
+  assert.equal(TEXT.create('en').t(plan.template,plan.params),plan.reason,'English is unchanged');
+  assert.ok(TEXT.create('ar').t(plan.template,plan.params).includes('\u2068setup.exe\u2069'));
+  assert.match(TEXT.create('ar').t(plan.template,plan.params),/^[\u0600-\u06ff]/);
+  const unnamed=P.downloadPlan({id:2,url:'data:application/octet-stream;base64,AA',filename:'.exe'},{capture:true});
+  if(unnamed.kind==='block')assert.equal(TEXT.create('en').t(unnamed.template,unnamed.params),unnamed.reason);
 });

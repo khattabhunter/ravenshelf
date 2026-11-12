@@ -117,3 +117,18 @@ test('the main process opens a mod page only from the saved, checked label', () 
   const preload = read('src/preload.cjs');
   for (const name of ['openModPage', 'openModsFolder']) assert.match(preload, new RegExp(`'${name}'`));
 });
+
+test('in Arabic, a source page\u2019s notes stay as written, and known genre names are translated', () => {
+  const AR = JSON.parse(read('src/locales/ar.json'));
+  const f = fixture({ locale: { language: 'ar', digits: 'latn', messages: AR } });
+  const head = 'Source-reported installation notes (not independently verified):';
+  f.context.__notes = head + '\nChecksum matches.\nThe source page also contains instructions to weaken antivirus protection. Ravenshelf does not apply those instructions.';
+  assert.equal(f.run('localNotes(__notes)'), AR[head] + '\nChecksum matches.\n' + AR['The source page also contains instructions to weaken antivirus protection. Ravenshelf does not apply those instructions.']);
+  assert.equal(f.run("genreLabel('action')"), AR.Action);
+  assert.equal(f.run("genreLabel('rpg')"), AR.RPG);
+  assert.equal(f.run("genreLabel('open-world')"), 'open-world');
+  const en = fixture();
+  assert.equal(en.run("genreLabel('action')"), 'action', 'English shows the tag as before');
+  en.context.__notes = f.context.__notes;
+  assert.equal(en.run('localNotes(__notes)'), f.context.__notes);
+});

@@ -261,3 +261,48 @@ test('the main process translates its own fixed texts', () => {
   assert.match(source, /Notification:LocalNotification/);
   assert.doesNotMatch(source.replace(/const localDialog=\{[\s\S]*?\n\};/, ''), /\bdialog\.show/);
 });
+
+test('texts from the main process are matched quickly, and a name is never taken for the app\u2019s own words', () => {
+  const ar = I18N.createTranslator({ language: 'ar', digits: 'arab', messages: AR });
+  // A long note from a source page, full of ": ", is shown as it came, at once.
+  const line = Array.from({ length: 100 }, (_, i) => `Part ${i}: see notes`).join(' ');
+  const notes = Array.from({ length: 20 }, () => line).join('\n');
+  const started = Date.now();
+  assert.equal(ar.localText(notes), notes);
+  const sentences = Array.from({ length: 12 }, (_, i) => `Step ${i}: a: b: c: d: e: f: g.`).join(' ');
+  assert.equal(ar.localText(sentences), sentences);
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+  assert.equal(ar.localText('x'.repeat(50000) + ': Checksum matches.'), 'x'.repeat(50000) + ': Checksum matches.', 'very long texts are not matched');
+  // A file named like one of the app's texts stays the file's name.
+  const flagged = ar.localText('5 security vendors on VirusTotal flagged Downloads complete.');
+  assert.ok(flagged.includes('\u2068Downloads complete\u2069'), flagged);
+  assert.equal(ar.localText('2 security vendors on VirusTotal flagged a downloaded file.'), AR['{count} security vendors on VirusTotal flagged a downloaded file.'].replace('{count}', '\u0662'));
+  assert.equal(ar.localText('1 security vendor on VirusTotal flagged this file; one detection is often a false alarm.'), AR['1 security vendor on VirusTotal flagged this file; one detection is often a false alarm.']);
+  // A version is a name: 1.5 is not written as a decimal number.
+  assert.ok(ar.t('Ravenshelf {version} is available. Nothing is downloaded until you choose Download and install.', { version: '1.5' }).includes('\u20681.5\u2069'));
+  // Direction controls inside a value cannot end its isolation early.
+  assert.equal(ar.t('Removed {name}', { name: 'a\u2069\u202eb' }).includes('\u202e'), false);
+  // The Mods folder is shown by its real name on disk.
+  assert.ok(!I18N.TEMPLATES.some(template => template.startsWith('Mods')));
+  assert.match(APP, /el\('bdi', 'capture-folder', item\.modFolder\)/);
+});
+
+test('without its Arabic texts the app stays in English', () => {
+  const fsModule = require('node:fs'), original = fsModule.readFileSync;
+  const file = require.resolve('../src/i18n.cjs');
+  delete require.cache[file];
+  fsModule.readFileSync = (target, ...rest) => String(target).endsWith('ar.json') ? (() => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); })() : original(target, ...rest);
+  try {
+    const fresh = require('../src/i18n.cjs');
+    assert.deepEqual(fresh.bundle({ language: 'ar' }, []), { language: 'en', digits: 'latn', messages: {} });
+  } finally { fsModule.readFileSync = original; delete require.cache[file]; }
+});
+
+test('a failed Windows game check shows a plain sentence, never a system error with a path', () => {
+  const { scanWarning } = require('../src/installed-games.cjs')._test;
+  assert.equal(scanWarning(new Error('Local registration inspection timed out.')), 'Local registration inspection timed out.');
+  for (const error of [new Error('spawn C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe EPERM'), new Error("ENOENT: no such file or directory, open 'C:\\Users\\someone\\scan.ps1'"), null, undefined, {}])
+    assert.equal(scanWarning(error), 'Windows game records could not be read. Choose Scan games to try again.');
+  assert.equal(typeof AR['Windows game records could not be read. Choose Scan games to try again.'], 'string');
+  assert.match(read('src/main.cjs'), /directory=fs\.statSync\(folder\)\.isDirectory\(\)/, 'Open Mods folder opens only a folder');
+});

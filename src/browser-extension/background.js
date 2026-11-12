@@ -117,7 +117,7 @@ async function removeDownload(id) {
 async function decide(item, plan) {
   if (plan.kind === 'block') {
     await removeDownload(item.id);
-    notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', plan.reason);
+    notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', plan.template || plan.reason, 4000, plan.params);
     return 'stop';
   }
   let reply = await ask(plan.message, 6000);
@@ -171,7 +171,14 @@ if (api.downloads.onDeterminingFilename) {
 }
 
 // ---- right-click menu ----
-async function createMenus() {
+// The menu is made again whenever the language changes; one rebuild runs at a
+// time, so the last one asked for is the one that stays.
+let menusDone = Promise.resolve();
+function createMenus() {
+  menusDone = menusDone.then(buildMenus, buildMenus);
+  return menusDone;
+}
+async function buildMenus() {
   if (!menus) return;
   const { t } = await texts();
   await quiet(() => menus.removeAll());

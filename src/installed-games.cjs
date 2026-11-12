@@ -147,6 +147,11 @@ function findExecutables(root,title,context) {
   if(entries>=2500)context.warnings.add(`Executable search was bounded in ${root}. Add its specific game folder if a version is missing.`);
   return found.sort((a,b)=>b.score-a.score).slice(0,3).map(x=>x.path);
 }
+// What a failed Windows check says on screen: only the app's own fixed
+// messages. An error from the system (it can name folders on this PC) is
+// replaced by a plain sentence.
+const SCAN_MESSAGES=new Set(['Local registration inspection timed out.','Inventory response exceeded its limit.','Windows metadata inspection could not finish.','Windows metadata response was invalid.']);
+const scanWarning=error=>SCAN_MESSAGES.has(error?.message)?error.message:'Windows game records could not be read. Choose Scan games to try again.';
 async function runPowerShell(request) {
   const script=fs.readFileSync(path.join(__dirname,'installed-scan.ps1'),'utf8');
   const executable=path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
@@ -195,7 +200,7 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   const progress=message=>{try{onProgress?.({message,games:games.length});}catch{}};
   progress('Reading local launcher registrations…');
   let discovery={steamRoots:[],uninstall:[],gog:[]};
-  try{discovery=await runPowerShell({action:'discover'});}catch(e){warnings.add(e.message);}
+  try{discovery=await runPowerShell({action:'discover'});}catch(e){warnings.add(scanWarning(e));}
   const roots=[...(discovery.steamRoots||[]),path.join(process.env['ProgramFiles(x86)']||'C:\\Program Files (x86)','Steam')];
   for(const extra of extraFolders){const p=validLocalPath(extra);if(!p)throw new Error('Choose a local game or library folder, not a whole drive or network share.');if(fs.existsSync(path.join(p,'steamapps')))roots.push(p);}
   const steamRoots=new Map();
@@ -230,11 +235,11 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   if(Date.now()>context.deadline)warnings.add('The folder search reached its time limit. Add a specific game folder to inspect missing titles.');
   const candidatePaths=[...new Set(games.flatMap(g=>g.candidates||[]))].slice(0,500);
   let metadata=[];
-  if(candidatePaths.length){try{const result=await runPowerShell({action:'versions',paths:candidatePaths});metadata=result.items||[];if(result.timedOut)warnings.add('Some executable metadata could not be read within the time limit. Available results are retained; unknown versions remain blank.');}catch(e){warnings.add(e.message);}}
+  if(candidatePaths.length){try{const result=await runPowerShell({action:'versions',paths:candidatePaths});metadata=result.items||[];if(result.timedOut)warnings.add('Some executable metadata could not be read within the time limit. Available results are retained; unknown versions remain blank.');}catch(e){warnings.add(scanWarning(e));}}
   const complete=games.filter(g=>g.candidates?.length||g.confidence==='manifest').map(g=>applyVersionMetadata(g,metadata)).sort((a,b)=>a.title.localeCompare(b.title));
   for(const game of complete)game.detectedAt=new Date().toISOString();
   progress('Local game scan finished.');
   return {games:complete,scannedAt:new Date().toISOString(),locations:[...locations],warnings:[...warnings]};
 }
 module.exports={scanInstalledGames};
-module.exports._test={parseVdf,libraryRootsFromVdf,parseSteamManifest,parseEpicManifest,parseUninstall,meaningfulVersion,validLocalPath,inside,executableScore,mergeGame,applyVersionMetadata,findExecutables,readSmall};
+module.exports._test={scanWarning,parseVdf,libraryRootsFromVdf,parseSteamManifest,parseEpicManifest,parseUninstall,meaningfulVersion,validLocalPath,inside,executableScore,mergeGame,applyVersionMetadata,findExecutables,readSmall};

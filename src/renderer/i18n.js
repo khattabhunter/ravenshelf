@@ -44,9 +44,13 @@
     '{count} file name(s) are unresolved or unsupported and were not checked.',
     '{host} is on Ravenshelf\u2019s list of {list}.',
     '{name} was sent from your browser. Nothing downloads until you choose.',
+    // A file named in these is a file name, never a text of the app: the two
+    // fixed subjects have patterns of their own, before the general ones.
+    '{count} security vendors on VirusTotal flagged this file.',
+    '{count} security vendors on VirusTotal flagged a downloaded file.',
+    '1 security vendor on VirusTotal flagged this file; one detection is often a false alarm.',
     '{count} security vendors on VirusTotal flagged {subject}.',
     '1 security vendor on VirusTotal flagged {subject}; one detection is often a false alarm.',
-    'Mods \u203a {game}',
     'Only the first {count} other archives are listed; their total includes all archives counted in this check.',
     'Steam manifest: {path}',
     'Epic installation manifest: {path}',
@@ -69,6 +73,8 @@
     'Downloading {tool}\u2026',
     'Checking and unpacking {tool}\u2026',
     'Source notes: {notes}',
+    // Steam's own wording for a game with few reviews.
+    '{count} user reviews',
     'Could not expand paste: {message}'
   ]);
   // The same for texts with a count: the English one and other forms. The
@@ -79,7 +85,12 @@
     Object.freeze(['The link passed through {n} other site: {chain}.', 'The link passed through {n} other sites: {chain}.'])
   ]);
   const VALUE = { host: '[^\\s:/]+', status: '[1-5]\\d{2}', count: '\\d+', n: '\\d+', version: '\\d[0-9A-Za-z.+-]*', ext: '[A-Za-z0-9]{1,8}', shown: '[A-Za-z0-9]{1,8}' };
-  const TRANSLATED = new Set(['message', 'reason', 'list', 'subject', 'tool']);
+  const TRANSLATED = new Set(['message', 'reason', 'list', 'tool']);
+  // Longer texts (pages, notes) are shown as they came: matching them is not
+  // worth the time.
+  const MAX_MATCHED = 4000;
+  // Direction controls inside a value could end its isolation early.
+  const DIRECTION_CONTROLS = /[\u202a-\u202e\u2066-\u2069]/g;
   function compile(template) {
     const names = [];
     const source = template.split(/(\{[A-Za-z][A-Za-z0-9]*\})/).map((part, index) => {
@@ -139,10 +150,13 @@
       return text.replace(PLACEHOLDER, (match, name) => {
         if (!own(params, name)) return match;
         const value = params[name];
+        // Text already laid out for Arabic here (a chain of sites) is used as it is.
+        if (value && typeof value === 'object' && typeof value.laidOut === 'string') return value.laidOut;
         // A number, or a number already written as text ("12.5"), takes the
         // chosen digits. Any other value is kept in its own direction.
-        if (typeof value === 'number' || (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value))) return digits(String(value));
-        return arabic ? ISOLATE_START + String(value) + ISOLATE_END : String(value);
+        // A version is a name, not an amount: "1.5" stays 1.5.
+        if (name !== 'version' && (typeof value === 'number' || (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value)))) return digits(String(value));
+        return arabic ? ISOLATE_START + String(value).replace(DIRECTION_CONTROLS, '') + ISOLATE_END : String(value);
       });
     }
     // Digits written in an Arabic text itself follow the chosen digits too,
@@ -189,6 +203,7 @@
     }
     function known(text, depth) {
       if (own(messages, text) && typeof messages[text] === 'string') return t(text);
+      if (text.length > MAX_MATCHED) return null;
       for (const item of SINGLE_PATTERNS) {
         const match = item.pattern.exec(text);
         if (match) return t(item.key, values(item, match, depth));
@@ -197,11 +212,13 @@
         const match = item.pattern.exec(text);
         if (match) { const found = values(item, match, depth); return tn(Number(found.n), item.one, item.other, found); }
       }
-      // A file, archive or game name, then ": " and a known text.
+      // A file, archive or game name, then ": " and a known text. Names the
+      // app puts there hold no ": ", so only the first and the last are tried.
       if (depth < 2) {
-        for (let at = text.indexOf(': '); at > 0; at = text.indexOf(': ', at + 1)) {
+        for (const at of new Set([text.indexOf(': '), text.lastIndexOf(': ')])) {
+          if (at <= 0) continue;
           const rest = known(text.slice(at + 2), depth + 1);
-          if (rest !== null) return ISOLATE_START + text.slice(0, at) + ISOLATE_END + ': ' + rest;
+          if (rest !== null) return ISOLATE_START + text.slice(0, at).replace(DIRECTION_CONTROLS, '') + ISOLATE_END + ': ' + rest;
         }
       }
       return null;
@@ -210,7 +227,7 @@
       const found = {};
       item.names.forEach((name, index) => {
         const value = match[index + 1];
-        if (name === 'chain') found.chain = '\u200f' + value.split(' \u2192 ').map(host => ISOLATE_START + host + ISOLATE_END).join(' \u2190 ');
+        if (name === 'chain') found.chain = { laidOut: ISOLATE_START + '\u200f' + value.split(' \u2192 ').map(host => ISOLATE_START + host.replace(DIRECTION_CONTROLS, '') + ISOLATE_END).join(' \u2190 ') + ISOLATE_END };
         else if (TRANSLATED.has(name)) { const local = depth < 2 ? known(value, depth + 1) : null; found[name] = local === null ? value : local; }
         else found[name] = value;
       });

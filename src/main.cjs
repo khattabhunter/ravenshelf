@@ -318,7 +318,8 @@ app.whenReady().then(async()=>{
   });
   handle('openModsFolder',()=>{
     const folder=path.join(manager.settings.downloadDir,MODS_FOLDER);
-    if(!fs.existsSync(folder))throw new Error('No mods have been downloaded yet.');
+    let directory=false;try{directory=fs.statSync(folder).isDirectory();}catch{directory=false;}
+    if(!directory)throw new Error('No mods have been downloaded yet.');
     return shell.openPath(folder);
   });
   handle('openDownloadsFolder',()=>{fs.mkdirSync(manager.settings.downloadDir,{recursive:true});return shell.openPath(manager.settings.downloadDir);});

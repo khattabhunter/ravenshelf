@@ -292,7 +292,7 @@ class BrowserBridge extends EventEmitter{
     if(!['ok','not-found'].includes(report.status))return null;
     const virusTotal={status:report.status,malicious:report.malicious??0,suspicious:report.suspicious??0,harmless:report.harmless??0,undetected:report.undetected??0,link:report.link,checkedAt:new Date(this.now()).toISOString()};
     this.setReputation(download.id,{virusTotal});
-    if(report.status==='ok'&&report.malicious>=2){try{this.notify({title:'Check this download before opening it',body:`${report.malicious} security vendors on VirusTotal flagged ${download.name||'a downloaded file'}.`});}catch{}}
+    if(report.status==='ok'&&report.malicious>=2){try{this.notify({title:'Check this download before opening it',body:download.name?`${report.malicious} security vendors on VirusTotal flagged ${download.name}.`:`${report.malicious} security vendors on VirusTotal flagged a downloaded file.`});}catch{}}
     return virusTotal;
   }
   snapshot(){

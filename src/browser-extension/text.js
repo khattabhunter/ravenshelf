@@ -28,15 +28,17 @@
     'Ravenshelf is not available': 'برنامج Ravenshelf غير متاح',
     'Ravenshelf blocked this link': 'حظر Ravenshelf هذا الرابط',
     'It failed Ravenshelf’s safety checks.': 'لم يجتز فحوص الأمان في Ravenshelf.',
-    'Ravenshelf did not take this link': 'لم يأخذ Ravenshelf هذا الرابط',
+    'Ravenshelf did not take this link': 'لم يتولَّ Ravenshelf هذا الرابط',
     'It is not encrypted (HTTP), so Ravenshelf will not download it. Open it in your browser only if you trust the site.': 'هذا الرابط غير مشفّر (HTTP)، لذا لن ينزّله Ravenshelf. افتحه في متصفحك فقط إن كنت تثق بالموقع.',
     'Open it in your browser instead.': 'افتحه في متصفحك بدلًا من ذلك.',
     'Ravenshelf blocked a download': 'حظر Ravenshelf تنزيلًا',
+    'Ravenshelf stopped {name} that a web page created for download. Programs made this way are a common malware trick.': 'أوقف Ravenshelf الملف {name} الذي أنشأته صفحة ويب للتنزيل. البرامج المصنوعة بهذه الطريقة حيلة شائعة للبرمجيات الضارة.',
+    'Ravenshelf stopped a program that a web page created for download. Programs made this way are a common malware trick.': 'أوقف Ravenshelf برنامجًا أنشأته صفحة ويب للتنزيل. البرامج المصنوعة بهذه الطريقة حيلة شائعة للبرمجيات الضارة.',
     'Download with Ravenshelf': 'التنزيل باستخدام Ravenshelf',
     'Download this file with Ravenshelf': 'تنزيل هذا الملف باستخدام Ravenshelf',
     'Download this video with Ravenshelf': 'تنزيل هذا الفيديو باستخدام Ravenshelf',
     'Private window': 'نافذة خاصة',
-    'Ravenshelf does not take downloads from private windows.': 'لا يأخذ Ravenshelf التنزيلات من النوافذ الخاصة.',
+    'Ravenshelf does not take downloads from private windows.': 'لا يستلم Ravenshelf التنزيلات من النوافذ الخاصة.',
     'Ravenshelf closed a pop-up': 'أغلق Ravenshelf نافذة منبثقة',
     '{source} tried to open {target}. File hosts use pop-ups for ads and fake downloads.': 'حاول الموقع {source} فتح {target}. تستخدم مواقع استضافة الملفات النوافذ المنبثقة للإعلانات والتنزيلات المزيّفة.',
     '{source} tried to open another page. File hosts use pop-ups for ads and fake downloads.': 'حاول الموقع {source} فتح صفحة أخرى. تستخدم مواقع استضافة الملفات النوافذ المنبثقة للإعلانات والتنزيلات المزيّفة.',
@@ -56,7 +58,7 @@
     'Set up YouTube downloads': 'إعداد تنزيلات YouTube',
     'Finish the one-time setup in Ravenshelf. This video starts after that.': 'أكمل الإعداد لمرة واحدة في Ravenshelf. يبدأ هذا الفيديو بعد ذلك.',
     'Ravenshelf is busy': 'برنامج Ravenshelf مشغول',
-    'Ravenshelf cannot take more YouTube videos right now. Try again after some finish.': 'لا يستطيع Ravenshelf أخذ مزيد من فيديوهات YouTube الآن. حاول مرة أخرى بعد اكتمال بعضها.',
+    'Ravenshelf cannot take more YouTube videos right now. Try again after some finish.': 'لا يستطيع Ravenshelf استلام مزيد من فيديوهات YouTube الآن. حاول مرة أخرى بعد اكتمال بعضها.',
     'Ravenshelf is closed': 'برنامج Ravenshelf مغلق',
     'Not connected yet': 'غير متصل بعد',
     'This copy is not connected': 'هذه النسخة غير متصلة',
@@ -92,7 +94,7 @@
     'Resume protection now': 'استئناف الحماية الآن',
     'Pause protection for 10 minutes': 'إيقاف الحماية مؤقتًا لمدة 10 دقائق',
     'That did not work. Close this window and try again.': 'لم ينجح ذلك. أغلق هذه النافذة وحاول مرة أخرى.',
-    'Ravenshelf could not take this page. Check that it is open and connected.': 'تعذّر على Ravenshelf أخذ هذه الصفحة. تحقّق من أنه مفتوح ومتصل.',
+    'Ravenshelf could not take this page. Check that it is open and connected.': 'تعذّر على Ravenshelf استلام هذه الصفحة. تحقّق من أنه مفتوح ومتصل.',
     'Sent. Review it in Ravenshelf; nothing downloads until you choose.': 'أُرسلت. راجعها في Ravenshelf؛ لن يُنزَّل شيء حتى تختار.',
     'Ravenshelf blocked this page.': 'حظر Ravenshelf هذه الصفحة.',
     'Ravenshelf left this one to your browser.': 'ترك Ravenshelf هذا الرابط لمتصفحك.',
@@ -106,9 +108,9 @@
     'Adds a Ravenshelf button to YouTube’s player. Right-click a video for the same.': 'يضيف زر Ravenshelf إلى مشغّل YouTube. انقر بزر الفأرة الأيمن على فيديو للخيار نفسه.',
     'Sort Nexus Mods files by game': 'ترتيب ملفات Nexus Mods حسب اللعبة',
     'Reads which game, mod and files a Nexus Mods page is about, so that a file you download there is saved in a Mods folder for its game.': 'يقرأ اللعبة والمود والملفات التي تتناولها صفحة Nexus Mods، ليُحفظ الملف الذي تنزّله منها في مجلد Mods الخاص بلعبته.',
-    'Private windows are never captured. This extension talks only to Ravenshelf on this PC.': 'لا تُلتقط النوافذ الخاصة أبدًا. تتواصل هذه الإضافة مع Ravenshelf على هذا الحاسوب فقط.',
+    'Private windows are never captured. This extension talks only to Ravenshelf on this PC.': 'لا تلتقط الإضافة أي شيء من النوافذ الخاصة أبدًا. تتواصل هذه الإضافة مع Ravenshelf على هذا الحاسوب فقط.',
     // The warning page
-    'Blocked by Ravenshelf': 'حظره Ravenshelf',
+    'Blocked by Ravenshelf': 'صفحة حظرها Ravenshelf',
     'Ravenshelf blocked this page': 'حظر Ravenshelf هذه الصفحة',
     'Ravenshelf stopped this page to keep you safe.': 'أوقف Ravenshelf هذه الصفحة حفاظًا على سلامتك.',
     'Go back': 'رجوع',
@@ -133,9 +135,10 @@
   });
   // Texts with a count: Arabic has six forms, kept under the English other form.
   const AR_PLURAL = Object.freeze({
-    '{n} min ago': Object.freeze({ zero: 'منذ {n} دقيقة', one: 'منذ دقيقة', two: 'منذ دقيقتين', few: 'منذ {n} دقائق', many: 'منذ {n} دقيقة', other: 'منذ {n} دقيقة' }),
-    '{n} h ago': Object.freeze({ zero: 'منذ {n} ساعة', one: 'منذ ساعة', two: 'منذ ساعتين', few: 'منذ {n} ساعات', many: 'منذ {n} ساعة', other: 'منذ {n} ساعة' }),
-    '{n} days ago': Object.freeze({ zero: 'منذ {n} يوم', one: 'منذ يوم', two: 'منذ يومين', few: 'منذ {n} أيام', many: 'منذ {n} يومًا', other: 'منذ {n} يوم' })
+    // The same words as the app's.
+    '{n} min ago': Object.freeze({ zero: 'الآن', one: 'قبل دقيقة', two: 'قبل دقيقتين', few: 'قبل {n} دقائق', many: 'قبل {n} دقيقة', other: 'قبل {n} دقيقة' }),
+    '{n} h ago': Object.freeze({ zero: 'الآن', one: 'قبل ساعة', two: 'قبل ساعتين', few: 'قبل {n} ساعات', many: 'قبل {n} ساعة', other: 'قبل {n} ساعة' }),
+    '{n} days ago': Object.freeze({ zero: 'اليوم', one: 'قبل يوم', two: 'قبل يومين', few: 'قبل {n} أيام', many: 'قبل {n} يومًا', other: 'قبل {n} يوم' })
   });
 
   // The language to use: the app's, when the app has said; otherwise the

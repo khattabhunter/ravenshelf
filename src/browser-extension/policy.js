@@ -64,7 +64,10 @@
     const filename = baseName(item.filename);
     if (scheme === 'blob:' || scheme === 'data:') {
       // A web page built this file itself, so Ravenshelf cannot fetch it again.
-      if (LOCAL_DANGEROUS.has(extensionOf(filename))) return { kind: 'block', reason: `Ravenshelf stopped ${filename || 'a program'} that a web page created for download. Programs made this way are a common malware trick.` };
+      // The reason is English; template and params let it be shown in the app's language.
+      if (LOCAL_DANGEROUS.has(extensionOf(filename))) return filename
+        ? { kind: 'block', reason: `Ravenshelf stopped ${filename} that a web page created for download. Programs made this way are a common malware trick.`, template: 'Ravenshelf stopped {name} that a web page created for download. Programs made this way are a common malware trick.', params: { name: filename } }
+        : { kind: 'block', reason: 'Ravenshelf stopped a program that a web page created for download. Programs made this way are a common malware trick.', template: 'Ravenshelf stopped a program that a web page created for download. Programs made this way are a common malware trick.' };
       return { kind: 'ignore' };
     }
     if (!['http:', 'https:'].includes(schemeOf(url)) || url.length > MAX_URL || (finalUrl && (finalUrl.length > MAX_URL || !['http:', 'https:'].includes(scheme)))) return { kind: 'ignore' };

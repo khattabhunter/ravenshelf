@@ -123,6 +123,10 @@ function errorText(error) {
 // list (see public-errors.cjs); a few carry a status number.
 // A text the main process wrote, in English, shown in the app's language.
 function localMessage(text) { return i18n.localText(text); }
+// Installation notes: the source page's own lines stay as the page wrote them;
+// only the app's heading and its own two notes are translated.
+const APP_NOTES = [later('Source-reported installation notes (not independently verified):'), later('This mirror includes a separate replacement setup archive for the newer non-HV repack. The source says to unpack that archive over the main setup files, with overwriting. Keep it separate from the numbered multipart sequence.'), later('The source page also contains instructions to weaken antivirus protection. Ravenshelf does not apply those instructions.')];
+function localNotes(text) { return i18n.arabic && typeof text === 'string' ? text.split('\n').map(line => APP_NOTES.includes(line) ? t(line) : line).join('\n') : text; }
 function toast(message, isError = false) {
   const node = el('div', `toast${isError ? ' error' : ''}`, message);
   node.setAttribute('role', isError ? 'alert' : 'status');
@@ -416,7 +420,7 @@ function renderGameDetails(game) {
     const controls = el('div', 'host-controls');
     const select = el('select', 'host-select'); select.setAttribute('aria-label', t('Choose download host'));
     groups.forEach((group, index) => {
-      const option = el('option', '', group.label || group.host || t('Source {number}', { number: index + 1 })); option.value = String(index); select.append(option);
+      const option = el('option', '', localMessage(group.label || group.host) || t('Source {number}', { number: index + 1 })); option.value = String(index); select.append(option);
     });
     const preferredHost = groups.findIndex(group => /filekeeper/i.test(`${group.host || ''} ${group.label || ''}`));
     if (preferredHost >= 0) select.value = String(preferredHost);
@@ -436,7 +440,7 @@ function renderGameDetails(game) {
   panel.append(results); body.append(panel);
   const installation = el('details', 'installation-section');
   installation.append(el('summary', '', t('Installation notes')));
-  installation.append(el('div', 'installation-text', localMessage(game.installation) || t('Keep all parts of the same repack in one folder. Review the source page for its extraction, verification, language, disk-space, and installation requirements. Ravenshelf does not automatically run downloaded files.')));
+  installation.append(el('div', 'installation-text', localNotes(game.installation) || t('Keep all parts of the same repack in one folder. Review the source page for its extraction, verification, language, disk-space, and installation requirements. Ravenshelf does not automatically run downloaded files.')));
   installation.append(el('p', 'host-helper', t('Link availability does not verify the contents of an installer. Ravenshelf does not run downloads or change Windows security settings.')));
   body.append(installation);
   $('#detail-content').replaceChildren(header, body);
@@ -466,7 +470,7 @@ async function inspectLinks(text, container, title = 'Imported links') {
         chooser.append(el('p', 'warning-note', t('This page offers the same files on several hosts. Choose one source for your download set.')));
         const controls = el('div', 'host-controls');
         const select = el('select', 'host-select'); select.setAttribute('aria-label', t('Choose one mirror host'));
-        [...groups].forEach(([host, urls], index) => { const option = el('option', '', host + ' · ' + tn(urls.length, '{n} link', '{n} links')); option.value = String(index); select.append(option); });
+        [...groups].forEach(([host, urls], index) => { const option = el('option', '', localMessage(host) + ' · ' + tn(urls.length, '{n} link', '{n} links')); option.value = String(index); select.append(option); });
         const preferredHost = [...groups.keys()].findIndex(host => /filekeeper/i.test(host));
         if (preferredHost >= 0) select.value = String(preferredHost);
         const check = button(t('Check this host'), 'button primary', 'link');
@@ -529,7 +533,7 @@ function renderCheckedLinks(container, links, warnings, title, preflight = null)
     const marker = el('span', `link-status-dot ${status}`); marker.title = status === 'ready' ? t('Ready') : missing.includes(link) ? t('Not found') : browserSteps.includes(link) ? t('Needs a browser step') : t('Not verified');
     const copy = el('div', 'link-copy');
     const name = el('div', 'link-name', fileName(link)); name.title = fileName(link);
-    copy.append(name, el('div', 'link-message', link.message ? localMessage(link.message) : status === 'ready' ? (link.host || t('Direct link')) + ' · ' + t('Ready') : status === 'manual' ? t('Open the protected host window to continue.') : t('This link could not be verified.')));
+    copy.append(name, el('div', 'link-message', link.message ? localMessage(link.message) : status === 'ready' ? (localMessage(link.host) || t('Direct link')) + ' · ' + t('Ready') : status === 'manual' ? t('Open the protected host window to continue.') : t('This link could not be verified.')));
     row.append(marker, copy);
     if (link.size) row.append(el('span', 'link-size', formatBytes(link.size)));
     if (status === 'manual') row.append(button(t('Open protected host'), 'text-button', 'external', () => attempt(() => api.openHost({ url: link.sourceUrl || link.url, gameTitle: title }))));
@@ -1155,6 +1159,9 @@ function applyCoverAccent(image){
     setAccent(weight?[r/weight,g/weight,b/weight]:undefined);
   }catch{setAccent();}
 }
+// A genre tag from the source, shown in the app's language when it is one of
+// the catalogue's own genre names ("action" → Action); otherwise as it came.
+function genreLabel(tag){const title=String(tag).replace(/(^|[\s-])([a-z])/g,(m,space,letter)=>space+letter.toUpperCase()).replace(/^Rpg$/,'RPG').replace(/^Action Rpg$/,'Action RPG').replace(/^Rts$/,'RTS');return i18n.arabic&&i18n.has(title)?t(title):tag;}
 function genreTokens(value){return (Array.isArray(value)?value:String(value||'').split(/[,;/|]/)).map(genre=>String(genre).trim().toLowerCase()).filter(Boolean);}
 function personalSuggestions(games,settings,downloads){
   const saved=[...(settings.favorites||[]),...(settings.collections||[]).flatMap(collection=>collection.games||[])],profile=new Map(),seen=new Set();
@@ -1164,7 +1171,7 @@ function personalSuggestions(games,settings,downloads){
 }
 function renderPersonalized(){
   const suggestions=personalSuggestions(catalog.games,state.settings,state.downloads),grid=$('#personalized-games');
-  grid.replaceChildren(...suggestions.map(({game,matches})=>{const card=makeGameCard(game);card.append(el('p','suggestion-reason',t('Matches {genres} in your collection',{genres:matches.slice(0,2).join(' / ')})));return card;}));
+  grid.replaceChildren(...suggestions.map(({game,matches})=>{const card=makeGameCard(game);card.append(el('p','suggestion-reason',t('Matches {genres} in your collection',{genres:matches.slice(0,2).map(genreLabel).join(' / ')})));return card;}));
   $('#personalized-reason').textContent=suggestions.length?t('Based on genres in your saved and completed games. Your preferences stay on this laptop.'):t('No genre matches on this page yet. Save games you like, or browse another catalogue page.');
 }
 function steamReviewSummary(reviews){
@@ -1557,7 +1564,7 @@ function modLine(item) {
   // The folder's name comes from the app, which is what names the folder. It
   // can hold words from the page, so it stands apart as a path, and nothing of
   // Ravenshelf's own follows it.
-  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' ' + t('Ravenshelf saves it in your download folder, in:') + ' '), el('bdi', 'capture-folder', localMessage(item.modFolder)));
+  if (typeof item.modFolder === 'string' && item.modFolder && ['checking', 'ready', 'queued'].includes(item.status)) line.append(el('span', '', ' ' + t('Ravenshelf saves it in your download folder, in:') + ' '), el('bdi', 'capture-folder', item.modFolder));
   return line;
 }
 function captureCard(item) {
@@ -1646,7 +1653,7 @@ function renderBrowserSettings() {
       + (failed ? ' ' + tn(failed, 'One list could not be updated; the previous copy is still used.', '{n} lists could not be updated; the previous copy is still used.') : '')
     : t('The lists download a few seconds after you connect. Site blocking starts once they arrive.');
   $('#update-threat-lists').disabled = !enabled || lists.updating || browserBusy;
-  $('#threat-sources').replaceChildren(...sources.map(source => el('li', '', t('{list}: {count} entries · {source} ({license})', { list: localMessage(String(source.label || '').replace(/^./, c => c.toUpperCase())), count: count(source.count || 0), source: String(source.source), license: String(source.license) }))));
+  $('#threat-sources').replaceChildren(...sources.map(source => el('li', '', t('{list}: {count} entries · {source} ({license})', { list: i18n.arabic ? localMessage(String(source.label || '')) : String(source.label || '').replace(/^./, c => c.toUpperCase()), count: count(source.count || 0), source: localMessage(String(source.source)), license: String(source.license) }))));
   const vt = b.virusTotal || {};
   $('#vt-status').textContent = !vt.protectedStorage ? t('Windows protected storage is unavailable on this account, so a key cannot be saved.')
     : vt.problem ? localMessage(vt.problem)
@@ -1744,7 +1751,8 @@ function renderYouTubeSettings() {
 function renderYouTubeDialog() {
   const tools = mediaTools(), phase = tools.phase, status = mediaStatus(), waiting = mediaWaiting().length;
   toolLines($('#youtube-dialog-tools'));
-  $('#youtube-dialog-intro').textContent = tn(waiting, 'A YouTube video is waiting. Ravenshelf downloads YouTube videos with three free helper programs: setup gets them once ({size}) from their official GitHub releases and checks every file before use.', '{n} YouTube videos are waiting. Ravenshelf downloads YouTube videos with three free helper programs: setup gets them once ({size}) from their official GitHub releases and checks every file before use.', { size: formatBytes(tools.downloadBytes, t('about 180 MB')) });
+  const videos = Math.max(1, waiting);
+  $('#youtube-dialog-intro').textContent = tn(videos, 'A YouTube video is waiting. Ravenshelf downloads YouTube videos with three free helper programs: setup gets them once ({size}) from their official GitHub releases and checks every file before use.', '{n} YouTube videos are waiting. Ravenshelf downloads YouTube videos with three free helper programs: setup gets them once ({size}) from their official GitHub releases and checks every file before use.', { size: formatBytes(tools.downloadBytes, t('about 180 MB')) });
   $('#youtube-dialog-status').textContent = phase === 'missing' && !tools.message ? '' : status.text;
   $('#youtube-dialog-status').className = `small-text browser-status ${status.tone}`.trim();
   const progress = $('#youtube-dialog-progress');
