@@ -88,9 +88,14 @@ test('graphics memory: just under the figure meets, clearly under is below',()=>
   const card=bytes=>specs({graphics:[{name:'Example',maker:'AMD',kind:'discrete',dedicatedBytes:bytes,directx:12,featureLevel:'12.1',problem:false,main:true}]});
   const verdict=bytes=>rowOf(tier('Graphics: 4 GB VRAM',card(bytes)),'videoMemory').verdict;
   assert.equal(verdict(4*GIB),'meets');
-  assert.equal(verdict(Math.ceil(4*GIB*0.9)),'meets');
-  assert.equal(verdict(Math.floor(4*GIB*0.9)-1),'below');
+  assert.equal(verdict(Math.ceil(4*GIB*0.95)),'meets');
+  assert.equal(verdict(Math.floor(4*GIB*0.95)-1),'below');
   assert.equal(verdict(3*GIB),'below');
+  // A 6 GB card that Windows reports as 5.875 GB meets 6 GB; 11 GB does not meet 12 GB, nor 10 GB 11 GB.
+  const big=(have,line)=>rowOf(tier(line,card(have)),'videoMemory').verdict;
+  assert.equal(big(6308233216,'Graphics: Example 6GB'),'meets');
+  assert.equal(big(11*GIB,'Graphics: Example 12GB / Example 12GB'),'below');
+  assert.equal(big(10*GIB,'Graphics: Example 11GB'),'below');
 });
 
 test('memory: installed memory counts; usable memory alone never says below',()=>{
@@ -221,7 +226,8 @@ test('this PC\u2019s Windows version',()=>{
   assert.equal(have({version:'6.1.7601'}),7);
   assert.equal(have({version:'6.0.6002'}),6);
   assert.equal(have({version:'5.1.2600'}),5.1);
-  // Not Windows: Linux's version number names no Windows.
+  // A version number Windows does not use names no Windows (compareTier
+  // also ignores this PC's version on a PC that is not Windows; see below).
   assert.equal(have({version:'6.8.0-1012-example'}),null);
   assert.equal(have({name:'Windows 10 Home'}),10);
   assert.equal(have({name:'Example OS'}),null);
@@ -253,7 +259,7 @@ test('64-bit Windows',()=>{
   // 64-bit asked for in the processor line, or in a note, counts too.
   assert.ok(rowOf(tier('Processor: Example 64-bit dual core'),'bits'));
   assert.ok(rowOf(tier('Additional Notes: 64-bit Windows only'),'bits'));
-  // Not in other lines: a sound card is not Windows.
+  // Not in other lines: a memory line is not about Windows.
   assert.equal(rowOf(tier('Memory: 64-bit 4 GB'),'bits'),undefined);
 });
 
@@ -275,7 +281,7 @@ test('sizes',()=>{
   assert.deepEqual(sizes('Shader Model 5.0'),[]);
   assert.deepEqual(sizes('2048'),[]);
   assert.deepEqual(sizes('8GBRAM'),[]);
-  // A number that is part of another number is not a size.
+  // A size starts at the start of its number, never in the middle of one.
   assert.deepEqual(sizes('Example 30606GB'),[30606*GIB]);
   assert.deepEqual(sizes('x.5 GB'),[]);
   assert.deepEqual(c.sizesIn('512 KB'),[]);
@@ -288,7 +294,18 @@ test('graphics memory from a graphics line',()=>{
   assert.equal(vram('Example GTX 960 (4 GB VRAM)'),4*GIB);
   assert.equal(vram('Example UHD 630 (8GB system RAM)'),null);
   assert.equal(vram('Example UHD 630 with 8 GB of system memory'),null);
-  assert.equal(vram('Example card 2 GB, built-in graphics with 8 GB RAM'),2*GIB);
+  // A line that names built-in graphics is left out altogether.
+  assert.equal(vram('Example card 2 GB, built-in graphics with 8 GB RAM'),null);
+  assert.equal(vram('Integrated GPU, 8 GB memory'),null);
+  assert.equal(vram('Example APU with 16 GB unified memory'),null);
+  // Sizes that are memory of the PC, or a speed.
+  assert.equal(vram('Example Iris with 16GB of dual-channel RAM'),null);
+  assert.equal(vram('Example 680M (16 GB LPDDR5)'),null);
+  assert.equal(vram('Example GTX 1060 (192 GB/s memory bandwidth)'),null);
+  // A model number before a dash is not the start of a range.
+  assert.equal(vram('Example RX Vega 56 - 8 GB'),8*GIB);
+  assert.equal(vram('Example R9 - 4 GB'),4*GIB);
+  assert.equal(vram('Example GTX 1060 6GB / Example RX 580 - 4GB'),4*GIB);
   assert.equal(vram('Built-in graphics with shared memory of 2 GB'),null);
   assert.equal(vram('Example card with 2 GB shared'),null);
   assert.equal(vram('256 MB DirectX 9 card'),256*MIB);
@@ -305,7 +322,7 @@ test('graphics memory from a graphics line',()=>{
   // The graphics card line shown is the first.
   assert.equal(rowOf(shown,'graphics').needs,'Example GTX 970');
   // A system memory figure is not graphics memory, also when it is the smallest.
-  assert.equal(vram('Example card 4 GB or built-in graphics with 2 GB RAM'),4*GIB);
+  assert.equal(vram('Example card 4 GB or example graphics with 2 GB RAM'),4*GIB);
 });
 
 test('reading the list: labels, several items on one line, bullets',()=>{
@@ -318,8 +335,8 @@ test('reading the list: labels, several items on one line, bullets',()=>{
   const two=read('Graphics: Example Video Memory: 2 GB Additional Notes: none Free Disk Space: 3 GB');
   assert.deepEqual(two.items,{graphics:'Example',videoMemory:'2 GB',storage:'3 GB'});
   const bullets=read('\u2022 HDD: 9 GB\n- Video Memory: 1 GB\nOS\u00ae (64-bit): Windows 10\nExample\u0007CPU: x');
-  // A control character becomes a space, so "CPU:" starts an item of its own.
-  assert.deepEqual(bullets.items,{storage:'9 GB',videoMemory:'1 GB',windows:'Windows 10',processor:'x'});
+  // A control character becomes a space; "Example CPU" is not an item name.
+  assert.deepEqual(bullets.items,{storage:'9 GB',videoMemory:'1 GB',windows:'Windows 10'});
   const three=read('OS *: Windows 10\n\u2022 Memory\u00ae: 4 GB\nVideo Card: Example\nSystem Memory: 6 GB\nHard Disk Space: 9 GB\nCPU: Example');
   assert.equal(three.items.windows,'Windows 10');
   assert.equal(three.items.memory,'4 GB');
@@ -408,4 +425,135 @@ test('large or hostile lists stay fast and bounded',()=>{
   assert.equal(rowOf(tier(many),'memory'),undefined);
   // Empty lines do not count.
   assert.ok(rowOf(tier('\n'.repeat(100)+'Memory: 8 GB'),'memory'));
+});
+
+test('Windows lines that rule versions out, or ask for an update, are not judged',()=>{
+  const win=(line,system)=>rowOf(tier(line,system?specs({system}):specs()),'windows');
+  const seven={name:'Windows 7',version:'6.1.7601',build:7601,architecture:'64-bit'};
+  for(const line of ['OS *: Windows 10/11 64-bit (Windows 7 and 8.1 are not supported)','OS: Windows 7 is no longer supported. Windows 10','OS: Windows 11 (upgrade from Windows 7 required)','OS: Windows 10, except Windows 7']){
+    const found=win(line,seven);
+    assert.equal(found.verdict,'unknown',line);assert.equal(found.note,'unclear',line);
+  }
+  const old={name:'Windows 10 Pro',version:'10.0.17763',build:17763,architecture:'64-bit'};
+  for(const line of ['OS: Windows 10 version 2004 or newer','OS: Windows 10 22H2 (10.0.19045)','OS: Windows 10 RS5 x64','OS: Windows 10 build 15063 or higher','OS: Windows 10 with the latest update']){
+    const found=win(line,old);
+    assert.equal(found.verdict,'unknown',line);assert.equal(found.note,'update',line);
+  }
+  assert.equal(win('OS: Windows 10 (1909 or newer)',old).note,'update');
+  assert.equal(win('OS: Windows 11 23H2').note,'update');
+  // A newer version than the one named meets, whatever update of it is named.
+  assert.equal(win('OS: Windows 10 version 2004 or newer').verdict,'meets');
+  assert.equal(win('OS: Windows 7 SP1').verdict,'meets');
+  assert.equal(win('OS: Windows 7 SP1',{name:'Windows 7',version:'6.1.7600',build:7600,architecture:'64-bit'}).note,'update');
+  // "64-bit" and "x64" are not updates.
+  assert.equal(win('OS: Windows 10 64-bit',old).verdict,'meets');
+  assert.equal(win('OS: Windows 10 x64',old).verdict,'meets');
+});
+
+test('64-bit is asked for only when 32-bit is not mentioned',()=>{
+  for(const line of ['Windows 7 (32 & 64-bit)','Windows 7 64-bit and 32-bit','Windows 7 64-bit, 32-bit','Windows 7 (x86 or x64)','Windows 7 (32bit & 64bit)','Windows 7 (32- or 64-bit)','Windows 10 64-bit (32-bit not supported)','Windows XP i386 or x64'])assert.equal(c.wants64(line),false,line);
+  for(const line of ['Windows 10 64-bit, 32 GB RAM recommended','Windows 10 x86_64','Windows 10 x86-64','64-bit processor with 32 threads'])assert.equal(c.wants64(line),true,line);
+  const thirtyTwo=specs({system:{name:'Windows 7',version:'6.1.7601',build:7601,architecture:'32-bit'}});
+  assert.equal(rowOf(tier('OS: Windows 7 (32 & 64-bit)',thirtyTwo),'bits'),undefined);
+});
+
+test('a Recommended heading inside the minimum list ends it',()=>{
+  const both=tier('Minimum:\nOS: Windows 10\nMemory: 8 GB RAM\nGraphics: Example GTX 1050 Ti\nRecommended:\nGraphics: Example RTX 3070 8GB\nStorage: 100 GB SSD');
+  assert.deepEqual(both.rows.map(item=>item.key),['windows','memory','graphics']);
+  // Only the first heading is skipped.
+  assert.deepEqual(c.readTier('Recommended:\nMemory: 16 GB\nMinimum Requirements:\nMemory: 8 GB').items,{memory:'16 GB'});
+  assert.deepEqual(c.readTier('Minimum: OS: Windows 10 Memory: 4 GB').items,{windows:'Windows 10',memory:'4 GB'});
+});
+
+test('graphics memory of a device Windows does not call a card: enough meets, less is not judged',()=>{
+  const amd=bytes=>specs({graphics:[{name:'Example Radeon',maker:'AMD',kind:'unknown',dedicatedBytes:bytes,directx:12,featureLevel:'12.1',problem:false,main:true}]});
+  const less=rowOf(tier('Graphics: Example (2 GB VRAM)',amd(512*MIB)),'videoMemory');
+  assert.equal(less.verdict,'unknown');assert.equal(less.note,'kind');assert.equal(less.have,512*MIB);
+  assert.equal(rowOf(tier('Graphics: Example (2 GB VRAM)',amd(8*GIB)),'videoMemory').verdict,'meets');
+});
+
+test('several figures in one line: one answer when they agree',()=>{
+  const free=bytes=>specs({drives:[{letter:'C',freeBytes:bytes,removable:false}]});
+  const storage=(line,bytes)=>rowOf(tier(line,free(bytes)),'storage');
+  const both=storage('Storage: 100 GB available space (150 GB needed during installation)',120*GIB);
+  assert.equal(both.verdict,'unknown');assert.equal(both.note,'unclear');assert.equal(both.need,100*GIB);
+  assert.equal(storage('Storage: 100 GB available space (150 GB needed during installation)',200*GIB).verdict,'meets');
+  assert.equal(storage('Storage: 100 GB available space (150 GB needed during installation)',50*GIB).verdict,'below');
+  assert.equal(storage('Storage: SSD (500 MB/s read), 150 GB',120*GIB).verdict,'below');
+  assert.equal(storage('Storage: SSD (500 MB/s read), 150 GB',120*GIB).need,150*GIB);
+  const memory=(line,bytes)=>rowOf(tier(line,specs({memory:{installedBytes:bytes,usableBytes:bytes}})),'memory');
+  assert.equal(memory('Memory: 16 GB RAM (12 GB minimum on low settings)',8*GIB).verdict,'below');
+  assert.equal(memory('Memory: 16 GB RAM (12 GB minimum on low settings)',14*GIB).verdict,'unknown');
+  assert.equal(memory('Memory: 16 GB RAM (12 GB minimum on low settings)',14*GIB).note,'unclear');
+  assert.equal(memory('Memory: DDR4 - 16 GB',8*GIB).verdict,'below');
+  assert.equal(memory('Memory: DDR4 - 16 GB',8*GIB).need,16*GIB);
+  // Usable memory alone: every figure must be reached.
+  const usable=rowOf(tier('Memory: 8 GB (16 GB for 4K)',specs({memory:{installedBytes:null,usableBytes:12*GIB}})),'memory');
+  assert.equal(usable.verdict,'unknown');assert.equal(usable.note,'usable');
+  const card=(directx,featureLevel)=>specs({graphics:[{name:'Example',maker:'NVIDIA',kind:'discrete',dedicatedBytes:8*GIB,directx,featureLevel,problem:false,main:true}]});
+  const dx=(line,directx,level)=>rowOf(tier(line,card(directx,level)),'directx');
+  assert.equal(dx('DirectX: Version 12 (DirectX 11 supported)',11,'11.1').verdict,'unknown');
+  assert.equal(dx('DirectX: Version 12 (DirectX 11 supported)',11,'11.1').note,'unclear');
+  assert.equal(dx('DirectX: Version 12 (DirectX 11 supported)',12,'12.1').verdict,'meets');
+});
+
+test('DirectX 12 at an older feature level, and versions with a minor number',()=>{
+  const card=(directx,featureLevel)=>specs({graphics:[{name:'Example',maker:'NVIDIA',kind:'discrete',dedicatedBytes:8*GIB,directx,featureLevel,problem:false,main:true}]});
+  const dx=(line,directx,level)=>rowOf(tier(line,card(directx,level)),'directx');
+  const older=dx('DirectX: Version 12',12,'11.0');
+  assert.equal(older.verdict,'unknown');assert.equal(older.note,'level');
+  assert.equal(dx('DirectX: Version 12',12,'12.0').verdict,'meets');
+  assert.equal(dx('DirectX: Version 12',12,null).verdict,'meets');
+  assert.equal(dx('DirectX: Version 11.1',11,'11.0').verdict,'below');
+  assert.equal(dx('DirectX: Version 11.1',12,'11.1').verdict,'meets');
+  assert.equal(dx('DirectX: Version 11.1',11,null).verdict,'unknown');
+  assert.equal(dx('DirectX: Version 12.',12,'12.1').verdict,'meets');
+  assert.deepEqual(c.directxList('Version 12 (DirectX 11 supported)'),[{version:12,level:null},{version:11,level:null}]);
+});
+
+test('item names inside a name are not split off, and more names start items',()=>{
+  assert.deepEqual(c.readTier('GPU Memory: 2 GB').items,{videoMemory:'2 GB'});
+  assert.deepEqual(c.readTier('Graphics Card Memory: 1 GB\nGPU RAM: 3 GB').items,{videoMemory:'1 GB'});
+  assert.deepEqual(c.readTier('Virtual Memory: 2 GB').items,{});
+  assert.deepEqual(c.readTier('Graphics: Example GTX 960 HDD: 30 GB').items,{graphics:'Example GTX 960',storage:'30 GB'});
+  assert.deepEqual(c.readTier('Processor: Example GPU: Example 2 GB').items,{processor:'Example',graphics:'Example 2 GB'});
+  assert.equal(rowOf(tier('Graphics: Example GTX 960 HDD: 30 GB'),'videoMemory'),undefined);
+});
+
+test('on a PC that is not Windows, or after the basic check, Windows lines say Can\u2019t tell',()=>{
+  const linux=specs({status:'basic',notes:['not-windows'],system:{name:'Example Linux',version:'6.1.0-18-amd64',build:null,architecture:'64-bit'}});
+  const result=tier('OS: Windows 10 64-bit',linux);
+  assert.equal(rowOf(result,'windows').verdict,'unknown');assert.equal(rowOf(result,'windows').have,null);
+  assert.equal(rowOf(result,'bits').verdict,'unknown');
+  assert.equal(rowOf(tier('OS: Windows XP',linux),'windows').verdict,'unknown');
+  // The basic check on Windows: its version is Windows' own, its architecture is Ravenshelf's build.
+  const basic=specs({status:'basic',notes:['probe-failed'],system:{name:'Windows',version:'10.0.22631',build:null,architecture:'64-bit'}});
+  assert.equal(rowOf(tier('OS: Windows 10 64-bit',basic),'windows').verdict,'meets');
+  assert.equal(rowOf(tier('OS: Windows 10 64-bit',basic),'bits').verdict,'unknown');
+});
+
+test('format and direction characters are removed from the list',()=>{
+  const shown=rowOf(tier('Processor: A\u061cB\u206aC\ufff9D\u{e0041}E\u00adF'),'processor').needs;
+  assert.equal(shown,'A B C D E F');
+});
+
+test('more edges: headings after items, unified memory, DirectX 9.1 and a full stop, lists that could not be loaded',()=>{
+  assert.deepEqual(c.readTier('OS: Windows 10\nMemory: 8 GB\nRecommended:\nStorage: 9 GB').items,{windows:'Windows 10',memory:'8 GB'});
+  const bitsFirst=c.readTier('Requires a 64-bit processor and operating system\nRecommended:\nMemory: 16 GB');
+  assert.deepEqual(bitsFirst.items,{});assert.ok(bitsFirst.bits);
+  assert.equal(c.graphicsMemory(['Example 680M (16 GB unified)']),null);
+  const card=(directx,featureLevel)=>specs({graphics:[{name:'Example',maker:'NVIDIA',kind:'discrete',dedicatedBytes:8*GIB,directx,featureLevel,problem:false,main:true}]});
+  assert.equal(rowOf(tier('DirectX: Version 9.1',card(9,null)),'directx').verdict,'meets');
+  assert.equal(rowOf(tier('Graphics: Any DirectX 11.',card(11,null)),'directx').verdict,'meets');
+  assert.equal(c.compareRequirements({minimum:'',recommended:''},specs(),{unavailable:true}).status,'details-unavailable');
+  assert.equal(c.compareRequirements({minimum:'Memory: 8 GB',recommended:''},specs(),{unavailable:true}).status,'complete');
+});
+
+test('more edges: private-use characters, speeds and system memory in graphics lines',()=>{
+  assert.equal(rowOf(tier('Processor: A\ue000B'),'processor').needs,'A B');
+  assert.deepEqual(c.sizesIn('100 MB per second'),[]);
+  assert.deepEqual(c.sizesIn('100 MBps'),[]);
+  assert.deepEqual(c.sizesIn('100 MB/sec'),[]);
+  assert.equal(c.graphicsMemory(['Example card 8 GB (4 GB system)']),8*GIB);
+  assert.equal(c.graphicsMemory(['Example card, system memory of 8 GB']),null);
 });

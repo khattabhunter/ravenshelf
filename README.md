@@ -67,9 +67,9 @@ A matching checksum detects a mismatch with the published file; provenance recor
 | Background catalogue refresh | Checks at startup and every five minutes while Ravenshelf is open, including when minimized. |
 | Personal library | Favorites and named collections. |
 | Game details | Click-to-enlarge covers/screenshots, system requirements and real Steam recommendation counts when available. Stars express the positive-review ratio on a five-star scale. |
-| Can you run it? | Sets each line of a game's Steam requirement lists beside this PC's specs: **Meets**, **Below** or **Can’t tell**. Only figures are compared (Windows version, 64-bit, memory, graphics memory, DirectX, free space); processor and graphics card models are not. Worked out on this PC; nothing is sent or saved. |
+| Can you run it? | Sets each line it recognises in a game's Steam requirement lists beside this PC's specs: **Meets**, **Below** or **Can’t tell**. Only figures are compared (Windows version, 64-bit, memory, graphics memory, DirectX, free space); processor and graphics card models are not. Worked out on this PC; nothing is sent or saved. |
 | Personal touches | Local genre suggestions from saved/completed games and optional artwork-colored accents with a readable fallback. |
-| Downloads | Batch queues, lightweight progress updates, pause/resume, retry, persistent partial downloads and duplicate-file protection. A warning, and a tick to confirm, when new files need more room than the download drive has free. |
+| Downloads | Batch queues, lightweight progress updates, pause/resume, retry, persistent partial downloads and duplicate-file protection. A warning, and a tick to confirm, when checked files need more room than the download drive has free. |
 | Multiple connections | Up to four connections per large file, with validated ranges and automatic fallback to one. |
 | Network controls | A shared speed limit, local-time download hours and host cooldowns after limiting responses. |
 | Queue cleanup | Select several entries or review completed downloads; keep files when removing entries, or explicitly confirm permanent file deletion. Storage checking separates queue-managed files, missing entries and other archives in the chosen folder; other archives are shown for reference only. Figures are estimates. |
@@ -82,7 +82,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 | Mods | Lists the mod files you downloaded on Nexus Mods, by game and newest first, with search, a link to each mod's page in your own browser and the file's folder. Ravenshelf itself never contacts Nexus Mods. |
 | Languages | English or Arabic (right to left, with 0 1 2 3 or ٠ ١ ٢ ٣ digits). The browser extension follows the app. |
 | On this PC | Reads supported launcher records and local file metadata to show installed games and reported versions. |
-| PC specs | Shows this PC's processor, graphics adapters (with their real graphics memory), memory, drives, display and Windows version. Read on this PC the first time you open the page after starting Ravenshelf, and again with **Check again**; never saved or sent anywhere. |
+| PC specs | Shows this PC's processor, graphics adapters (with their real graphics memory), memory, drives, display and Windows version. Read on this PC the first time you open the page (or compare a game with this PC) after starting Ravenshelf, and again with **Check again**; never saved or sent anywhere. |
 | Gameplay and guides | YouTube gameplay search in a separate viewer, plus clearly labeled guide searches. |
 | Finish actions | Optional app close or laptop shutdown after transfers and requested scans finish successfully, with a cancellable countdown and a final safety check. Unclear or adverse scan results block the action. |
 | Convenience | Optional desktop notices and an opt-in copied-link tray. Copied links require review and checking before downloading. |

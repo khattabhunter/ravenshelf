@@ -215,6 +215,10 @@ test('Can You Run It compares the trusted game page with this PC, asking for the
   assert.equal(result.tiers.recommended,undefined);
   for(const value of [undefined,null,{},{url:7},{url:'x'.repeat(2001)}])await assert.rejects(f.handlers.get('checkGame')(value),/Choose a game first/);
   assert.equal(asks.length,1);
+  // Compare again reads this PC again; only a real true asks for that.
+  await f.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/',refresh:true});
+  await f.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/',refresh:'true'});
+  assert.deepEqual(asks.slice(1),[{refresh:true},{refresh:false}]);
 });
 test('Can You Run It still answers when the specs cannot be read, and leaks nothing from a failed page',async t=>{
   const hardware={async get(){throw new Error('Private failure C:\\private\\hardware');}};
@@ -222,7 +226,7 @@ test('Can You Run It still answers when the specs cannot be read, and leaks noth
   const result=await f.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/'});
   assert.equal(result.status,'no-specs');assert.equal(result.tiers.minimum.rows[0].verdict,'unknown');
   const failed=await f.handlers.get('checkGame')({url:'https://unapproved.invalid/'});
-  assert.equal(failed.status,'no-requirements');assert.doesNotMatch(JSON.stringify(failed),/private|token|unapproved/);
+  assert.equal(failed.status,'details-unavailable');assert.doesNotMatch(JSON.stringify(failed),/private|token|unapproved/);
   // Without a specs service there is nothing to read.
   const g=fixture(t,{requirements:{minimum:'Memory: 8 GB RAM',recommended:''}});
   assert.equal((await g.handlers.get('checkGame')({url:'https://fitgirl-repacks.site/fixture/'})).status,'no-specs');
@@ -242,13 +246,14 @@ test('Free space: what downloads waiting on the same drive still need is counted
   const entry=(id,status,received,total)=>({id,name:id,folder:f.folder,status,received,total,url:'https://example.invalid/'+id,headers:{}});
   f.manager.downloads.push(entry('a','queued',0,1000),entry('b','downloading',400,1000),entry('c','paused',900,1000),entry('d','completed',500,1000),entry('e','cancelled',0,5000),entry('f','error',0,7000),entry('g','queued',0,0),entry('h','queued',0,null),entry('j','queued',0,undefined),entry('k','queued',0,'x'),entry('i','paused',2000,1000));
   const answer=await f.handlers.get('getDownloadSpace')();
-  assert.deepEqual(answer,{freeBytes:1000,pendingBytes:1000+600+100});
+  // A failed download can be retried: what it still needs counts too.
+  assert.deepEqual(answer,{freeBytes:1000,pendingBytes:1000+600+100+7000});
 });
 test('Free space: unreadable drives, missing statfs and impossible numbers give no figure',async()=>{
   const {freeSpace}=require('../src/feature-services.cjs');
   assert.equal(await freeSpace('/x',{statfs:async()=>{throw Object.assign(new Error('denied'),{code:'EACCES'});}}),null);
   // A folder that cannot be read is not measured at its parent.
-  assert.equal(await freeSpace('/x',{statfs:async folder=>{if(folder==='/x')throw Object.assign(new Error('denied'),{code:'EACCES'});return {bavail:1,bsize:1};}}),null);
+  assert.equal(await freeSpace('/x',{statfs:async folder=>{if(folder===path.resolve('/x'))throw Object.assign(new Error('denied'),{code:'EACCES'});return {bavail:1,bsize:1};}}),null);
   assert.equal(await freeSpace('/x',{statfs:null}),null);
   assert.equal(await freeSpace('',{statfs:async()=>({bavail:1,bsize:1})}),null);
   assert.equal(await freeSpace(7,{statfs:async()=>({bavail:1,bsize:1})}),null);
@@ -273,4 +278,30 @@ test('Free space: on Windows a download on another drive is not counted',async()
     register:(name,handler)=>handlers.set(name,handler),publish(){},providers:{},checked:new Map(),statfs:async folder=>{asked.push(folder);return {bavail:1,bsize:4096};},isTest:true});
   assert.deepEqual(await handlers.get('getDownloadSpace')(),{freeBytes:4096,pendingBytes:300+200+50});
   assert.deepEqual(asked,['D:\\Downloads\\Atlas']);
+});
+
+test('Free space: a drive that does not answer gives no figure after four seconds, and one check runs at a time',async t=>{
+  let calls=0,release;
+  const statfs=()=>{calls++;return new Promise(resolve=>{release=resolve;});};
+  const timers=[];
+  const realSetTimeout=global.setTimeout;
+  // The app lets this timer go (unref); here it must keep the test running.
+  global.setTimeout=(fn,ms,...rest)=>{if(ms===4000){timers.push(ms);const handle=realSetTimeout(fn,1,...rest);handle.unref=()=>handle;return handle;}return realSetTimeout(fn,ms,...rest);};
+  try{
+    const f=fixture(t,{statfs});
+    const [first,second]=await Promise.all([f.handlers.get('getDownloadSpace')(),f.handlers.get('getDownloadSpace')()]);
+    assert.equal(first.freeBytes,null);assert.equal(second.freeBytes,null);
+    assert.equal(calls,1);assert.deepEqual(timers,[4000]);
+    release({bavail:1,bsize:1});
+    // After it is over, the next question checks again.
+    const g=fixture(t,{statfs:async()=>({bavail:2,bsize:3})});
+    assert.equal((await g.handlers.get('getDownloadSpace')()).freeBytes,6);
+  }finally{global.setTimeout=realSetTimeout;}
+});
+
+test('Free space: each new question after the last one is over measures again',async t=>{
+  let free=0;
+  const f=fixture(t,{statfs:async()=>({bavail:++free,bsize:1})});
+  assert.equal((await f.handlers.get('getDownloadSpace')()).freeBytes,1);
+  assert.equal((await f.handlers.get('getDownloadSpace')()).freeBytes,2);
 });
