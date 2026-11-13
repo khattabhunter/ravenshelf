@@ -2,7 +2,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {EventEmitter}=require('node:events');
-const {AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,SHUTDOWN_TIMEOUT_MS,shutdownServices}=require('../src/app-lifecycle.cjs');
+const {AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,SHUTDOWN_TIMEOUT_MS,FAILED_EXIT_NOTICE_MS,shutdownServices}=require('../src/app-lifecycle.cjs');
 const turn=()=>new Promise(setImmediate);
 function fixture(t,{behavior,failTray,emptyIcon=false,failSave=false,ignoreAbort=false,save}={}){
   const calls=[],errors=[],dialogs=[],trays=[],settings={closeBehavior:behavior};
@@ -166,7 +166,11 @@ test('a shutdown step that never settles fails at the time limit, checkpoints th
       browserIntegration:{beforeQuit:()=>calls.push('browser')},media:{beforeQuit:()=>calls.push('media')},torrents:{beforeQuit:()=>calls.push('torrents')},
       features:{cancelInstall:()=>calls.push('cancelInstall'),beforeQuit:options=>calls.push(['features',options])}},{timeoutMs:1234,timers:fake});
     await turn();assert.equal(timers.length,1);assert.equal(timers[0].ms,1234);assert.deepEqual(calls,['manager']);
-    timers[0].fn();await assert.rejects(pending,{message:MESSAGES.shutdown});
+    timers[0].fn();await turn();
+    // The exit waits a moment so Windows can show the "update not installed" notice.
+    assert.equal(timers.length,2);assert.equal(timers[1].ms,FAILED_EXIT_NOTICE_MS);let settled=false;pending.catch(()=>{}).finally(()=>{settled=true;});
+    await turn();assert.equal(settled,false);timers[1].fn();
+    await assert.rejects(pending,{message:MESSAGES.shutdown});
     assert.deepEqual(calls,['manager','cancelInstall','save']);
     // A step that settles after the limit still lets the rest clean up, but never installs.
     stop();for(let i=0;i<5;i++)await turn();
@@ -181,8 +185,9 @@ test('the shutdown time limit is about 45 seconds and is cleared when cleanup fi
     const fake={setTimeout:(fn,ms)=>{const timer={fn,ms,cleared:false};timers.push(timer);return timer;},clearTimeout:timer=>{if(timer)timer.cleared=true;}};
     const pending=shutdownServices({manager:{stop:()=>{calls.push('manager');if(failed)throw new Error('private stop failure');},save:()=>calls.push('save')},
       features:{cancelInstall:()=>calls.push('cancelInstall'),beforeQuit:options=>calls.push(['features',options])}},{timers:fake});
-    if(failed)await assert.rejects(pending,{message:MESSAGES.shutdown});else await pending;
-    assert.equal(timers.length,1);assert.equal(timers[0].ms,SHUTDOWN_TIMEOUT_MS);assert.equal(timers[0].cleared,true);
+    if(failed){await turn();assert.equal(timers.length,2,'a failed exit waits for its notice');assert.equal(timers[1].ms,FAILED_EXIT_NOTICE_MS);timers[1].fn();await assert.rejects(pending,{message:MESSAGES.shutdown});}
+    else{await pending;assert.equal(timers.length,1,'a clean exit does not wait');}
+    assert.equal(timers[0].ms,SHUTDOWN_TIMEOUT_MS);assert.equal(timers[0].cleared,true);
     assert.deepEqual(calls,['manager',['features',{install:!failed}]]);
   }
 });

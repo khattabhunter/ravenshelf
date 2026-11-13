@@ -172,9 +172,10 @@ class BrowserBridge extends EventEmitter{
         return {action:'block',id:capture.id,reason:blocked.message};
       }
     }
-    // A link Ravenshelf already blocked stays blocked, even when the review
-    // list is full or the same address arrives again.
-    const earlier=[...this.captures.values()].find(capture=>capture.status==='blocked'&&[capture.request.url,capture.request.finalUrl].some(address=>address&&(address===request.url||address===request.finalUrl)));
+    // A link Ravenshelf's check of the file already blocked stays blocked,
+    // even when the review list is full. Quick blocks above and below are
+    // decided again each time, from the current lists and the name given.
+    const earlier=[...this.captures.values()].find(capture=>capture.status==='blocked'&&capture.checkedBlock&&[capture.request.url,capture.request.finalUrl].some(address=>address&&(address===request.url||address===request.finalUrl)));
     if(earlier)return {action:'block',id:earlier.id,reason:earlier.verdict?.reasons?.find(item=>item.level==='blocked')?.message||'It failed Ravenshelf’s safety checks.'};
     const deceptive=request.filename&&nameReasons(request.filename).find(reason=>reason.level==='blocked');
     if(deceptive){
@@ -258,7 +259,7 @@ class BrowserBridge extends EventEmitter{
     const verdict=assessDownload({filename,sniffed:result.sniffed,chain:result.chain,insecure:Boolean(result.insecure),virusTotal});
     Object.assign(capture,{filename,displayName:filename,size:Number(result.size)||request.totalBytes||0,message:String(result.message||'').slice(0,300),verdict,virusTotal,
       chain:result.chain.map(hop=>({host:hop.host,listed:hop.listed?{category:hop.listed.category,label:hop.listed.label}:null}))});
-    if(result.status==='blocked'||verdict.level==='blocked'){capture.status='blocked';this.alertBlocked(capture);return;}
+    if(result.status==='blocked'||verdict.level==='blocked'){capture.status='blocked';capture.checkedBlock=true;this.alertBlocked(capture);return;}
     capture.status=['ready','manual','unavailable'].includes(result.status)?result.status:'manual';
     if(capture.status==='ready'){
       const referer=result.provider?sanitizedReferrer(result.referer):originReferrer(request.referrer)||originReferrer(request.pageUrl);
@@ -291,7 +292,7 @@ class BrowserBridge extends EventEmitter{
     if(action==='dismiss'){this.captures.delete(id);this.emit('change');return this.snapshot();}
     if(action==='recheck'){
       if(['checking','queued'].includes(capture.status))return this.snapshot();
-      Object.assign(capture,{status:'checking',verdict:null,entry:null,message:'',virusTotal:[]});
+      Object.assign(capture,{status:'checking',checkedBlock:false,verdict:null,entry:null,message:'',virusTotal:[]});
       this.queue.push(id);this.pump();this.emit('change');return this.snapshot();
     }
     if(!['download','browser'].includes(action))throw new Error('Unknown action.');

@@ -110,8 +110,9 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
       // Disconnecting works even when settings can't be saved; it then lasts until restart.
       if(!enabled){const saved=manager.turnOff({browserIntegrationEnabled:false});await stop();if(!saved)throw new Error(SESSION_ONLY);return;}
       manager.updateSettings({browserIntegrationEnabled:true});
-      // A failed rollback must not hide why connecting failed.
-      try{await start();}catch(error){try{manager.updateSettings({browserIntegrationEnabled:false});}catch{}throw error;}
+      // A failed rollback must not hide why connecting failed, and the switch
+      // is off for this session even when that can't be saved.
+      try{await start();}catch(error){try{manager.turnOff({browserIntegrationEnabled:false});}catch{manager.settings={...manager.settings,browserIntegrationEnabled:false};}throw error;}
     });
     return snapshot();
   });

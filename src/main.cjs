@@ -326,9 +326,11 @@ app.whenReady().then(async()=>{
     if(Array.isArray(patch?.collections)){
       const seen=new Set();changes.collections=patch.collections.slice(0,100).filter(c=>c&&typeof c.id==='string'&&/^[\w-]{1,100}$/.test(c.id)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,name:String(c.name||'My collection').replace(/[\0\r\n]+/g,' ').trim().slice(0,80)||'My collection',games:compactGames(c.games,500)}));
     }
-    // Turning features off works even when settings can't be saved: running
-    // ones (such as clipboard watching) stop, and the change lasts until restart.
-    if(Object.keys(changes).length&&Object.values(changes).every(value=>value===false)){
+    // Turning off a running feature works even when settings can't be saved:
+    // it stops, and the change lasts until restart. Other settings, including
+    // Defender scanning, still need a saved list.
+    const sessionOff=['clipboardWatchEnabled','autoUpdateEnabled','notificationsEnabled'];
+    if(Object.keys(changes).length&&Object.entries(changes).every(([key,value])=>sessionOff.includes(key)&&value===false)){
       const saved=manager.turnOff(changes);features.configure(changes);
       if(!saved)throw new Error(SESSION_ONLY);
       return appState();
@@ -379,9 +381,10 @@ app.on('before-quit',event=>{
   for(const browser of hostWindows)browser.destroy();
   for(const browser of mediaWindows)browser.destroy();
   // A cleanup that fails or passes its time limit still exits, and never
-  // installs an update. Isolated validation profiles may shorten the limit.
+  // installs an update. Isolated validation profiles may shorten the limit,
+  // and show no notifications, so they need no pause for one.
   const testLimit=Number(process.env.ATLAS_SHUTDOWN_TIMEOUT_MS);
-  exitTask=shutdownServices({manager,browserIntegration,media,torrents,features},isTest&&testLimit>0?{timeoutMs:testLimit}:undefined)
+  exitTask=shutdownServices({manager,browserIntegration,media,torrents,features},isTest?{noticeMs:0,...(testLimit>0?{timeoutMs:testLimit}:{})}:undefined)
     .catch(()=>console.error('Ravenshelf could not finish cleanup. The current app was kept.'))
     .finally(()=>{exitReady=true;lifecycle?.dispose();app.quit();});
 });

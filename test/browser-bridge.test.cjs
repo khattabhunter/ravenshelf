@@ -286,6 +286,16 @@ test('a link blocked during its check stays blocked when it comes again, even wi
   release();
 });
 
+test('quick blocks are decided again each time, so one nameless event does not block a link for an hour',async t=>{
+  const {bridge}=bridgeFixture(t);
+  const capture=message=>bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',...message}));
+  assert.equal(capture({url:'http://plain.example/notes.zip'}).action,'block','no name from the browser');
+  assert.deepEqual(capture({url:'http://plain.example/notes.zip',filename:'notes.zip'}),{action:'browser'},'the same link with its name is judged on its own');
+  assert.deepEqual(bridge.receive('chromium',protocol.validateRequest({v:1,type:'send',kind:'link',url:'http://plain.example/notes.zip'})),{action:'browser'});
+  assert.equal(capture({url:'https://cdn.example/a',filename:'invoice.pdf.exe'}).action,'block');
+  assert.equal(capture({url:'https://cdn.example/a',filename:'invoice.pdf'}).action,'take','a disguised name blocks that name, not the address');
+});
+
 test('a normal download is taken, checked, and queued only when the user chooses',async t=>{
   const {bridge,events}=bridgeFixture(t);
   const decision=bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',url:'https://short.example/x',finalUrl:'https://cdn.example/game.zip',referrer:'http://insecure.example/',pageUrl:'https://page.example/',filename:'game.zip',totalBytes:10}));

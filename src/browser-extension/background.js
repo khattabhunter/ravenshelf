@@ -158,10 +158,10 @@ async function planFor(item) {
 }
 // Save image/video/audio and ordinary file downloads can reach either event.
 // One decision per download ID handles both event orders without double capture.
-// Completed records contain no URLs; they briefly suppress late second events.
-const downloadDecisions = new Map();
+// Finished decisions keep only their ID and time, to ignore late second events.
+const downloadDecisions = new Map(), finishedDownloads = new Map();
 const DOWNLOAD_DECISION_MS = 60000;
-const MAX_DOWNLOAD_DECISIONS = 256;
+const MAX_DOWNLOAD_DECISIONS = 256, MAX_FINISHED_DOWNLOADS = 4096;
 // Chrome reports a new download before it knows the file's name; the name
 // arrives with the filename event, which also holds the download. Wait this
 // long for it before falling back to pausing the download.
@@ -203,9 +203,10 @@ async function handleDownload(record) {
   if (plan.kind === 'block') return decide(record.item, plan);
   const current = await currentDownload(record.id);
   if (!current || current.state !== 'in_progress' || current.paused || current.incognito || record.item.incognito || record.userChanged) return 'continue';
-  if (!record.releases.length) {
-    // Firefox, and Chromium saves without a filename event: only intercept if
-    // the browser really paused. A small file may already have finished.
+  if (!record.releases.length && api.downloads.onDeterminingFilename) {
+    // A Chromium save without a filename event: only intercept if the browser
+    // really paused. A small file may already have finished. Firefox is never
+    // paused: for a server that can't resume, its pause throws the data away.
     record.pausing = true;
     try { await api.downloads.pause(record.id); record.ownsPause = true; } catch (error) { return 'continue'; } finally { record.pausing = false; }
   }
@@ -220,10 +221,10 @@ async function handleDownload(record) {
 function captureDownload(item, release) {
   if (!item || !Number.isSafeInteger(item.id) || item.id < 0) { if (release) release(); return; }
   const now = Date.now();
-  for (const [id, record] of downloadDecisions) if (record.doneAt && now - record.doneAt > DOWNLOAD_DECISION_MS) downloadDecisions.delete(id);
+  for (const [id, doneAt] of finishedDownloads) { if (now - doneAt <= DOWNLOAD_DECISION_MS) break; finishedDownloads.delete(id); }
+  if (finishedDownloads.has(item.id)) { if (release) release(); return; }
   let record = downloadDecisions.get(item.id);
   if (record) {
-    if (record.doneAt) { if (release) release(); return; }
     mergeItem(record.item, item);
     if (release) record.releases.push(release);
     if (release && record.filenameArrived) record.filenameArrived();
@@ -231,14 +232,13 @@ function captureDownload(item, release) {
   }
   if (P.downloadPlan(item, { capture: true }).kind === 'ignore') { if (release) release(); return; }
   if (downloadDecisions.size >= MAX_DOWNLOAD_DECISIONS) {
-    // Saturation falls back to the browser, but must not disable the local
-    // malicious-program rule. This path never starts another native request.
-    // Recent decisions are kept, so a late second event cannot reopen one.
+    // Too many open decisions fall back to the browser, but must not disable
+    // the local malicious-program rule. This path never starts a native request.
     withTimeout(planFor(item), 2500).then(plan => plan.kind === 'block' ? decide(item, plan) : 'continue')
       .catch(() => {}).finally(() => { if (release) release(); });
     return;
   }
-  record = { id: item.id, item: {}, releases: release ? [release] : [], ownsPause: false, pausing: false, userChanged: false, filenameArrived: null, doneAt: 0 };
+  record = { id: item.id, item: {}, releases: release ? [release] : [], ownsPause: false, pausing: false, userChanged: false, filenameArrived: null };
   mergeItem(record.item, item);
   downloadDecisions.set(item.id, record);
   handleDownload(record).catch(() => 'continue').then(async result => {
@@ -251,7 +251,10 @@ function captureDownload(item, release) {
     // supply a filename: the browser keeps the name/location the user chose.
     for (const done of record.releases.splice(0)) done();
     record.item = null;
-    record.doneAt = Date.now();
+    downloadDecisions.delete(record.id);
+    finishedDownloads.delete(record.id);
+    finishedDownloads.set(record.id, Date.now());
+    if (finishedDownloads.size > MAX_FINISHED_DOWNLOADS) finishedDownloads.delete(finishedDownloads.keys().next().value);
   });
 }
 api.downloads.onCreated.addListener(item => captureDownload(item));
@@ -262,7 +265,7 @@ if (api.downloads.onDeterminingFilename) api.downloads.onDeterminingFilename.add
 });
 if (api.downloads.onChanged) api.downloads.onChanged.addListener(delta => {
   const record = downloadDecisions.get(delta.id);
-  if (!record || record.doneAt) return;
+  if (!record) return;
   // A user cancelling, pausing, resuming or finishing an intercepted download
   // wins over a late reply. The extension's own pause is not a user change:
   // Firefox reports it as 'interrupted' with paused true.

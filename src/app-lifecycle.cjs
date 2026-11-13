@@ -12,6 +12,9 @@ const MESSAGES=Object.freeze({
 // A cleanup step that never settles must not keep a hidden process that holds
 // the single-instance lock, so exit goes ahead as a failed cleanup after this.
 const SHUTDOWN_TIMEOUT_MS=45000;
+// After a failed exit, a moment for Windows to show the "update not
+// installed" notice before the process ends.
+const FAILED_EXIT_NOTICE_MS=750;
 // The tray icon, relative to src; the package check confirms it is shipped.
 const TRAY_ICON='browser-extension/icons/icon-32.png';
 
@@ -140,7 +143,7 @@ async function stopServices({manager,browserIntegration,media,torrents,features}
 }
 // When the time limit passes, shutdown fails: the queue is checkpointed, an
 // update is never installed, and the caller can let the process exit.
-function shutdownServices(services={},{timeoutMs=SHUTDOWN_TIMEOUT_MS,timers={setTimeout,clearTimeout}}={}){
+function shutdownServices(services={},{timeoutMs=SHUTDOWN_TIMEOUT_MS,noticeMs=FAILED_EXIT_NOTICE_MS,timers={setTimeout,clearTimeout}}={}){
   const watchdog=new AbortController();let timer;
   const expired=new Promise((_resolve,reject)=>{
     timer=timers.setTimeout(()=>{
@@ -151,7 +154,10 @@ function shutdownServices(services={},{timeoutMs=SHUTDOWN_TIMEOUT_MS,timers={set
     },timeoutMs);
     timer?.unref?.();
   });
-  return Promise.race([stopServices(services,watchdog.signal),expired]).finally(()=>timers.clearTimeout(timer));
+  return Promise.race([stopServices(services,watchdog.signal),expired]).finally(()=>timers.clearTimeout(timer)).catch(async error=>{
+    if(noticeMs>0)await new Promise(resolve=>timers.setTimeout(resolve,noticeMs));
+    throw error;
+  });
 }
 
-module.exports={AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,SHUTDOWN_TIMEOUT_MS,TRAY_ICON,shutdownServices};
+module.exports={AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,SHUTDOWN_TIMEOUT_MS,FAILED_EXIT_NOTICE_MS,TRAY_ICON,shutdownServices};

@@ -182,8 +182,9 @@ test('a very long download list keeps every unfinished download and the newest f
   const result=validateLibrary({settings:{language:'ar'},downloads});
   assert.equal(result.changed,true);assert.equal(result.data.downloads.length,MAX_DOWNLOADS);assert.equal(result.data.settings.language,'ar');
   const kept=new Set(result.data.downloads.map(d=>d.id));
-  for(const id of ['job-0','job-1','job-2','job-4','job-'+(total-1)])assert.ok(kept.has(id),id);
-  for(const id of ['job-3','job-5','job-6','job-7','job-8'])assert.equal(kept.has(id),false,id);
+  // The oldest finished files go first; cancelled jobs, which can be retried, only after them.
+  for(const id of ['job-0','job-1','job-2','job-4','job-6','job-8','job-'+(total-1)])assert.ok(kept.has(id),id);
+  for(const id of ['job-3','job-5','job-7','job-9','job-11'])assert.equal(kept.has(id),false,id);
   assert.deepEqual(result.data.downloads.slice(0,3).map(d=>d.id),['job-0','job-1','job-2'],'the order is kept');
   const busy=Array.from({length:total},(_,i)=>job(folder,{id:'busy-'+i,status:'paused'}));
   const all=validateLibrary({downloads:busy});assert.equal(all.data.downloads.length,total);assert.equal(all.data.downloads[0].id,'busy-0','unfinished legacy entries are never removed to meet the admission limit');assert.equal(all.changed,false);

@@ -157,6 +157,24 @@ test('trimming old finished history is maintenance: no damage warning, no recove
   assert.equal(again.downloads.some(d=>d.id==='job-0'),false);assert.ok(again.downloads.some(d=>d.id==='job-scan'));assert.equal(again.downloads.length,MAX_DOWNLOADS);
 });
 
+test('trimming drops clean finished files first and cancelled jobs last, and keeps Defender alerts',()=>{
+  const folder=path.resolve(base,'legacy','Game'),busy=n=>Array.from({length:n},(_,i)=>job(folder,i));
+  const entry=(id,status,scan)=>({...job(folder,id),status,...(scan?{scan:{status:scan}}:{})});
+  const cancelled=entry('cancelled','cancelled'),threat=entry('threat','completed','threat'),review=entry('review','completed','review'),failed=entry('failed','completed','error');
+  const clean=entry('clean','completed','clean'),plain=entry('plain','completed');
+  // Two over the limit, with the cancelled job first, so order alone would drop it.
+  const result=validateLibrary({downloads:[cancelled,threat,review,failed,clean,plain,...busy(MAX_DOWNLOADS-4)]});
+  const ids=result.data.downloads.map(d=>d.id);
+  assert.equal(result.trimmed,true);assert.equal(result.repaired,false);assert.equal(ids.length,MAX_DOWNLOADS);
+  assert.ok(!ids.includes('job-clean')&&!ids.includes('job-plain'),'clean finished files go first');
+  for(const kept of ['job-cancelled','job-threat','job-review','job-failed'])assert.ok(ids.includes(kept),kept);
+  // Two over again, with only one clean file: then a cancelled job goes, never an alert.
+  const more=validateLibrary({downloads:[cancelled,threat,review,failed,clean,...busy(MAX_DOWNLOADS-3)]});
+  const moreIds=more.data.downloads.map(d=>d.id);
+  assert.equal(moreIds.length,MAX_DOWNLOADS);assert.ok(!moreIds.includes('job-clean')&&!moreIds.includes('job-cancelled'),'then cancelled jobs');
+  for(const kept of ['job-threat','job-review','job-failed'])assert.ok(moreIds.includes(kept),kept);
+});
+
 test('a damaged list that is also trimmed still keeps its recovery copy and warning',t=>{
   const w=fixture(t),busy=Array.from({length:MAX_DOWNLOADS},(_,i)=>job(w.folder,i));
   fs.writeFileSync(w.file,JSON.stringify({downloads:[null,{...job(w.folder,'done'),status:'completed'},...busy]}));

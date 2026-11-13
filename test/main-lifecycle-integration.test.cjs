@@ -201,6 +201,12 @@ test('in a read-only session clipboard watching can still be turned off until re
   assert.equal(f.manager.settings.clipboardWatchEnabled,false);assert.deepEqual(f.configured,[{clipboardWatchEnabled:false}],'the watcher is stopped now');assert.equal(f.manager.saved,0);
   await assert.rejects(f.call('saveSettings',{clipboardWatchEnabled:true}),{message:SETTINGS_READ_ONLY});
   assert.equal(f.manager.settings.clipboardWatchEnabled,false);assert.equal(f.configured.length,1,'nothing was started');
+  // Defender scanning and other settings still need a saved list, even to turn off.
+  f.manager.settings.defenderScan=true;
+  await assert.rejects(f.call('saveSettings',{defenderScan:false}),{message:SETTINGS_READ_ONLY});assert.equal(f.manager.settings.defenderScan,true);
+  await assert.rejects(f.call('saveSettings',{adaptiveThemeEnabled:false}),{message:SETTINGS_READ_ONLY});
+  await assert.rejects(f.call('saveSettings',{clipboardWatchEnabled:false,defenderScan:false}),{message:SETTINGS_READ_ONLY});
+  assert.equal(f.manager.settings.defenderScan,true);assert.equal(f.configured.length,1);
   // A list that can be saved keeps the choice as before.
   f.manager.stateCanSave=true;await f.call('saveSettings',{clipboardWatchEnabled:false});assert.equal(f.manager.saved,1);assert.equal(f.configured.length,2);
 });

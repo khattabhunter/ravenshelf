@@ -116,6 +116,7 @@ test('when connecting fails and the switch cannot be turned back off, the real r
   await assert.rejects(f.call('setBrowserIntegration',true),error=>error===failure);
   const state=f.integration.snapshot();
   assert.equal(state.phase,'error');assert.equal(state.problem,publicErrorMessage({code:'EPERM'},'setBrowserIntegration'));assert.equal(state.bridge.running,false);
+  assert.equal(f.manager.settings.browserIntegrationEnabled,false,'the switch is off for this session');assert.equal(state.enabled,false);
 });
 
 test('an enabled connection starts with Ravenshelf, and quitting keeps it registered',async t=>{

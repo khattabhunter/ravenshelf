@@ -163,10 +163,13 @@ function validateLibrary(value){
   // Trim old finished history, never unfinished jobs. Legacy queues can be
   // larger than today's admission limit; existing jobs can still resume while
   // DownloadManager refuses new additions until the queue is below that limit.
-  // A finished file whose Defender scan is still pending is kept to be scanned.
+  // The oldest finished files go first, then cancelled jobs (which can still
+  // be retried). A finished file whose Defender scan is pending, or that
+  // Defender flagged or could not scan, is kept for the user to see.
   if(downloads.length>MAX_DOWNLOADS){
     let over=downloads.length-MAX_DOWNLOADS;const drop=new Set();
-    for(const d of downloads){if(!over)break;if(['completed','cancelled'].includes(d.status)&&!['queued','scanning'].includes(d.scan?.status)){drop.add(d);over--;}}
+    const passes=[d=>d.status==='completed'&&!['queued','scanning','threat','review','error'].includes(d.scan?.status),d=>d.status==='cancelled'];
+    for(const pass of passes)for(const d of downloads){if(!over)break;if(!drop.has(d)&&pass(d)){drop.add(d);over--;}}
     return {data:{settings,downloads:downloads.filter(d=>!drop.has(d))},changed:changed||drop.size>0,repaired:changed,trimmed:drop.size>0};
   }
   return {data:{settings,downloads},changed,repaired:changed};
