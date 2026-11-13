@@ -3,7 +3,8 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {loadLibrary,validateLibrary,downloadFrom,readStateFile,SCHEMA_VERSION,MAX_BYTES,RECOVERED,BLOCKED,FUTURE}=require('../src/library-state.cjs');
+const {loadLibrary,validateLibrary,downloadFrom,readStateFile,settingsFrom,gameFolder,SCHEMA_VERSION,MAX_BYTES,MAX_DOWNLOADS,MAX_RECOVERY_COPIES,RECOVERED,BLOCKED,FUTURE,READ_ONLY,LIST_FULL}=require('../src/library-state.cjs');
+const {publicErrorMessage}=require('../src/public-errors.cjs');
 const {DownloadManager}=require('../src/downloads.cjs');
 const {canonicalUrl}=require('../src/youtube.cjs');
 const base=path.resolve(__dirname,'.library-state-fixtures');fs.mkdirSync(base,{recursive:true});
@@ -58,7 +59,7 @@ test('unrecognized future schemas never overwrite or start their saved queue',as
 
 test('bad settings cannot crash startup or mutate prototypes; valid preferences are retained',t=>{
   const w=fixture(t),raw=JSON.parse('{"settings":{"__proto__":{"polluted":true},"favorites":{},"collections":[null],"downloadSchedule":[],"gameFolders":[null],"notificationsEnabled":"false","language":"ar"},"downloads":[null]}');
-  const result=validateLibrary(raw);assert.equal(result.changed,true);assert.deepEqual(result.data.settings,{language:'ar'});assert.equal({}.polluted,undefined);
+  const result=validateLibrary(raw);assert.equal(result.changed,true);assert.deepEqual(result.data.settings,{collections:[],gameFolders:[],language:'ar'});assert.equal({}.polluted,undefined);
   assert.equal(downloadFrom(job(w.folder,{kind:'media',media:{videoId:12345678901,quality:'best'}})),null);
   assert.equal(downloadFrom(job(w.folder,{kind:'torrent',torrent:{}})),null);
   assert.equal(downloadFrom(job(w.folder,{etag:{broken:true},scan:{status:'clean',message:{broken:true}}})).etag,undefined);
@@ -99,10 +100,11 @@ test('a pathname replaced after opening cannot substitute content or become a ne
   assert.equal(loadLibrary(w.file,{io:vanished}).canSave,false,'a missing pathname after a successful open is not a new profile');
 });
 
-test('junction parents and final-path links are rejected before reading from an opened handle',t=>{
-  const w=fixture(t);save(w.file,{downloads:[]});const linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');
+test('a profile reached through a junction loads from its real folder; final-path links are rejected before reading',t=>{
+  const w=fixture(t);save(w.file,{settings:{language:'ar'},downloads:[job(w.folder)]});const linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');
   let reads=0;const io=delegate({readSync(...args){reads++;return fs.readSync(...args);}});
-  assert.equal(loadLibrary(path.join(linked,'library.json'),{io}).canSave,false);assert.equal(reads,0);fs.unlinkSync(linked);
+  // AppData moved to another drive with a junction: the library opens as usual.
+  const through=loadLibrary(path.join(linked,'library.json'),{io});assert.equal(through.canSave,true);assert.equal(through.warning,'');assert.equal(through.data.settings.language,'ar');assert.equal(through.data.downloads.length,1);assert.ok(reads>0);fs.unlinkSync(linked);reads=0;
   // Model Windows, where openSync has no O_NOFOLLOW flag and can return a
   // regular target handle. lstat must still reject a final-path reparse link.
   const finalLink=delegate({readSync(...args){reads++;return fs.readSync(...args);},lstatSync(file,...args){const stat=fs.lstatSync(file,...args);if(file!==w.file)return stat;return new Proxy(stat,{get(target,key){if(key==='isSymbolicLink')return ()=>true;const value=target[key];return typeof value==='function'?value.bind(target):value;}});}});
@@ -111,7 +113,7 @@ test('junction parents and final-path links are rejected before reading from an 
 
 test('hard-linked state, junction parents, raced content and failed backups remain untouched',t=>{
   const w=fixture(t),other=path.join(w.root,'original.json');save(other,{downloads:[]});fs.linkSync(other,w.file);const hard=loadLibrary(w.file);assert.equal(hard.warning,BLOCKED);assert.equal(hard.canSave,false);fs.unlinkSync(w.file);
-  const linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');assert.equal(loadLibrary(path.join(linked,'original.json')).canSave,false);fs.unlinkSync(linked);
+  const linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');assert.equal(loadLibrary(path.join(linked,'original.json')).canSave,true);fs.unlinkSync(linked);
   save(w.file,{downloads:[]});let changed=false;const racing=delegate({readSync(...args){const count=fs.readSync(...args);if(!changed){changed=true;fs.appendFileSync(w.file,' ');}return count;}});assert.equal(loadLibrary(w.file,{io:racing}).canSave,false);
   fs.writeFileSync(w.file,'null');const denied=delegate({openSync(file,...args){if(String(file).includes('.recovery-'))throw new Error('Access refused');return fs.openSync(file,...args);}});assert.equal(loadLibrary(w.file,{io:denied}).canSave,false);assert.equal(fs.readFileSync(w.file,'utf8'),'null');
 });
@@ -122,16 +124,16 @@ test('recovery rejects a changed parent and leaves the original unchanged',t=>{
   const result=loadLibrary(w.file,{io});assert.equal(result.canSave,false);assert.equal(result.warning,BLOCKED);assert.equal(fs.readFileSync(w.file,'utf8'),'null');
 });
 
-test('a missing library below a junction is blocked, while an ordinary new nested profile is permitted',t=>{
+test('a new profile below a junction or an ordinary new nested profile is permitted without creating folders',t=>{
   const w=fixture(t),linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');
-  const result=loadLibrary(path.join(linked,'new','library.json'));assert.equal(result.canSave,false);assert.equal(result.warning,BLOCKED);assert.equal(fs.existsSync(path.join(w.root,'new')),false);
+  const result=loadLibrary(path.join(linked,'new','library.json'));assert.equal(result.canSave,true);assert.equal(result.warning,'');assert.equal(fs.existsSync(path.join(w.root,'new')),false);
   fs.unlinkSync(linked);const ordinary=loadLibrary(path.join(w.root,'new','profile','library.json'));assert.equal(ordinary.canSave,true);assert.equal(ordinary.warning,'');
 });
 
 test('previously selected network download paths survive without widening local game-folder rules',()=>{
   const share='\\\\fixture-nas\\Games\\Downloads';
   const data={settings:{downloadDir:share,gameFolders:[share]},downloads:[job(share)]};
-  const result=validateLibrary(data);assert.equal(result.data.settings.downloadDir,share);assert.equal(result.data.settings.gameFolders,undefined);assert.equal(result.data.downloads[0].folder,share);
+  const result=validateLibrary(data);assert.equal(result.data.settings.downloadDir,share);assert.deepEqual(result.data.settings.gameFolders,[]);assert.equal(result.data.downloads[0].folder,share);
   for(const folder of ['\\\\?\\C:\\Downloads','\\\\.\\pipe\\Anything','\\\\fixture-nas\\..\\Downloads','\\\\fixture-nas\\Games\\..\\Private'])assert.equal(downloadFrom(job(folder)),null,folder);
 });
 
@@ -159,4 +161,141 @@ test('a saved partial still resumes with its exact signed target after validatio
   const requests=[];const manager=w.open({fetcher:async(url,{headers})=>{requests.push({url,headers});return new Response('def',{status:206,headers:{'content-type':'application/octet-stream','content-length':'3','content-range':'bytes 3-5/6',etag:'"one"'}});}});
   manager.action('job','resume');const deadline=Date.now()+3000;while(manager.running.size){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,5));}
   assert.equal(manager.downloads[0].status,'completed');assert.equal(fs.readFileSync(path.join(w.folder,'file.rar'),'utf8'),'abcdef');assert.equal(requests[0].url,'https://files.example.com/file?signature=active-test');assert.equal(requests[0].headers.Range,'bytes=3-');assert.equal(requests[0].headers['If-Range'],'"one"');
+});
+
+// 0.10.2
+
+test('a library held for a moment by another program is read after a short wait; one held for long is left untouched',t=>{
+  const w=fixture(t);save(w.file,{settings:{language:'ar'},downloads:[job(w.folder)]});let busy=2,waits=0;
+  const io=delegate({openSync(file,...args){if(path.basename(String(file))==='library.json'&&busy>0){busy--;throw Object.assign(new Error('busy'),{code:'EBUSY'});}return fs.openSync(file,...args);}});
+  const wait=()=>{waits++;};
+  const result=loadLibrary(w.file,{io,wait});assert.equal(result.canSave,true);assert.equal(result.warning,'');assert.equal(result.data.settings.language,'ar');assert.equal(waits,2);
+  busy=Infinity;waits=0;const held=loadLibrary(w.file,{io,wait});assert.equal(held.canSave,false);assert.equal(held.warning,BLOCKED);assert.equal(waits,4,'a few short waits, then the library is left alone');
+  const refused=delegate({openSync(file,...args){if(path.basename(String(file))==='library.json')throw Object.assign(new Error('refused'),{code:'EISDIR'});return fs.openSync(file,...args);}});
+  waits=0;assert.equal(loadLibrary(w.file,{io:refused,wait}).warning,BLOCKED);assert.equal(waits,0,'other errors are not waited on');
+  assert.equal(fs.readdirSync(w.root).filter(name=>name.includes('.recovery-')).length,0);
+});
+
+test('a very long download list keeps every unfinished download and the newest finished ones, and its settings',()=>{
+  const folder=path.resolve(base,'long','Game'),total=MAX_DOWNLOADS+5,downloads=[];
+  for(let i=0;i<total;i++)downloads.push(job(folder,{id:'job-'+i,status:i===4?'paused':i<3?'error':i%2?'completed':'cancelled'}));
+  const result=validateLibrary({settings:{language:'ar'},downloads});
+  assert.equal(result.changed,true);assert.equal(result.data.downloads.length,MAX_DOWNLOADS);assert.equal(result.data.settings.language,'ar');
+  const kept=new Set(result.data.downloads.map(d=>d.id));
+  for(const id of ['job-0','job-1','job-2','job-4','job-'+(total-1)])assert.ok(kept.has(id),id);
+  for(const id of ['job-3','job-5','job-6','job-7','job-8'])assert.equal(kept.has(id),false,id);
+  assert.deepEqual(result.data.downloads.slice(0,3).map(d=>d.id),['job-0','job-1','job-2'],'the order is kept');
+  const busy=Array.from({length:total},(_,i)=>job(folder,{id:'busy-'+i,status:'paused'}));
+  const all=validateLibrary({downloads:busy});assert.equal(all.data.downloads.length,MAX_DOWNLOADS);assert.equal(all.data.downloads[0].id,'busy-5','only when every entry is unfinished do the oldest go');
+});
+
+test('the same damage is copied once, and only the oldest and newest recovery copies are kept',t=>{
+  const w=fixture(t),copies=()=>fs.readdirSync(w.root).filter(name=>name.startsWith('library.json.recovery-')).sort();
+  const past=Math.floor(Date.now()/1000)-1000;
+  fs.writeFileSync(w.file,'{"downloads":[null]}');
+  const first=loadLibrary(w.file),second=loadLibrary(w.file);
+  assert.equal(first.warning,RECOVERED);assert.equal(second.warning,RECOVERED);assert.equal(second.recoveryFile,first.recoveryFile,'the same bytes reuse their copy');
+  assert.deepEqual(copies(),[path.basename(first.recoveryFile)]);assert.equal(fs.readFileSync(first.recoveryFile,'utf8'),'{"downloads":[null]}');
+  fs.utimesSync(first.recoveryFile,past-1,past-1);
+  const made=[];
+  for(let i=0;i<8;i++){fs.writeFileSync(w.file,`{"downloads":[null],"n":${i}}`);const result=loadLibrary(w.file);assert.equal(result.canSave,true);made.push(result.recoveryFile);fs.utimesSync(result.recoveryFile,past+i,past+i);}
+  assert.equal(copies().length,MAX_RECOVERY_COPIES);
+  // The oldest copy (the list before anything went wrong) and the newest ones stay.
+  assert.ok(fs.existsSync(first.recoveryFile),'the oldest copy is kept');
+  for(const kept of made.slice(-(MAX_RECOVERY_COPIES-1)))assert.ok(fs.existsSync(kept));
+  for(const gone of made.slice(0,made.length-(MAX_RECOVERY_COPIES-1)))assert.equal(fs.existsSync(gone),false);
+  // Only Ravenshelf's own copies are ever removed.
+  const other=path.join(w.root,'library.json.recovery-notes.json'),linked=path.join(w.root,'library.json.recovery-'+'f'.repeat(32)+'.json');
+  fs.writeFileSync(other,'keep');fs.symlinkSync(other,linked);fs.utimesSync(other,past-50,past-50);fs.lutimesSync(linked,past-60,past-60);
+  for(let i=8;i<11;i++){fs.writeFileSync(w.file,`{"downloads":[null],"n":${i}}`);loadLibrary(w.file);}
+  assert.equal(fs.readFileSync(other,'utf8'),'keep');assert.ok(fs.lstatSync(linked).isSymbolicLink());
+});
+
+test('a copy with the same name but other content is never reused or replaced',t=>{
+  const w=fixture(t);fs.writeFileSync(w.file,'{"downloads":[null]}');
+  const first=loadLibrary(w.file);fs.writeFileSync(first.recoveryFile,'tampered');
+  const second=loadLibrary(w.file);assert.equal(second.warning,RECOVERED);assert.notEqual(second.recoveryFile,first.recoveryFile);
+  assert.equal(fs.readFileSync(first.recoveryFile,'utf8'),'tampered');assert.equal(fs.readFileSync(second.recoveryFile,'utf8'),'{"downloads":[null]}');
+});
+
+test('a repaired library is saved at once, so the next start shows no warning and makes no new copy',async t=>{
+  const w=fixture(t),good={url:'https://fitgirl-repacks.site/a/',title:'A'};
+  save(w.file,{settings:{language:'ar',favorites:[good,{url:'not a link',title:'B'}]},downloads:[job(w.folder),null]});
+  const manager=w.open();assert.equal(manager.stateRecoveryWarning,RECOVERED);assert.equal(manager.stateCanSave,true);
+  const saved=JSON.parse(fs.readFileSync(w.file,'utf8'));assert.equal(saved.schemaVersion,SCHEMA_VERSION);assert.deepEqual(saved.settings.favorites,[good]);assert.equal(saved.downloads.length,1);
+  await manager.stop();
+  const again=w.open();assert.equal(again.stateRecoveryWarning,'');assert.deepEqual(again.settings.favorites,[good]);
+  assert.equal(fs.readdirSync(w.root).filter(name=>name.includes('.recovery-')).length,1);
+});
+
+test('one damaged favourite, shelf or game drops only that item',()=>{
+  const good={url:'https://fitgirl-repacks.site/a/',title:'A'},bad={url:'javascript:alert(1)',title:'B'};
+  const {settings,changed}=settingsFrom({favorites:[good,bad,null],collections:[{id:'one',name:'Shelf',games:[good,bad]},{id:'two',name:'x'.repeat(81),games:[]},null],gameFolders:[path.resolve(base,'Games'),'\\\\nas\\Games\\Library','relative']});
+  assert.equal(changed,true);assert.deepEqual(settings.favorites,[good]);assert.deepEqual(settings.collections,[{id:'one',name:'Shelf',games:[good]}]);assert.deepEqual(settings.gameFolders,[path.resolve(base,'Games')]);
+  const clean=settingsFrom({favorites:[good],collections:[{id:'one',name:'Shelf',games:[good]}]});assert.equal(clean.changed,false,'valid lists are unchanged');
+});
+
+test('network download folders from Windows folder pickers are kept, including WSL and WebDAV shares',()=>{
+  for(const share of ['\\\\wsl$\\Ubuntu\\home\\games','\\\\nas.example@SSL@443\\DavWWWRoot\\Games','\\\\fixture-nas\\Games'])assert.equal(settingsFrom({downloadDir:share}).settings.downloadDir,share,share);
+  for(const share of ['\\\\?\\C:\\Downloads','\\\\.\\pipe\\x','\\\\$bad\\Games','\\\\nas\\..\\x'])assert.equal(settingsFrom({downloadDir:share}).settings.downloadDir,undefined,share);
+});
+
+test('a read-only list refuses new downloads with a message the window may show',async t=>{
+  const w=fixture(t);save(w.file,{schemaVersion:SCHEMA_VERSION+1,downloads:[]});
+  const manager=w.open();assert.equal(manager.stateCanSave,false);
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/a.zip',filename:'a.zip'}],gameTitle:'Game'}),{message:READ_ONLY});
+  assert.throws(()=>manager.addMedia({videoId:'abcdefghijk',quality:Object.keys(require('../src/youtube.cjs').QUALITIES)[0]}),{message:READ_ONLY});
+  assert.throws(()=>manager.addTorrent({infoHash:'a'.repeat(40),magnet:'magnet:?xt=urn:btih:'+'a'.repeat(40),name:'Game',files:[{index:1,path:'Game',length:1,selected:true}],gameTitle:'Game'}),{message:READ_ONLY});
+  assert.equal(manager.downloads.length,0);assert.equal(publicErrorMessage(new Error(READ_ONLY)),READ_ONLY);
+});
+
+test('a reused copy is kept even when newer copies would push it out',t=>{
+  const w=fixture(t),past=Math.floor(Date.now()/1000)-1000,copies=()=>fs.readdirSync(w.root).filter(name=>name.startsWith('library.json.recovery-'));
+  fs.writeFileSync(w.file,'{"downloads":[null],"n":"reused"}');const reused=loadLibrary(w.file).recoveryFile;fs.utimesSync(reused,past+1,past+1);
+  fs.writeFileSync(w.file,'{"downloads":[null],"n":"oldest"}');const oldest=loadLibrary(w.file).recoveryFile;fs.utimesSync(oldest,past,past);
+  for(let i=0;i<MAX_RECOVERY_COPIES;i++){fs.writeFileSync(w.file,`{"downloads":[null],"n":${i}}`);fs.utimesSync(loadLibrary(w.file).recoveryFile,past+10+i,past+10+i);}
+  fs.writeFileSync(w.file,'{"downloads":[null],"n":"reused"}');const again=loadLibrary(w.file);
+  assert.equal(again.recoveryFile,reused);assert.ok(fs.existsSync(reused),'the copy just reused is never removed');assert.ok(fs.existsSync(oldest));assert.equal(copies().length,MAX_RECOVERY_COPIES);
+});
+
+test('through a junction, copies and saves go to the real folder that was checked',async t=>{
+  const w=fixture(t),real=path.join(w.root,'real'),linked=path.join(w.root,'linked');fs.mkdirSync(real);fs.symlinkSync(real,linked,process.platform==='win32'?'junction':'dir');
+  const realFile=path.join(real,'library.json');fs.writeFileSync(realFile,JSON.stringify({settings:{language:'ar'},downloads:[job(w.folder),null]}));
+  const loaded=loadLibrary(path.join(linked,'library.json'));
+  assert.equal(loaded.warning,RECOVERED);assert.equal(loaded.file,fs.realpathSync(realFile));assert.equal(path.dirname(loaded.recoveryFile),fs.realpathSync(real));
+  const manager=new DownloadManager({stateFile:path.join(linked,'library.json'),downloadDir:path.join(w.root,'Downloads'),fetcher:async()=>{throw new Error('Unexpected request');}});
+  assert.equal(manager.stateFile,fs.realpathSync(realFile));await manager.stop();
+  assert.equal(JSON.parse(fs.readFileSync(realFile,'utf8')).downloads.length,1);
+  // A drive or folder that refuses Windows' own path lookup falls back to Node's.
+  const refusing=delegate({realpathSync:Object.assign((...args)=>fs.realpathSync(...args),{native(){throw Object.assign(new Error('unsupported'),{code:'EINVAL'});}})});
+  assert.equal(loadLibrary(path.join(linked,'library.json'),{io:refusing}).file,fs.realpathSync(realFile));
+});
+
+test('a locked list is retried for every Windows lock error, and a hard-linked list blocks adding too',t=>{
+  for(const code of ['EPERM','EACCES']){
+    const w=fixture(t);save(w.file,{downloads:[]});let busy=1,waits=0;
+    const io=delegate({openSync(file,...args){if(path.basename(String(file))==='library.json'&&busy-->0)throw Object.assign(new Error('locked'),{code});return fs.openSync(file,...args);}});
+    assert.equal(loadLibrary(w.file,{io,wait:()=>{waits++;}}).canSave,true,code);assert.equal(waits,1,code);
+  }
+  const w=fixture(t),other=path.join(w.root,'original.json');save(other,{downloads:[]});fs.linkSync(other,w.file);
+  const manager=w.open();assert.equal(manager.stateRecoveryWarning,BLOCKED);
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/a.zip',filename:'a.zip'}],gameTitle:'Game'}),{message:READ_ONLY});
+});
+
+test('a full list refuses new downloads instead of growing past what Ravenshelf keeps',async t=>{
+  const w=fixture(t),manager=w.open();
+  for(let i=0;i<MAX_DOWNLOADS;i++)manager.downloads.push({id:'x'+i,status:'completed',name:'x'+i+'.bin',folder:w.folder,url:'https://files.example.com/x'+i});
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/a.zip',filename:'a.zip'}],gameTitle:'Game'}),{message:LIST_FULL});
+  assert.throws(()=>manager.addMedia({videoId:'abcdefghijk',quality:Object.keys(require('../src/youtube.cjs').QUALITIES)[0]}),{message:LIST_FULL});
+  assert.equal(manager.downloads.length,MAX_DOWNLOADS);assert.equal(publicErrorMessage(new Error(LIST_FULL)),LIST_FULL);
+  manager.downloads.length=MAX_DOWNLOADS-1;manager.stopping=true;
+  assert.doesNotThrow(()=>manager.assertWritable(1));assert.throws(()=>manager.assertWritable(2),{message:LIST_FULL});
+});
+
+test('game folders are local folders that are not a whole drive',()=>{
+  const local=process.platform==='win32'?'C:\\Games\\Library':path.resolve(base,'Games');
+  assert.equal(gameFolder(local),true);
+  for(const folder of ['C:\\','D:\\','\\\\nas\\Games','relative\\Games','C:\\Games\\..\\x'])assert.equal(gameFolder(folder),false,folder);
+  const kept=settingsFrom({gameFolders:[local]});assert.equal(kept.changed,false,'valid folders cause no repair');assert.deepEqual(kept.settings.gameFolders,[local]);
+  if(process.platform==='win32')assert.deepEqual(settingsFrom({gameFolders:[local,'D:\\']}).settings.gameFolders,[local]);
 });

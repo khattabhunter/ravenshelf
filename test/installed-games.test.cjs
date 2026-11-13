@@ -147,3 +147,13 @@ test('Changed ancestor identity before or after reading invalidates a manifest',
     assert.throws(()=>t.readSmall(manifest,16,io),/bounded regular file/);assert.equal(closes,1);
   }
 });
+
+test('a saved game folder that cannot be scanned is skipped with a note instead of stopping the scan',async t=>{
+  const {scanInstalledGames}=require('../src/installed-games.cjs');
+  const platform=Object.getOwnPropertyDescriptor(process,'platform');
+  Object.defineProperty(process,'platform',{value:'win32'});t.after(()=>Object.defineProperty(process,'platform',platform));
+  // Off Windows the launcher check cannot run either; that adds its own note.
+  const result=await scanInstalledGames({extraFolders:['C:\\','\\\\nas\\Games']});
+  assert.ok(Array.isArray(result.games));
+  assert.ok(result.warnings.includes('Choose a local game or library folder, not a whole drive or network share.'));
+});

@@ -1297,7 +1297,10 @@ test('what Ravenshelf 0.7.0 still kept of a finished or cancelled mod downloadâ€
   assert.equal(now['plain.zip'].url,'https://cdn.example/plain.zip?token=1');
   assert.equal(now['plain-done.zip'].url,'https://cdn.example/plain-done.zip');
   // An invalid mod label is quarantined, while the original state is recoverable.
-  assert.equal(now['elsewhere.7z'],undefined);assert.match(manager.stateRecoveryWarning,/original library was preserved/);
+  // A label that is not a Nexus Mods label is dropped; the download itself is kept.
+  // As for a valid mod link, the cancelled entry keeps no signed link or page address.
+  assert.equal(now['elsewhere.7z'].url,plainAddress('elsewhere.7z'));assert.equal(now['elsewhere.7z'].sourceUrl,plainAddress('elsewhere.7z'));assert.deepEqual(now['elsewhere.7z'].headers,{});assert.equal(Object.hasOwn(now['elsewhere.7z'],'mod'),false);assert.equal(now['elsewhere.7z'].status,'cancelled');
+  assert.match(manager.stateRecoveryWarning,/original library was preserved/);
   const backup=fs.readdirSync(root).find(name=>name.startsWith('state.json.recovery-'));assert.ok(backup);assert.equal(fs.readFileSync(path.join(root,backup),'utf8'),written);
   // And it is written back at once, not at some later change.
   const saved=Object.fromEntries(JSON.parse(fs.readFileSync(stateFile,'utf8')).downloads.map(d=>[d.name,d]));

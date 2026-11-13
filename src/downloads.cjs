@@ -4,7 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {EventEmitter}=require('node:events');
 const {safeFetch,safeURL}=require('./net.cjs');
-const {loadLibrary,SCHEMA_VERSION}=require('./library-state.cjs');
+const {loadLibrary,SCHEMA_VERSION,MAX_DOWNLOADS,READ_ONLY,LIST_FULL}=require('./library-state.cjs');
 const {cleanHeaders}=require('./header-vault.cjs');
 const {sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
@@ -116,6 +116,8 @@ class DownloadManager extends EventEmitter {
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
     const loaded=loadLibrary(stateFile),stored=loaded.data;
+    // Saves go to the real file that was checked and read (the profile may be reached through a junction).
+    if(typeof loaded.file==='string')this.stateFile=loaded.file;
     this.stateCanSave=loaded.canSave;this.stateRecoveryWarning=loaded.warning;
     this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],defenderScan:true,...stored.settings};
     this.settings.defenderScan=this.settings.defenderScan!==false;
@@ -149,7 +151,9 @@ class DownloadManager extends EventEmitter {
     }
     // Remove legacy plaintext even when encryption is unavailable. Working
     // credentials remain in memory, but only sealed credentials go to disk.
-    if(plainHeaders||tidied||this.downloads.some(d=>d.headersNeedRefresh&&!isModFile(d)))this.save();
+    // A repaired library is saved at once, so the next start finds it repaired
+    // instead of making another recovery copy of the same damage.
+    if(plainHeaders||tidied||loaded.recoveryFile||this.downloads.some(d=>d.headersNeedRefresh&&!isModFile(d))){try{this.save();}catch{}}
     // Scans interrupted by closing the app run again on the next start.
     for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
     if(this.stateCanSave&&this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
@@ -261,8 +265,11 @@ class DownloadManager extends EventEmitter {
     return held?held.gameTitle:modFolder(mod);
   }
   // `group` puts the folder one level down, such as Mods\<game> for mod files.
+  // Nothing new is added while the saved list is read-only: it could not be saved.
+  assertWritable(adding=1){if(!this.stateCanSave)throw new Error(READ_ONLY);if(this.downloads.length+adding>MAX_DOWNLOADS)throw new Error(LIST_FULL);}
   add({links,gameTitle,group}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
+    this.assertWritable(links.filter(link=>link?.status==='ready').length);
     // Before 0.7.0 a folder name was cut at 100 characters without tidying the cut,
     // which could leave a space or a dot at its end. A game that already has such a
     // folder, on disk or in the list, keeps it, so that its parts stay together and
@@ -315,6 +322,7 @@ class DownloadManager extends EventEmitter {
   // placeholder name; the real title arrives when yt-dlp reads the video.
   addMedia({videoId,quality}={}){
     if(typeof videoId!=='string'||!VIDEO_ID.test(videoId)||typeof quality!=='string'||!Object.hasOwn(QUALITIES,quality))throw new Error(MEDIA_INVALID);
+    this.assertWritable();
     const existing=this.downloads.find(d=>d.kind==='media'&&d.media?.videoId===videoId&&d.media?.quality===quality&&d.status!=='cancelled');
     if(existing)return {added:0,ids:[existing.id]};
     if(this.downloads.filter(d=>d.kind==='media'&&['queued','downloading','paused'].includes(d.status)).length>=MAX_MEDIA_JOBS)throw new Error(MEDIA_FULL);
@@ -329,6 +337,7 @@ class DownloadManager extends EventEmitter {
   // in the torrent's order, with the files chosen to download marked.
   addTorrent({infoHash,magnet,name,files,gameTitle}={}){
     if(typeof infoHash!=='string'||!INFO_HASH.test(infoHash)||typeof magnet!=='string'||!magnet.startsWith('magnet:?xt=urn:btih:'+infoHash)||magnet.length>8192)throw new Error(MAGNET.invalid);
+    this.assertWritable();
     if(typeof name!=='string'||!name||safeName(name,'')!==name)throw new Error(MAGNET.names);
     if(!Array.isArray(files)||!files.length||files.length>10000)throw new Error(MAGNET.tooMany);
     const list=files.map((file,i)=>{

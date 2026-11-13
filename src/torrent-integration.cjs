@@ -142,7 +142,9 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
           torrent=await engine.metadata(parsed,{signal:request.controller.signal,onStatus:({peers})=>{if(request.peers!==peers){request.peers=peers;publish();}}});
           read=readTorrent(torrent,parsed.infoHash);
         }
-        torrent=sanitizeTorrent(torrent,parsed.infoHash,parsed.trackers);
+        // Only the checked file list is kept. Trackers come from the magnet link,
+        // checked again each time the torrent starts.
+        torrent=sanitizeTorrent(torrent,parsed.infoHash,[]);
         Object.assign(request,{status:'ready',torrent,read,name:read.name});
       }catch(error){
         if(request.controller.signal.aborted)return;
@@ -159,7 +161,7 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
     return snapshot();
   }
   async function add({id,selected,gameTitle}={}){
-    assertOn();assertQueueAvailable();
+    assertOn();assertQueueAvailable();manager.assertWritable?.();
     const request=requests.get(id);
     if(!request)throw new Error(MESSAGES.request);
     if(request.status!=='ready')throw new Error(MESSAGES.waiting);
@@ -231,7 +233,7 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
   register('addTorrent',options=>add(options&&typeof options==='object'?options:{}));
   return {
     snapshot,receive,open,add,close,engine,tools,pruned,
-    async beforeQuit(){closing=true;waiting=[];for(const request of requests.values())request.controller.abort();requests.clear();await engine.dispose();await tools.dispose();}
+    async beforeQuit(){closing=true;waiting=[];for(const request of requests.values())request.controller.abort();requests.clear();try{await engine.dispose();}finally{await tools.dispose();}}
   };
 }
 module.exports={createTorrentIntegration,TOOLS,TOOL_MESSAGES,MESSAGES,UPLOAD_LIMITS,SHARE_MINUTES,normalizeSettings,torrentFolders};
