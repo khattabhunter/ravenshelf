@@ -315,7 +315,7 @@ function createImageService({fetcher=safeFetch,maxBytes=MAX_IMAGE_BYTES,timeoutM
       cachePut(key,result);track(key,true);loadedBeforeFailure++;
       return result;
     },error=>{
-      const category=error instanceof ImageFailure?error.category:'network';
+      const category=(error instanceof ImageFailure)?error.category:'network';
       if(NETWORK_FAILURES.has(category)){track(key,false);if(firstFailureAfter===null)firstFailureAfter=loadedBeforeFailure;}
       // A site that asked for a pause is asked again after it; the picture
       // itself is not remembered as failed.
@@ -375,7 +375,7 @@ function createImageService({fetcher=safeFetch,maxBytes=MAX_IMAGE_BYTES,timeoutM
       count(host,'loaded');
       return okResponse(result);
     }catch(error){
-      count(host,error instanceof ImageFailure?error.category:'network');
+      count(host,(error instanceof ImageFailure)?error.category:'network');
       return failedResponse();
     }
   }
@@ -419,7 +419,7 @@ function createImageService({fetcher=safeFetch,maxBytes=MAX_IMAGE_BYTES,timeoutM
 }
 // 429, or 503 with a usable Retry-After, pauses the whole site.
 function pausesSite(error){
-  return error instanceof ImageFailure&&(error.category==='tooMany'||(error.category==='serverError'&&Number.isFinite(error.retryAfter)));
+  return (error instanceof ImageFailure)&&(error.category==='tooMany'||(error.category==='serverError'&&Number.isFinite(error.retryAfter)));
 }
 
 // A one-off request with the same checks, used where no shared service exists.
