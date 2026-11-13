@@ -62,6 +62,16 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
     if(!settings().enabled)throw new Error(MESSAGES.off);
   };
   const activeJobs=()=>manager.downloads.some(d=>d.kind==='torrent'&&['queued','downloading'].includes(d.status));
+  // At start, the saved file lists of torrents no longer in the downloads are
+  // removed, with any half-written one left by a crash. Nothing else is touched.
+  const pruned=(async()=>{
+    const keep=new Set(manager.downloads.filter(d=>d.kind==='torrent'&&typeof d.torrent?.infoHash==='string').map(d=>d.torrent.infoHash));
+    let entries=[];try{entries=await fs.promises.readdir(where.store,{withFileTypes:true});}catch{return;}
+    for(const entry of entries){
+      const saved=/^([0-9a-f]{40})\.torrent$/.exec(entry.name),partial=/^[0-9a-f]{40}\.torrent\.[0-9a-f-]{36}\.tmp$/.test(entry.name);
+      if(entry.isFile()&&((saved&&!keep.has(saved[1]))||partial))await fs.promises.rm(path.join(where.store,entry.name),{force:true}).catch(()=>{});
+    }
+  })();
 
   // The engine that downloads a queued torrent job.
   manager.torrent={
@@ -109,6 +119,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
     requests.set(request.id,request);
     (async()=>{
       try{
+        await pruned;
         let torrent=await fs.promises.readFile(storeFile(parsed.infoHash)).catch(()=>null);
         let read=null;
         if(torrent){try{read=readTorrent(torrent,parsed.infoHash);}catch{torrent=null;}}
@@ -140,6 +151,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
     const chosen=new Set(selected);
     const files=request.read.files.map(file=>({...file,selected:chosen.has(file.index)&&!file.padding}));
     // The checked file list is kept so a paused torrent resumes without asking other people again.
+    await pruned;
     await writeAtomic(storeFile(request.parsed.infoHash),request.torrent);
     const title=typeof gameTitle==='string'?gameTitle:request.gameTitle;
     const result=manager.addTorrent({infoHash:request.parsed.infoHash,magnet:request.parsed.magnet,name:request.read.name,files,gameTitle:request.source==='browser'&&!gameTitle?'':title});
@@ -192,7 +204,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
   register('closeMagnet',id=>close(typeof id==='string'?id:''));
   register('addTorrent',options=>add(options&&typeof options==='object'?options:{}));
   return {
-    snapshot,receive,open,add,close,engine,tools,
+    snapshot,receive,open,add,close,engine,tools,pruned,
     async beforeQuit(){closing=true;for(const request of requests.values())request.controller.abort();requests.clear();await engine.dispose();await tools.dispose();}
   };
 }

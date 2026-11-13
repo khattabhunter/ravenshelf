@@ -426,10 +426,11 @@ test('stopping a torrent while it shares still finishes it; a missing file is an
   assert.equal(none.manager.downloads[0].error,'Turn on torrent downloads in Settings first, then retry.');
 });
 
-function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings}={}){
+function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings,before=null}={}){
   const root=scratch(t),registered=new Map(),published=[];
   const manager=new DownloadManager({stateFile:path.join(root,'library.json'),downloadDir:path.join(root,'Downloads')});
   if(settings)manager.settings.torrents=settings;
+  if(before)before(root,manager);
   t.after(()=>manager.stop());
   const tools={refresh:()=>ready?'ready':'missing',snapshot:()=>({phase:ready?'ready':'missing'}),install(){this.installed=true;},cancel(){},remove:async()=>{},removeOthers:async()=>{},dispose:async()=>{},verified:fakeTools(root).verified};
   const integration=createTorrentIntegration({app:{getPath:()=>root},win:null,manager,register:(name,fn)=>registered.set(name,fn),publish:()=>published.push(1),platform,
@@ -441,6 +442,20 @@ function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings
   t.after(()=>integration.beforeQuit());
   return {root,manager,registered,integration,tools,call:(name,value)=>registered.get(name)(value)};
 }
+
+test('at start, saved file lists of torrents no longer in the downloads are removed, and nothing else',async t=>{
+  const kept='a'.repeat(40),gone='b'.repeat(40);
+  const s=integrationFor(t,{before:(root,manager)=>{
+    const store=path.join(root,'store');fs.mkdirSync(path.join(store,'folder.torrent'),{recursive:true});
+    for(const name of [kept+'.torrent',gone+'.torrent',gone+'.torrent.0f1e2d3c-4b5a-4968-8776-655443322110.tmp','notes.txt','B'.repeat(40)+'.torrent'])fs.writeFileSync(path.join(store,name),'x');
+    manager.downloads.push({id:'job',kind:'torrent',status:'paused',folder:root,name:'Game',headers:{},torrent:{infoHash:kept,name:'Game',files:[]}});
+  }});
+  await s.integration.pruned;
+  assert.deepEqual(fs.readdirSync(path.join(s.root,'store')).sort(),['B'.repeat(40)+'.torrent',kept+'.torrent','folder.torrent','notes.txt']);
+  // No saved file lists at all is fine too.
+  const empty=integrationFor(t);await empty.integration.pruned;
+  assert.equal(fs.existsSync(path.join(empty.root,'store')),false);
+});
 
 test('torrents are off until the user accepts what they share, and cannot be turned off while downloading',async t=>{
   assert.deepEqual(normalizeSettings({enabled:true}),{enabled:false,accepted:false,uploadLimit:102400,shareMinutes:0});
