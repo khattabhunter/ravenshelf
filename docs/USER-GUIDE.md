@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide follows Ravenshelf 0.10.4 for Windows ([release notes](RELEASE-0.10.4.md)). Sections marked 0.10.3 or 0.10.4 describe what changed in that version.
+This guide follows Ravenshelf 0.10.5 for Windows ([release notes](RELEASE-0.10.5.md)). Sections marked 0.10.3 or 0.10.4 describe what changed in that version.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.10.4-Windows.exe` from the [v0.10.4 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.4). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.10.5-Windows.exe` from the [v0.10.5 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.5). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, exit it fully before opening the new executable. From 0.10.3, use **Exit Ravenshelf** rather than hiding its window in the background. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 

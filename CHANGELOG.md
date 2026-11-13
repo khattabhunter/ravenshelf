@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.5 — More reliable tests
+
+Maintenance update. The app works the same as 0.10.4.
+
+- **A YouTube setup test no longer fails by chance on a slow PC.** The test for cancelling while parts are downloading waited a fixed 50 milliseconds and once failed on GitHub's busy Windows test machine. It, and the similar test for cancelling setup, now wait until setup has really got that far (at most 5 seconds) and check the same things as before. See [release notes](docs/RELEASE-0.10.5.md).
+
 ## 0.10.4 — Game pictures
 
 Improvements under test for game pictures that stop loading after browsing several pages. The cause is not confirmed yet, so this is not a confirmed fix.
