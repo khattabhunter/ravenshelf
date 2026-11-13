@@ -216,7 +216,7 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   // A saved folder that can't be scanned (a whole drive or a network share) is
   // skipped with a note, so it never stops the whole scan.
   const usable=[];
-  for(const extra of extraFolders){const p=validLocalPath(extra);if(!p){warnings.add('Choose a local game or library folder, not a whole drive or network share.');continue;}usable.push(extra);if(fs.existsSync(path.join(p,'steamapps')))roots.push(p);}
+  for(const extra of extraFolders){const p=typeof extra==='string'&&!extra.split(/[\\/]/).some(part=>/[. ]$/.test(part))?validLocalPath(extra):null;if(!p){warnings.add('Choose a local game or library folder, not a whole drive or network share.');continue;}usable.push(extra);if(fs.existsSync(path.join(p,'steamapps')))roots.push(p);}
   const steamRoots=new Map();
   for(const candidate of roots){const root=safeDirectory(candidate);if(!root)continue;steamRoots.set(keyPath(root),root);
     try{for(const lib of libraryRootsFromVdf(readSmall(path.join(root,'steamapps','libraryfolders.vdf')))){const p=safeDirectory(lib);if(p)steamRoots.set(keyPath(p),p);}}catch{}

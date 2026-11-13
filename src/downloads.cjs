@@ -300,7 +300,7 @@ class DownloadManager extends EventEmitter {
         continue;
       }
       // A full list takes no new entries; links already in it were handled above.
-      if(this.downloads.length>=MAX_DOWNLOADS){full=true;break;}
+      if(this.downloads.length>=MAX_DOWNLOADS){full=true;continue;}
       const name=this.availableName(folder,original);
       const requestHeaders=downloadHeaders(link.headers,link.referer,link);
       const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};

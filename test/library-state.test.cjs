@@ -327,3 +327,11 @@ test('an invalid label on a torrent or video entry keeps its link',()=>{
   const video=downloadFrom(job(folder,{id:'v',kind:'media',status:'cancelled',url:canonicalUrl(videoId),sourceUrl:canonicalUrl(videoId),name:'video.mp4',media:{videoId,quality},mod:{site:'elsewhere'}}));
   assert.equal(video.url,canonicalUrl(videoId));assert.equal(Object.hasOwn(video,'mod'),false);
 });
+
+test('a reused copy must be the very file that was opened',t=>{
+  const crypto=require('node:crypto'),bytes='{"downloads":[null]}',w=fixture(t);fs.writeFileSync(w.file,bytes);
+  const first=loadLibrary(w.file);assert.equal(path.basename(first.recoveryFile),'library.json.recovery-'+crypto.createHash('sha256').update(bytes).digest('hex').slice(0,32)+'.json');
+  // The name points elsewhere than the opened handle (swapped meanwhile).
+  const swapped=delegate({lstatSync(file,options){const stat=fs.lstatSync(file,options);if(String(file)!==first.recoveryFile)return stat;return new Proxy(stat,{get(target,key){if(key==='ino')return target.ino+1n;const value=target[key];return typeof value==='function'?value.bind(target):value;}});}});
+  const second=loadLibrary(w.file,{io:swapped});assert.equal(second.warning,RECOVERED);assert.notEqual(second.recoveryFile,first.recoveryFile);
+});

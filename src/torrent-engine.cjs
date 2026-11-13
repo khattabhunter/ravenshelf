@@ -125,8 +125,9 @@ function createSystemLookup({lookupImpl=dns.promises.lookup,slots=LOOKUP_SLOTS}=
     // A name already being looked up, or waiting for a place, for this or
     // another check, is joined rather than asked again.
     if(inflight.has(host))return inflight.get(host);
+    let started=false;
     const job=(async()=>{
-      await take();
+      await take();started=true;
       try{
         if(signal?.aborted)throw abortError(signal);
         return await lookupImpl(host,{all:true,family:4,verbatim:true});
@@ -135,6 +136,9 @@ function createSystemLookup({lookupImpl=dns.promises.lookup,slots=LOOKUP_SLOTS}=
     inflight.set(host,job);
     const forget=()=>{if(inflight.get(host)===job)inflight.delete(host);};
     job.then(forget,forget);
+    // A check that ends while still waiting for a place leaves the name free
+    // for the next check, instead of handing it this abandoned lookup.
+    signal?.addEventListener('abort',()=>{if(!started)forget();},{once:true});
     return job;
   };
   lookup.busy=()=>slots-free;

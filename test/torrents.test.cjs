@@ -1044,6 +1044,12 @@ test('a name already being looked up is joined, not asked again; failures and en
   assert.deepEqual(await first,await joined);assert.equal((await waiting).name,'AbortError');await tick(5);assert.equal(calls,2,'the ended check started nothing');
   await assert.rejects(lookup('throws.example',{}),{message:'fixture'});assert.deepEqual(await lookup('plain.example',{}),[{address:'93.184.216.34',family:4}]);
   pending.shift()([]);await second;assert.equal(lookup.busy(),0);
+  // A lookup abandoned while waiting for a place is not handed to the next check.
+  const hold=[lookup('h1.example',{}),lookup('h2.example',{})];await tick(5);
+  const gone=new AbortController(),abandoned=lookup('shared.example',{signal:gone.signal}).catch(error=>error);gone.abort();
+  const fresh=lookup('shared.example',{});assert.notEqual(fresh,abandoned);
+  pending.shift()([]);pending.shift()([]);await Promise.all(hold);assert.equal((await abandoned).name,'AbortError');
+  await tick(5);pending.shift()([{address:'93.184.216.34',family:4}]);assert.deepEqual(await fresh,[{address:'93.184.216.34',family:4}]);
 });
 
 test('if its aria2 leaves while a job is being removed, a newer aria2 is left alone',async t=>{
@@ -1051,7 +1057,8 @@ test('if its aria2 leaves while a job is being removed, a newer aria2 is left al
   await engine.start();const owner=engine.child;let removing=0,restarted;
   engine.rpcFetch=async(url,init)=>{
     if(JSON.parse(init.body).method==='aria2.removeDownloadResult'){
-      if(++removing===1){owner.exitCode=1;owner.emit('exit',1);restarted=engine.start();}
+      // The old aria2 leaves, and a new one is up before the answer comes back.
+      if(++removing===1){owner.exitCode=1;owner.emit('exit',1);restarted=engine.start();await restarted;}
       return new Response(JSON.stringify({jsonrpc:'2.0',id:'1',error:{code:1,message:'still active'}}),{status:400,headers:{'content-type':'application/json'}});
     }
     return fake.fetch(url,init);

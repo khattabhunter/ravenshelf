@@ -161,7 +161,7 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
     return snapshot();
   }
   async function add({id,selected,gameTitle}={}){
-    assertOn();assertQueueAvailable();manager.assertWritable?.();
+    assertOn();assertQueueAvailable();manager.assertWritable?.(0);
     const request=requests.get(id);
     if(!request)throw new Error(MESSAGES.request);
     if(request.status!=='ready')throw new Error(MESSAGES.waiting);
