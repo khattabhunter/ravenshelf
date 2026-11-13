@@ -335,6 +335,18 @@ test('native updater waits for the app to exit then restarts only its verified r
   }finally{await fs.promises.writeFile(releaseWait,'finish');await exited;}
 });
 
+test('native updater rejects Windows device aliases before opening a target',{skip:process.platform!=='win32'},async t=>{
+  const f=await fixture(t),compiler=path.join(process.env.SystemRoot||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
+  const source=path.join(f.root,'name-probe.cs'),probe=path.join(f.root,'name-probe.exe'),helper=path.resolve(__dirname,'../src/ravenshelf-updater.exe');
+  // Only invoke the path validator; no reserved device is ever opened.
+  await fs.promises.writeFile(source,'using System; using System.Reflection; class NameProbe { static void Main(string[] a){var type=Assembly.LoadFile(a[0]).GetType("RavenshelfUpdater"); var method=type.GetMethod("ValidateSegment",BindingFlags.NonPublic|BindingFlags.Static); for(int i=1;i<a.Length;i++){try{method.Invoke(null,new object[]{a[i]});Console.Write("allowed;");}catch(TargetInvocationException e){if(!(e.InnerException is System.IO.InvalidDataException))throw;Console.Write("blocked;");}}} }');
+  await execFile(compiler,['/nologo','/target:exe','/out:'+probe,source],{windowsHide:true,timeout:15000});
+  const rejected=['con .txt','NUL   .exe','COM1 .exe','lpt0 .txt','COM¹ .exe','LPT² .exe','PRN.exe'],accepted=['con x.exe','com10.exe','Ravenshelf.exe'];
+  const result=await execFile(probe,[helper,...rejected,...accepted],{windowsHide:true,timeout:15000});
+  assert.equal(result.stdout,'blocked;'.repeat(rejected.length)+'allowed;'.repeat(accepted.length));
+  assert.equal(await fs.promises.readFile(path.join(f.profile,'library.json'),'utf8'),'fixture private settings');
+});
+
 test('native rollback restores a verified previous app and preserves externally changed targets or backups',{skip:process.platform!=='win32'},async t=>{
   const f=await fixture(t),compiler=path.join(process.env.SystemRoot||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
   const source=path.join(f.root,'rollback-probe.cs'),probe=path.join(f.root,'rollback-probe.exe'),helper=path.resolve(__dirname,'../src/ravenshelf-updater.exe');

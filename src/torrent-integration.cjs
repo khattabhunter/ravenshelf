@@ -9,8 +9,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const {MediaTools}=require('./media-tools.cjs');
-const {TorrentEngine,MESSAGES:ENGINE}=require('./torrent-engine.cjs');
-const {parseMagnet,readTorrent,MESSAGES:MAGNET}=require('./magnet.cjs');
+const {TorrentEngine,readMetadataFile,MESSAGES:ENGINE}=require('./torrent-engine.cjs');
+const {parseMagnet,readTorrent,sanitizeTorrent,MESSAGES:MAGNET}=require('./magnet.cjs');
 const {TOOL_MESSAGES,MESSAGES}=require('./torrent-messages.cjs');
 
 // The pinned torrent engine. Its release publishes no checksums, so the
@@ -77,6 +77,9 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
   // At start, the saved file lists of torrents no longer in the downloads are
   // removed, with any half-written one left by a crash. Nothing else is touched.
   const pruned=(async()=>{
+    // An unreadable/future queue, or one recovered only in part, cannot prove
+    // that an absent entry no longer owns its saved torrent metadata.
+    if(manager.stateCanSave===false||manager.stateRecoveryWarning)return;
     const keep=new Set(manager.downloads.filter(d=>d.kind==='torrent'&&typeof d.torrent?.infoHash==='string').map(d=>d.torrent.infoHash));
     let entries=[];try{entries=await fs.promises.readdir(where.store,{withFileTypes:true});}catch{return;}
     for(const entry of entries){
@@ -89,8 +92,8 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
   manager.torrent={
     async download(d,{signal,workspace,resume,onProgress,onSharing}){
       assertOn();
-      const torrent=await fs.promises.readFile(storeFile(d.torrent.infoHash)).catch(()=>{throw new Error(ENGINE.missing);});
-      return engine.download({torrent,infoHash:d.torrent.infoHash,files:d.torrent.files,selected:d.torrent.files.filter(file=>file.selected).map(file=>file.index),
+      const torrent=await readMetadataFile(storeFile(d.torrent.infoHash)).catch(()=>{throw new Error(ENGINE.missing);});
+      return engine.download({torrent,infoHash:d.torrent.infoHash,magnet:d.url,files:d.torrent.files,selected:d.torrent.files.filter(file=>file.selected).map(file=>file.index),
         dir:workspace,resume,shareMinutes:settings().shareMinutes},{signal,onProgress,onSharing});
     }
   };
@@ -132,13 +135,14 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
     (async()=>{
       try{
         await pruned;
-        let torrent=await fs.promises.readFile(storeFile(parsed.infoHash)).catch(()=>null);
+        let torrent=await readMetadataFile(storeFile(parsed.infoHash)).catch(()=>null);
         let read=null;
         if(torrent){try{read=readTorrent(torrent,parsed.infoHash);}catch{torrent=null;}}
         if(!torrent){
           torrent=await engine.metadata(parsed,{signal:request.controller.signal,onStatus:({peers})=>{if(request.peers!==peers){request.peers=peers;publish();}}});
           read=readTorrent(torrent,parsed.infoHash);
         }
+        torrent=sanitizeTorrent(torrent,parsed.infoHash,parsed.trackers);
         Object.assign(request,{status:'ready',torrent,read,name:read.name});
       }catch(error){
         if(request.controller.signal.aborted)return;

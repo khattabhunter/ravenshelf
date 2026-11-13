@@ -15,19 +15,15 @@ const {inspectLink,assessDownload,nameReasons,nameFromURL}=require('./link-safet
 const {hashFile}=require('./virustotal.cjs');
 const {fromNexus,modFolder:gameFolder,MODS_FOLDER}=require('./mods.cjs');
 const {safeName,folderName}=require('./safe-name.cjs');
-const {PASTE_HOSTS,PIXELDRAIN_HOSTS,isPixeldrainHost}=require('./hosts.cjs');
+const {PROVIDER_ROOTS,isDownloadProvider:isProvider}=require('./hosts.cjs');
+const {contextOrigin,sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 
-const PROVIDER_ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com',...PIXELDRAIN_HOSTS,...PASTE_HOSTS];
-// PixelDrain and the paste sites count only at their own addresses (PixelDrain also with www.),
-// as everywhere else in Ravenshelf; a subdomain of them is an ordinary download.
-const EXACT_ROOTS=new Set([...PIXELDRAIN_HOSTS,...PASTE_HOSTS]);
 const MAX_PENDING=50;
 const CAPTURE_TTL_MS=60*60*1000;
 const FINISHED_TTL_MS=10*60*1000;
 const ALLOW_ONCE_MS=2*60*1000;
 const REQUESTS_PER_MINUTE=240;
 const hostOf=value=>{try{return new URL(value).hostname.toLowerCase();}catch{return '';}};
-const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||(!EXACT_ROOTS.has(root)&&host.endsWith('.'+root)))||isPixeldrainHost(host);};
 const baseName=value=>String(value||'').split(/[\\/]/).filter(Boolean).at(-1)?.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240)||undefined;
 // The name a download is saved under. The queue cleans the name it is handed
 // once, with safeName(), before it saves the file. So the checks here judge,
@@ -82,22 +78,20 @@ class BrowserBridge extends EventEmitter{
     const reader=new FrameReader(MAX_HEADER_BYTES);let browser=null,done=false;
     socket.on('data',chunk=>{
       if(done)return;
-      let frames;
-      try{frames=reader.push(chunk);}catch{done=true;socket.destroy();return;}
-      for(const frame of frames){
+      try{reader.push(chunk,frame=>{
         if(!browser){
           browser=this.authenticate(frame);
-          if(!browser){done=true;socket.destroy();return;}
-          reader.maxBytes=MAX_REQUEST_BYTES;continue;
+          if(!browser){done=true;socket.destroy();return false;}
+          reader.maxBytes=MAX_REQUEST_BYTES;return true;
         }
         done=true;socket.pause();
         this.respond(browser,frame).then(response=>socket.end(encodeFrame(response)),()=>socket.destroy());
-        return;
-      }
+        return false;
+      });}catch{done=true;socket.destroy();}
     });
   }
   authenticate(header){
-    if(!this.token||header?.v!==1||typeof header.token!=='string'||!/^[a-f0-9]{64}$/.test(header.token))return null;
+    if(!this.token||header?.v!==1||Object.keys(header).some(key=>!['v','token','origin'].includes(key))||typeof header.token!=='string'||!/^[a-f0-9]{64}$/.test(header.token))return null;
     if(!crypto.timingSafeEqual(Buffer.from(header.token,'hex'),this.token))return null;
     return allowedOrigin(header.origin);
   }
@@ -153,7 +147,7 @@ class BrowserBridge extends EventEmitter{
     this.expire();
     // `given` is the browser's name for the file as it arrived; `filename` is that name as it would be saved.
     const given=baseName(message.filename);
-    const request={url:message.url,finalUrl:message.finalUrl,referrer:message.referrer,pageUrl:message.pageUrl,filename:savedAs(given),given,mime:message.mime,totalBytes:message.totalBytes};
+    const request={url:message.url,finalUrl:message.finalUrl,referrer:contextOrigin(message.referrer),pageUrl:contextOrigin(message.pageUrl),filename:savedAs(given),given,mime:message.mime,totalBytes:message.totalBytes};
     // The extension's game-and-mod label is kept only for a file from Nexus Mods' own file servers.
     if(message.mod&&fromNexus(request))request.mod={...message.mod};
     const source=message.type==='send'?message.kind:'download';
@@ -217,7 +211,7 @@ class BrowserBridge extends EventEmitter{
       const chain=[{url:start,host:hostOf(start),listed:lookupHost(hostOf(start))}];
       if(resolved?.status==='ready'&&hostOf(resolved.url)!==chain[0].host)chain.push({url:resolved.url,host:hostOf(resolved.url),listed:lookupHost(hostOf(resolved.url))});
       result={...resolved,status:chain.some(hop=>hop.listed)?'blocked':resolved?.status||'manual',chain,sniffed:'unknown',provider:true};
-    }else result=await this.inspectImpl(start,{fetcher:this.fetcher,referer:https(request.referrer)||https(request.pageUrl),lookupHost,signal});
+    }else result=await this.inspectImpl(start,{fetcher:this.fetcher,referer:originReferrer(request.referrer)||originReferrer(request.pageUrl),lookupHost,signal});
     if(signal.aborted||!this.captures.has(capture.id))return;
     // The label is for the file Ravenshelf would fetch. A link that led on to
     // another site is not a Nexus Mods file.
@@ -240,7 +234,7 @@ class BrowserBridge extends EventEmitter{
     if(result.status==='blocked'||verdict.level==='blocked'){capture.status='blocked';this.alertBlocked(capture);return;}
     capture.status=['ready','manual','unavailable'].includes(result.status)?result.status:'manual';
     if(capture.status==='ready'){
-      const referer=result.provider?result.referer:https(request.referrer)||https(request.pageUrl);
+      const referer=result.provider?sanitizedReferrer(result.referer):originReferrer(request.referrer)||originReferrer(request.pageUrl);
       capture.entry={...(result.provider?{headers:result.headers&&typeof result.headers==='object'?{...result.headers}:{}}:{}),status:'ready',url:result.url,sourceUrl:start,filename:given,size:capture.size,host:hostOf(result.url),...(referer?{referer}:{}),...(request.mod?{mod:{...request.mod}}:{})};
     }
   }

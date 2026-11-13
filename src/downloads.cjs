@@ -4,6 +4,9 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {EventEmitter}=require('node:events');
 const {safeFetch,safeURL}=require('./net.cjs');
+const {loadLibrary,SCHEMA_VERSION}=require('./library-state.cjs');
+const {cleanHeaders}=require('./header-vault.cjs');
+const {sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
 const {openDownloadFile}=require('./download-file.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
@@ -15,7 +18,7 @@ const {MEDIA_FOLDER,QUALITIES,VIDEO_ID,canonicalUrl,cleanTitle}=require('./youtu
 const {removeMediaWorkspace}=require('./media-downloads.cjs');
 const {SITE:MOD_SITE,MODS_FOLDER,modFolder,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED,assertFileServer}=require('./mods.cjs');
 const {safeName,folderName:safeFolderName}=require('./safe-name.cjs');
-const {oneConnection}=require('./hosts.cjs');
+const {oneConnection,isDownloadProvider}=require('./hosts.cjs');
 const {MESSAGES:PIXELDRAIN,downloadRefusal}=require('./pixeldrain.cjs');
 const {MESSAGES:MAGNET}=require('./magnet.cjs');
 const {MESSAGES:ENGINE}=require('./torrent-engine.cjs');
@@ -51,6 +54,7 @@ function networkFailure(error){for(let cause=error,depth=0;cause&&depth<4;cause=
 const withoutQuery=value=>{try{const url=new URL(value);url.search='';url.hash='';return url.href;}catch{return value;}};
 const isModFile=item=>item.origin==='browser'&&item.mod?.site===MOD_SITE;
 const linkIdentity=item=>isModFile(item)?withoutQuery(item.sourceUrl||item.url):item.sourceUrl||item.url;
+const sourceIdentity=value=>crypto.createHash('sha256').update(String(value)).digest('hex');
 const filePath=value=>{try{return new URL(value).pathname;}catch{return String(value);}};
 // True when `name` is `original`, or `original` with the " (1)" that a name
 // already in use is given.
@@ -67,12 +71,34 @@ function sameSavedName(name,original){
 // its address, as before.
 const sameFile=(held,link,name)=>isModFile(held)&&isModFile(link)
   ?filePath(held.url)===filePath(link.url)&&sameSavedName(held.name,name)
-  :linkIdentity(held)===linkIdentity(link);
+  :held.origin==='browser'&&!isModFile(held)&&held.sourceIdentity
+    ?held.sourceIdentity===sourceIdentity(linkIdentity(link))
+    :linkIdentity(held)===linkIdentity(link);
 // A Nexus Mods link is signed for one click and can include the account's
 // number. It is dropped as soon as it is no longer needed, when the file has
 // finished or the download is cancelled: only the plain address of the file
 // stays, and the page address that was sent with the request goes too.
 function dropModLink(d){d.url=withoutQuery(d.url);d.sourceUrl=withoutQuery(d.sourceUrl);d.headers={};}
+// Browser page context is reduced to its origin. A supported file host can
+// require its clean page path; neither kind needs page tokens or fragments.
+function downloadHeaders(value,referer,entry={}){
+  if(referer)safeURL(referer);
+  const headers=cleanHeaders(value)||{};
+  const sanitize=entry.origin==='browser'&&!isDownloadProvider(entry.sourceUrl||entry.url)?originReferrer:sanitizedReferrer;
+  for(const name of ['Referer','HX-Current-URL']){
+    let found;
+    for(const key of Object.keys(headers))if(key.toLowerCase()===name.toLowerCase()){found=headers[key];delete headers[key];}
+    const clean=sanitize(name==='Referer'&&referer!==undefined?referer:found);
+    if(clean)headers[name]=clean;
+  }
+  return headers;
+}
+function dropFinishedBrowserLink(d){if(d.origin==='browser'&&!d.kind&&d.status==='completed'){
+  // Keep only a local opaque identifier for exact-link deduplication. Hash
+  // before removing tokens, including when migrating an older finished job.
+  if(!isModFile(d)&&!d.sourceIdentity)d.sourceIdentity=sourceIdentity(d.sourceUrl||d.url);
+  dropModLink(d);delete d.headersNeedRefresh;
+}}
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
 function atomicJSON(file,data) {
   fs.mkdirSync(path.dirname(file),{recursive:true});
@@ -89,7 +115,8 @@ class DownloadManager extends EventEmitter {
     super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted; this.media=media; this.torrent=torrent;
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
-    const stored=loadJSON(stateFile,{});
+    const loaded=loadLibrary(stateFile),stored=loaded.data;
+    this.stateCanSave=loaded.canSave;this.stateRecoveryWarning=loaded.warning;
     this.settings={downloadDir,concurrency:2,connectionsPerFile:4,favorites:[],defenderScan:true,...stored.settings};
     this.settings.defenderScan=this.settings.defenderScan!==false;
     this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);
@@ -105,15 +132,19 @@ class DownloadManager extends EventEmitter {
       if('sealedHeaders' in d){
         // Headers that cannot be opened (another Windows account or PC) are dropped;
         // the job then refreshes its link from the source page when it resumes.
-        const opened=this.vault?.open(d.sealedHeaders);
+        let opened=null;try{opened=this.vault?.open(d.sealedHeaders);}catch{}
         d.headers=opened||{};if(!opened&&!isModFile(d))d.headersNeedRefresh=true;delete d.sealedHeaders;
       }else if(d.headers&&typeof d.headers==='object'&&Object.keys(d.headers).length)plainHeaders=true;
-      if(!d.headers||typeof d.headers!=='object'||Array.isArray(d.headers))d.headers={};
+      d.headers=downloadHeaders(d.headers,undefined,d);
       // A mod download that Ravenshelf 0.7.0 finished or cancelled: drop what that version still kept of its link.
       if(isModFile(d)&&['completed','cancelled'].includes(d.status)){
         const kept=JSON.stringify([d.url,d.sourceUrl,d.headers,d.needsNewLink]);
         dropModLink(d);if(d.status==='cancelled')d.needsNewLink=true;
         if(kept!==JSON.stringify([d.url,d.sourceUrl,d.headers,d.needsNewLink]))tidied=true;
+      }
+      if(d.origin==='browser'&&!d.kind&&d.status==='completed'){
+        const before=JSON.stringify([d.url,d.sourceUrl,d.headers,d.headersNeedRefresh]);dropFinishedBrowserLink(d);
+        if(before!==JSON.stringify([d.url,d.sourceUrl,d.headers,d.headersNeedRefresh]))tidied=true;
       }
     }
     // Remove legacy plaintext even when encryption is unavailable. Working
@@ -121,7 +152,7 @@ class DownloadManager extends EventEmitter {
     if(plainHeaders||tidied||this.downloads.some(d=>d.headersNeedRefresh&&!isModFile(d)))this.save();
     // Scans interrupted by closing the app run again on the next start.
     for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
-    if(this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
+    if(this.stateCanSave&&this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
     this.timer=setInterval(()=>{
       if(this.running.size){
         const warning=this.headerStorageWarning;this.save();
@@ -135,9 +166,10 @@ class DownloadManager extends EventEmitter {
     this.scheduleTimer=setInterval(()=>{this.checkSchedule();this.pump();},1000);this.scheduleTimer.unref();
     Promise.resolve().then(()=>{if(!this.stopping){this.checkSchedule();this.pump();}});
   }
-  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>d.kind==='torrent'?{...d,torrent:torrentSummary(d.torrent)}:{...d}),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
+  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>d.kind==='torrent'?{...d,torrent:torrentSummary(d.torrent)}:{...d}),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,stateRecoveryWarning:this.stateRecoveryWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
   persisted(d){
-    const {headers,sealedHeaders,headersNeedRefresh,...rest}=d;
+    const {headers:rawHeaders,sealedHeaders,headersNeedRefresh,...rest}=d;
+    const headers=downloadHeaders(rawHeaders,undefined,d);
     if(!headers||!Object.keys(headers).length)return {...rest,headers:{},...(headersNeedRefresh?{headersNeedRefresh:true}:{})};
     let sealed=null;try{sealed=this.vault?.seal(headers);}catch{}
     // What a mod download sends is its page's address, not a sign-in, and its link
@@ -145,9 +177,11 @@ class DownloadManager extends EventEmitter {
     return sealed?{...rest,sealedHeaders:sealed}:{...rest,headers:{},...(isModFile(d)?{}:{headersNeedRefresh:true})};
   }
   save(){
+    if(!this.stateCanSave)return false;
     const downloads=this.downloads.map(d=>this.persisted(d));
     this.headerStorageWarning=downloads.some(d=>d.headersNeedRefresh&&!isModFile(d))?HEADER_STORAGE_WARNING:'';
-    atomicJSON(this.stateFile,{settings:this.settings,downloads});
+    atomicJSON(this.stateFile,{schemaVersion:SCHEMA_VERSION,settings:this.settings,downloads});
+    return true;
   }
   changed(){this.emit('state',this.state());}
   publishProgress(){
@@ -250,7 +284,7 @@ class DownloadManager extends EventEmitter {
         // new link: a failed or cancelled entry for that file takes it and carries
         // on from where it stopped, instead of staying stuck beside a second copy.
         if(['error','cancelled'].includes(held.status)&&isModFile(held)&&isModFile(link)&&!this.quiescing.has(held.id)){
-          const headers={...link.headers};if(link.referer)headers.Referer=safeURL(link.referer).href;
+          const headers=downloadHeaders(link.headers,link.referer,link);
           delete held.headersNeedRefresh;delete held.pauseReason;delete held.scheduleRequested;delete held.needsNewLink;
           // From here on it is the same as pressing Retry, with the new link.
           Object.assign(held,{url:link.url,sourceUrl:link.sourceUrl||link.url,headers,mod:{...link.mod},status:'queued',error:'',retryCount:0,networkRetries:0,speed:0,activeConnections:0});
@@ -259,7 +293,7 @@ class DownloadManager extends EventEmitter {
         continue;
       }
       const name=this.availableName(folder,original);
-      const requestHeaders={...link.headers};if(link.referer)requestHeaders.Referer=safeURL(link.referer).href;
+      const requestHeaders=downloadHeaders(link.headers,link.referer,link);
       const d={id:crypto.randomUUID(),url:link.url,sourceUrl:link.sourceUrl||link.url,name,gameTitle:gameTitle||'Imported files',folder,status:'queued',received:0,total:Number(link.size)||0,speed:0,error:'',etag:null,lastModified:null,headers:requestHeaders,connectionMode:'checking',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString()};
       // A download taken over from a browser keeps the browser's internet-zone mark.
       if(link.origin==='browser'){d.origin='browser';d.markOfTheWeb=link.markOfTheWeb===true;}
@@ -342,7 +376,7 @@ class DownloadManager extends EventEmitter {
     d.speed=0;if(d.status!=='downloading')d.activeConnections=0;this.save();this.changed();this.pump();return this.state();
   }
   pump(){
-    if(this.stopping||!this.checkSchedule().active)return;
+    if(this.stopping||!this.stateCanSave||!this.checkSchedule().active)return;
     while(this.running.size<this.settings.concurrency){
       const d=this.downloads.find(x=>{
         if(x.status!=='queued'||this.running.has(x.id)||this.quiescing.has(x.id)||(x.retryAt||0)>this.now())return false;
@@ -379,7 +413,7 @@ class DownloadManager extends EventEmitter {
         if(!this.resolveLink)throw new Error('Saved sign-in details are unavailable. Check this download link again before resuming.');
         const fresh=await this.resolveLink(d.sourceUrl||d.url);
         if(fresh.status!=='ready')throw new Error(fresh.message||'This link needs a browser check.');
-        d.url=safeURL(fresh.url).href;d.headers={...fresh.headers};if(fresh.referer)d.headers.Referer=safeURL(fresh.referer).href;
+        d.url=safeURL(fresh.url).href;d.headers=downloadHeaders(fresh.headers,fresh.referer,d);
         delete d.headersNeedRefresh;
       })().finally(()=>{refreshPromise=null;});
       return refreshPromise;
@@ -429,6 +463,7 @@ class DownloadManager extends EventEmitter {
       d.total=d.received;d.status='completed';d.completedAt=new Date().toISOString();
       // A finished mod file no longer needs its signed link: only the plain address is kept.
       if(isModFile(d))dropModLink(d);
+      dropFinishedBrowserLink(d);
       if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
       try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
     };
@@ -680,7 +715,7 @@ class DownloadManager extends EventEmitter {
   }
   // One scan at a time keeps Defender from slowing the PC with parallel archive scans.
   async pumpScans(){
-    if(this.scanning||this.stopping||!this.scanFile)return;
+    if(this.scanning||this.stopping||!this.stateCanSave||!this.scanFile)return;
     const id=this.scanQueue.shift();if(!id)return;
     const d=this.downloads.find(x=>x.id===id);
     if(!d||d.status!=='completed'||this.quiescing.has(id)){if(d)delete d.scan;return this.pumpScans();}

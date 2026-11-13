@@ -42,6 +42,20 @@ test('frames are length-prefixed JSON objects with strict size limits',()=>{
   assert.throws(()=>protocol.encodeFrame({x:'y'.repeat(2000)},1000),/too large/);
 });
 
+test('authentication and a large request parse identically at every stream split boundary',()=>{
+  const header={v:1,token:'a'.repeat(64),origin:CHROME};
+  const request={v:1,type:'capture',url:'https://files.example/file.zip?signature='+'x'.repeat(5000)};
+  protocol.validateRequest(request);
+  const bytes=Buffer.concat([protocol.encodeFrame(header),protocol.encodeFrame(request)]);
+  for(let split=0;split<=bytes.length;split++){
+    const reader=new protocol.FrameReader(protocol.MAX_HEADER_BYTES),seen=[];
+    const accept=frame=>{seen.push(frame);if(seen.length===1)reader.maxBytes=protocol.MAX_REQUEST_BYTES;return seen.length<2;};
+    reader.push(bytes.subarray(0,split),accept);
+    reader.push(bytes.subarray(split),accept);
+    assert.deepEqual(seen,[header,request],`split ${split}`);
+  }
+});
+
 test('browser requests must match an exact shape',()=>{
   const ok=value=>protocol.validateRequest({v:1,...value});
   const bad=value=>assert.throws(()=>protocol.validateRequest({v:1,...value}),/Invalid browser request/,JSON.stringify(value).slice(0,120));
@@ -53,6 +67,10 @@ test('browser requests must match an exact shape',()=>{
   for(const url of ['blob:https://x.example/uuid','data:text/plain,hi','javascript:alert(1)','ftp://x.example/a','file:///C:/a','chrome://settings','https://','https://x.example/\u0000','https://x.example/'+'a'.repeat(8200),42])bad({type:'capture',url});
   bad({type:'capture',url:'https://x.example/a',incognito:true});bad({type:'capture',url:'https://x.example/a',totalBytes:1.5});bad({type:'capture',url:'https://x.example/a',filename:'a\nb'});
   bad({type:'capture',url:'https://x.example/a',cookie:'secret=1'});bad({type:'capture'});
+  bad({type:'capture',url:'https://user:secret@x.example/a'});
+  const context=ok({type:'capture',url:'https://cdn.example/a.zip?file-token=keep',referrer:'https://page.example/account?private=remove#secret',pageUrl:'https://page.example/another-private-path?token=remove'});
+  assert.equal(context.referrer,'https://page.example/');assert.equal(context.pageUrl,'https://page.example/');
+  assert.equal(context.url,'https://cdn.example/a.zip?file-token=keep','the chosen download still needs its signed URL');
   assert.deepEqual(ok({type:'send',url:'https://fuckingfast.co/abc#x.rar',kind:'page'}),{type:'send',kind:'page',url:'https://fuckingfast.co/abc#x.rar',pageUrl:undefined});
   bad({type:'send',url:'https://x.example/',kind:'video'});
   assert.deepEqual(ok({type:'threats'}),{type:'threats'});bad({type:'threats',page:1});
@@ -194,6 +212,7 @@ test('the bridge answers only connections that present this session’s token an
   assert.equal(await ask(dir,{type:'threats'},{origin:'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/'}),null,'an unknown extension gets no answer');
   assert.equal(await send(dir,Buffer.from([0xff,0xff,0xff,0xff,1,2,3]),{raw:true}),null,'an oversized frame is dropped');
   assert.equal(await send(dir,[{v:1,token:endpoint.token}]),null);
+  assert.equal(await send(dir,[{v:1,token:endpoint.token,origin:CHROME,extra:true},{v:1,type:'threats'}]),null);
   assert.deepEqual(await ask(dir,{type:'capture',url:'blob:https://x.example/1'}),{ok:false,error:'invalid'});
   assert.deepEqual((await ask(dir,{type:'threats'})).manifest.rules,[{id:1,category:'malware',count:2}]);
   assert.deepEqual((await ask(dir,{type:'threatRule',id:1})).rule.domains,['bad.example','worse.example']);
@@ -202,6 +221,19 @@ test('the bridge answers only connections that present this session’s token an
   assert.deepEqual(await ask(dir,{type:'lookup',host:'good.example'}),{ok:true,listed:null});
   await bridge.stop();
   assert.equal(fs.existsSync(path.join(dir,'endpoint.json')),false);
+});
+
+test('a coalesced authenticated large request works while oversized headers and bodies still fail',async t=>{
+  const {bridge,dir}=bridgeFixture(t);await bridge.start();
+  const endpoint=JSON.parse(fs.readFileSync(path.join(dir,'endpoint.json'),'utf8'));
+  const header={v:1,token:endpoint.token,origin:CHROME};
+  const message={v:1,type:'capture',url:'https://files.example/archive.zip?signature='+'a'.repeat(5000)};
+  const accepted=await send(dir,[header,message]);
+  assert.equal(accepted.ok,true);assert.equal(accepted.action,'take');
+  assert.equal(await send(dir,[{...header,extra:'x'.repeat(protocol.MAX_HEADER_BYTES)},message]),null);
+  const tooLarge=Buffer.alloc(4);tooLarge.writeUInt32LE(protocol.MAX_REQUEST_BYTES+1);
+  assert.equal(await send(dir,Buffer.concat([protocol.encodeFrame(header),tooLarge]),{raw:true}),null);
+  assert.equal(await send(dir,[{...header,token:'b'.repeat(64)},message]),null,'large requests never bypass authentication');
 });
 
 test('listed, deceptive and unencrypted program downloads are blocked at once',async t=>{
@@ -237,6 +269,22 @@ test('a normal download is taken, checked, and queued only when the user chooses
   assert.equal(bridge.snapshot().captures[0].status,'queued');
   await assert.rejects(bridge.action({id:decision.id,action:'download'}),/cannot download/);
   await assert.rejects(bridge.action({id:'missing',action:'download'}),/no longer available/);
+});
+
+test('browser page context is origin-only in memory, inspection and queued downloads',async t=>{
+  const inspected=[];
+  const inspect=async(url,options)=>{inspected.push(options.referer);return {status:'ready',url,filename:'file.zip',size:4,chain:[{url,host:'files.example',listed:null}],sniffed:'zip'};};
+  const {bridge,events}=bridgeFixture(t,{inspect});
+  const url='https://files.example/file.zip?download-signature=keep';
+  // receive() also minimizes context for internal callers, independently of protocol validation.
+  const {id}=bridge.receive('chromium',{type:'capture',url,referrer:'https://page.example/private/account?token=synthetic-secret#fragment',pageUrl:'https://other.example/private?token=other-secret'});
+  await until(()=>bridge.captures.get(id).status==='ready');
+  assert.deepEqual(inspected,['https://page.example/']);
+  assert.equal(bridge.captures.get(id).request.referrer,'https://page.example/');
+  assert.equal(bridge.captures.get(id).request.pageUrl,'https://other.example/');
+  assert.doesNotMatch(JSON.stringify(bridge.snapshot()),/synthetic-secret|other-secret|private\/account/);
+  await bridge.action({id,action:'download'});
+  assert.equal(events.queued[0].url,url);assert.equal(events.queued[0].referer,'https://page.example/');
 });
 
 test('downloading a link the queue already holds says so instead of claiming it was added',async t=>{
@@ -290,7 +338,7 @@ test('supported file hosts are resolved by Ravenshelf without visiting their pag
   assert.deepEqual(resolved,['https://fuckingfast.co/abc#Game.part01.rar']);
   assert.deepEqual(bridge.snapshot().captures[0].chain.map(hop=>hop.host),['fuckingfast.co','dl.fuckingfast.co']);
   await bridge.action({id,action:'download'});
-  assert.deepEqual(events.queued[0].headers,{Cookie:'cf=1','User-Agent':'UA'});assert.equal(events.queued[0].referer,'https://fuckingfast.co/abc#Game.part01.rar');
+  assert.deepEqual(events.queued[0].headers,{Cookie:'cf=1','User-Agent':'UA'});assert.equal(events.queued[0].referer,'https://fuckingfast.co/abc');
   assert.equal(bridge.snapshot().captures[0].source,'link');
 });
 

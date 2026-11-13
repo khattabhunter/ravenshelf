@@ -1,4 +1,5 @@
 'use strict';
+const {isWindowsDeviceName}=require('./safe-name.cjs');
 const fs=require('node:fs');
 const path=require('node:path');
 const os=require('node:os');
@@ -8,7 +9,7 @@ const key=value=>process.platform==='win32'?value.toLowerCase():value;
 const identity=stat=>`${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
 const same=(a,b)=>a.ino!==0n&&a.dev===b.dev&&a.ino===b.ino&&a.birthtimeNs===b.birthtimeNs;
 function inside(root,target){const relative=path.relative(root,target);return !path.isAbsolute(relative)&&relative!=='..'&&!relative.startsWith('..'+path.sep);}
-function safeName(name){return typeof name==='string'&&name.length>0&&name.length<=255&&!/[\\/<>:"|?*\0-\x1f\x7f]/.test(name)&&!/[. ]$/.test(name)&&!/^\.{1,2}$/.test(name)&&!/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(name);}
+function safeName(name){return typeof name==='string'&&name.length>0&&name.length<=255&&!/[\\/<>:"|?*\0-\x1f\x7f]/.test(name)&&!/[. ]$/.test(name)&&!/^\.{1,2}$/.test(name)&&!isWindowsDeviceName(name);}
 function supportedRoot(value){
   if(typeof value!=='string'||value.length>2048||!path.isAbsolute(value)||/^[\\/]{2}/.test(value)||/[\0-\x1f]/.test(value))return false;
   const root=path.resolve(value),home=path.resolve(os.homedir());

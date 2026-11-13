@@ -1,6 +1,7 @@
 'use strict';
 const {safeFetch,safeURL,isPublicIP}=require('./net.cjs');
 const {fastRoot,isFastFileURL,assertFastRedirect}=require('./ff-policy.cjs');
+const {sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 
 const REDIRECTS=new Set([301,302,303,307,308]);
 function checkedURL(value){
@@ -48,6 +49,10 @@ function createFastSessionFetch({getSession,nodeFetch=safeFetch}={}){
     const deadline=AbortSignal.timeout(timeoutMs);
     const signal=options.signal?AbortSignal.any([options.signal,deadline]):deadline;
     let headers=new Headers(options.headers||{});
+    for(const name of ['Referer','HX-Current-URL'])if(headers.has(name)){
+      const clean=sanitizedReferrer(headers.get(name));
+      if(clean)headers.set(name,clean);else headers.delete(name);
+    }
     for(let redirects=0;redirects<6;redirects++){
       signal.throwIfAborted();
       if(isFastFileURL(url.href)){
@@ -82,7 +87,13 @@ function createFastSessionFetch({getSession,nodeFetch=safeFetch}={}){
         if(next.origin!==url.origin&&method==='POST')throw new Error('Blocked a form redirect to another origin.');
         if(options.redirect==='manual')return response;
         await cancel(response);
-        if(next.origin!==url.origin){headers.delete('authorization');headers.delete('cookie');}
+        if(next.origin!==url.origin){
+          headers.delete('authorization');headers.delete('cookie');
+          for(const name of ['Referer','HX-Current-URL']){
+            const origin=originReferrer(headers.get(name));
+            if(origin)headers.set(name,origin);else headers.delete(name);
+          }
+        }
         if(nextMethod!==method){headers.delete('content-type');headers.delete('content-length');}
         url=next;method=nextMethod;body=nextBody;
       }catch(error){await cancel(response);throw error;}

@@ -11,10 +11,13 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
+const dns=require('node:dns');
+const net=require('node:net');
 const {spawn}=require('node:child_process');
 const {setTimeout:delay}=require('node:timers/promises');
-const {killTree}=require('./media-downloads.cjs');
-const {readTorrent}=require('./magnet.cjs');
+const {readTorrent,parseMagnet,sanitizeTorrent}=require('./magnet.cjs');
+const {isPublicIP}=require('./net.cjs');
+const {openDownloadFile}=require('./download-file.cjs');
 
 const MESSAGES=Object.freeze({
   start:'The torrent downloader could not start. Try again; if it keeps failing, set up torrent downloads again in Settings.',
@@ -27,7 +30,7 @@ const MESSAGES=Object.freeze({
   missing:'This torrent’s saved file list is missing. Add it again from its magnet link.'
 });
 const ENV_KEEP=['systemroot','windir'];
-const DROP_MS=5000,START_TIMEOUT_MS=15000,RPC_TIMEOUT_MS=15000,MAX_ANSWER=8*1024*1024,METADATA_TIMEOUT_MS=10*60*1000,IDLE_MS=60*1000,POLL_MS=1000;
+const DROP_MS=5000,STOP_RESERVE_MS=2500,START_TIMEOUT_MS=15000,RPC_TIMEOUT_MS=15000,MAX_ANSWER=8*1024*1024,METADATA_TIMEOUT_MS=10*60*1000,IDLE_MS=60*1000,POLL_MS=1000;
 const STATUS_KEYS=['status','totalLength','completedLength','downloadSpeed','uploadSpeed','uploadLength','connections','numSeeders','errorCode','seeder'];
 // aria2's exit and error numbers that mean the disk, or the files on it.
 const SPACE_CODES=new Set(['9']),WRITE_CODES=new Set(['13','15','16','17','18']);
@@ -64,16 +67,18 @@ function engineArgs({port,secret,appPid,stateDir,uploadLimit,downloadLimit}){
 // handle, so what is checked is what is read.
 const MAX_METADATA=10*1024*1024;
 async function readSmallFile(file,cap){
-  let handle;
-  try{handle=await fs.promises.open(file,'r');}catch{throw new Error(MESSAGES.stopped);}
+  let opened;
+  try{opened=await openDownloadFile(file,{readOnly:true});}catch{throw new Error(MESSAGES.stopped);}
   try{
-    const stat=await handle.stat();
-    if(!stat.isFile()||stat.size>cap)throw new Error(MESSAGES.stopped);
+    if(opened.size>cap)throw new Error(MESSAGES.stopped);
     const buffer=Buffer.alloc(cap+1);let length=0;
-    for(;;){const {bytesRead}=await handle.read(buffer,length,buffer.length-length,length);if(!bytesRead)break;length+=bytesRead;if(length>cap)throw new Error(MESSAGES.stopped);}
+    for(;;){const {bytesRead}=await opened.handle.read(buffer,length,buffer.length-length,length);if(!bytesRead)break;length+=bytesRead;if(length>cap)throw new Error(MESSAGES.stopped);}
+    await opened.verifyUnchanged();
     return buffer.subarray(0,length);
-  }finally{await handle.close().catch(()=>{});}
+  }catch{throw new Error(MESSAGES.stopped);}
+  finally{await opened.handle.close().catch(()=>{});}
 }
+const readMetadataFile=file=>readSmallFile(file,MAX_METADATA);
 // The fixed message for an aria2 error number.
 function errorMessage(code){
   const value=String(code??'');
@@ -83,6 +88,37 @@ function errorMessage(code){
 }
 const number=value=>{const n=Number(value);return Number.isSafeInteger(n)&&n>=0?n:0;};
 function abortError(signal){return signal?.reason instanceof Error?signal.reason:Object.assign(new Error('The operation was aborted.'),{name:'AbortError'});}
+// Bound the complete operation, including response bodies and cleanup, even
+// when a dependency does not honour AbortSignal. Its late rejection is handled.
+async function until(promise,deadline,signal){
+  let timer,onAbort;
+  try{
+    return await Promise.race([Promise.resolve(promise),new Promise((_,reject)=>{
+      const fail=()=>reject(new Error(MESSAGES.stopped));
+      timer=setTimeout(fail,Math.max(0,deadline-Date.now()));
+      if(signal){onAbort=()=>reject(abortError(signal));if(signal.aborted)onAbort();else signal.addEventListener('abort',onAbort,{once:true});}
+    })]);
+  }finally{clearTimeout(timer);if(onAbort)signal.removeEventListener('abort',onAbort);}
+}
+// aria2 has no subprocess hooks in our fixed configuration. Terminate its
+// exact child directly instead of waiting on taskkill's separate 15s timeout.
+async function killEngine(child){if(child&&child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');}
+// A preflight only: aria2 performs its own DNS lookup later. This refuses
+// already-private or mixed DNS answers, but is not socket-level enforcement,
+// a DNS-rebinding defence, or a VPN kill switch.
+async function publicMagnet(value,{lookup=dns.promises.lookup,signal}={}){
+  signal?.throwIfAborted();
+  const parsed=parseMagnet(value),answers=new Map();
+  const keep=await Promise.all(parsed.trackers.map(async tracker=>{
+    const host=new URL('http://'+new URL(tracker).host).hostname.replace(/^\[|\]$/g,'');
+    if(net.isIP(host))return isPublicIP(host);
+    if(!answers.has(host))answers.set(host,until(Promise.resolve().then(()=>lookup(host,{all:true,verbatim:true})),Date.now()+2000,signal)
+      .then(records=>Array.isArray(records)&&records.length>0&&records.every(record=>isPublicIP(record?.address)),()=>false));
+    return answers.get(host);
+  }));
+  signal?.throwIfAborted();
+  return parseMagnet('magnet:?xt=urn:btih:'+parsed.infoHash+(parsed.name?'&dn='+encodeURIComponent(parsed.name):'')+parsed.trackers.filter((_,index)=>keep[index]).map(tracker=>'&tr='+encodeURIComponent(tracker)).join(''));
+}
 async function readLimited(response,cap){
   const reader=response.body?.getReader();if(!reader)return '';
   const parts=[];let length=0;
@@ -112,21 +148,26 @@ function selection(indexes){
 }
 
 class TorrentEngine{
-  constructor({tools,stateDir,settings=()=>({}),spawnImpl=spawn,rpcFetch=globalThis.fetch,kill=killTree,appPid=process.pid,env=process.env,
+  constructor({tools,stateDir,settings=()=>({}),spawnImpl=spawn,rpcFetch=globalThis.fetch,kill=killEngine,lookup=dns.promises.lookup,appPid=process.pid,env=process.env,
     randomPort=()=>crypto.randomInt(49152,65535),pollMs=POLL_MS,idleMs=IDLE_MS,startTimeoutMs=START_TIMEOUT_MS,metadataTimeoutMs=METADATA_TIMEOUT_MS}={}){
     if(typeof stateDir!=='string'||!path.isAbsolute(stateDir))throw new Error(MESSAGES.start);
-    Object.assign(this,{tools,stateDir,settings,spawnImpl,rpcFetch,kill,appPid,env,randomPort,pollMs,idleMs,startTimeoutMs,metadataTimeoutMs});
-    this.child=null;this.port=0;this.secret='';this.starting=null;this.stopping=null;this.users=0;this.idleTimer=null;this.seq=0;this.closed=false;
+    Object.assign(this,{tools,stateDir,settings,spawnImpl,rpcFetch,kill,lookup,appPid,env,randomPort,pollMs,idleMs,startTimeoutMs,metadataTimeoutMs});
+    this.child=null;this.port=0;this.secret='';this.starting=null;this.stopping=null;this.cleaning=null;this.terminationFailed=false;this.users=0;this.idleTimer=null;this.seq=0;this.closed=false;
   }
   get running(){return Boolean(this.child&&this.child.exitCode===null&&this.child.signalCode===null);}
   async start(){
-    if(this.closed)throw new Error(MESSAGES.start);
-    // A stop under way (the idle stop, for example) finishes first; aria2 then starts again.
-    if(this.stopping)await this.stopping;
-    if(this.closed)throw new Error(MESSAGES.start);
-    if(this.running&&this.port)return;
-    if(!this.starting)this.starting=this.launch().finally(()=>{this.starting=null;});
-    return this.starting;
+    for(;;){
+      if(this.closed)throw new Error(MESSAGES.start);
+      // Every wait can change the lifecycle. Check it again before accepting
+      // the child, and share its readiness probe with concurrent callers.
+      if(this.stopping){await this.stopping;continue;}
+      if(this.terminationFailed)throw new Error(MESSAGES.stopped);
+      if(this.cleaning){await until(this.cleaning,Date.now()+this.startTimeoutMs);continue;}
+      if(this.starting){await this.starting;continue;}
+      if(this.running&&this.port)return;
+      this.starting=this.launch().finally(()=>{this.starting=null;});
+      await this.starting;
+    }
   }
   async launch(){
     const paths=await this.tools.verified();
@@ -144,15 +185,17 @@ class TorrentEngine{
       catch{throw new Error(MESSAGES.start);}
       let exited=false;
       child.once('exit',()=>{exited=true;if(this.child===child){this.child=null;this.port=0;this.secret='';if(!this.starting||this.stopping)this.forgetDht().catch(()=>{});}});
-      child.once('error',()=>{exited=true;});
+      child.once('error',()=>{exited=true;if(!child.pid&&this.child===child){this.child=null;this.port=0;this.secret='';}});
       this.child=child;this.port=port;this.secret=secret;
       const deadline=Date.now()+this.startTimeoutMs;
       while(!exited&&Date.now()<deadline){
-        try{await this.rpc('getVersion');return;}catch{}
-        await delay(100);
+        try{await until(this.rpc('getVersion',[],AbortSignal.timeout(Math.max(1,deadline-Date.now()))),deadline);return;}catch{}
+        if(Date.now()<deadline)await delay(Math.min(100,deadline-Date.now()));
       }
-      await this.kill(child).catch(()=>{});
-      if(this.child===child){this.child=null;this.port=0;this.secret='';}
+      // A failed probe does not prove aria2 failed to start. Use the same
+      // bounded, confirmed termination as a user stop before retrying a port.
+      // Failure retains the live handle and aborts the retry loop.
+      await this.stop();
     }
     throw new Error(MESSAGES.start);
   }
@@ -190,21 +233,23 @@ class TorrentEngine{
   }
   async drop(gid,stop){
     if(!this.running)return;
-    // At most five seconds in all, each call one second, so a hung aria2 is stopped soon.
-    const deadline=Date.now()+DROP_MS,quick=()=>AbortSignal.timeout(1000);
-    if(stop)await this.rpc('forceRemove',[gid],quick()).catch(()=>{});
-    while(Date.now()<deadline){
-      try{await this.rpc('removeDownloadResult',[gid],quick());return true;}
+    // One total deadline includes fallback shutdown, process termination and
+    // cleanup. Reserve time for those instead of starting another 15s RPC.
+    const deadline=Date.now()+DROP_MS,removeUntil=deadline-STOP_RESERVE_MS,quick=()=>AbortSignal.timeout(Math.max(1,Math.min(1000,removeUntil-Date.now())));
+    if(stop)await until(this.rpc('forceRemove',[gid],quick()),Math.min(removeUntil,Date.now()+1000)).catch(()=>{});
+    while(Date.now()<removeUntil){
+      try{await until(this.rpc('removeDownloadResult',[gid],quick()),Math.min(removeUntil,Date.now()+1000));return true;}
       catch(error){if(!Number.isInteger(error?.rpcCode)||!this.running)break;await delay(100);}
     }
     // aria2 would not let go of it (still downloading or sharing): stopping
     // aria2 itself is the only sure way to end the uploading.
-    if(stop)await this.stop();
+    if(stop)await this.stop(deadline);
     return false;
   }
   // The .torrent file for a magnet link, fetched from other people. Only the
   // file list is fetched here; nothing of the torrent's contents.
   async metadata(parsed,{signal,onStatus=()=>{}}={}){
+    parsed=await publicMagnet(parsed.magnet,{lookup:this.lookup,signal});
     return this.use(async()=>{
       const dir=path.join(this.stateDir,'metadata',crypto.randomUUID());
       await fs.promises.mkdir(dir,{recursive:true});
@@ -222,9 +267,8 @@ class TorrentEngine{
           if(Date.now()>deadline)throw new Error(MESSAGES.noPeers);
           await this.wait(signal);
         }
-        const buffer=await readSmallFile(path.join(dir,parsed.infoHash+'.torrent'),MAX_METADATA);
-        readTorrent(buffer,parsed.infoHash);
-        return buffer;
+        const buffer=await readMetadataFile(path.join(dir,parsed.infoHash+'.torrent'));
+        return sanitizeTorrent(buffer,parsed.infoHash,parsed.trackers);
       }finally{
         if(gid)await this.drop(gid,!done);
         await fs.promises.rm(dir,{recursive:true,force:true,maxRetries:2}).catch(()=>{});
@@ -234,7 +278,10 @@ class TorrentEngine{
   // Downloads the chosen files of a torrent into `dir`. Returns when they are
   // complete (after the chosen sharing time), or throws when stopped first. A
   // stop during sharing still counts as complete: the files are all there.
-  async download({torrent,infoHash,files,selected,dir,resume=false,shareMinutes=0},{signal,onProgress=()=>{},onSharing=()=>{}}={}){
+  async download({torrent,infoHash,magnet,files,selected,dir,resume=false,shareMinutes=0},{signal,onProgress=()=>{},onSharing=()=>{}}={}){
+    const parsed=await publicMagnet(magnet||'magnet:?xt=urn:btih:'+infoHash,{lookup:this.lookup,signal});
+    if(parsed.infoHash!==infoHash)throw new Error(MESSAGES.changed);
+    torrent=sanitizeTorrent(torrent,infoHash,parsed.trackers);
     return this.use(async()=>{
       const read=readTorrent(torrent,infoHash);
       if(read.files.length!==files.length||read.files.some((file,i)=>file.path!==files[i].path||file.length!==files[i].length))throw new Error(MESSAGES.changed);
@@ -269,21 +316,35 @@ class TorrentEngine{
       }finally{await this.drop(gid,!finished||interrupted);}
     });
   }
-  async stop(){
+  async stop(deadline=Date.now()+DROP_MS){
     clearTimeout(this.idleTimer);this.idleTimer=null;
     if(this.stopping)return this.stopping;
-    this.stopping=this.performStop().finally(()=>{this.stopping=null;});
+    this.stopping=this.performStop(deadline).finally(()=>{this.stopping=null;});
     return this.stopping;
   }
-  async performStop(){
-    const child=this.child;if(!child)return;
-    try{await this.rpc('shutdown');}catch{}
-    for(let i=0;i<30&&this.child===child&&child.exitCode===null&&child.signalCode===null;i++)await delay(100);
-    if(child.exitCode===null&&child.signalCode===null)await this.kill(child).catch(()=>{});
+  async performStop(deadline){
+    const child=this.child;if(!child){this.terminationFailed=false;if(this.cleaning)await until(this.cleaning,deadline);return;}
+    const alive=()=>child.exitCode===null&&child.signalCode===null;
+    const graceful=Math.min(Date.now()+500,deadline-1000);
+    if(graceful>Date.now())try{await until(this.rpc('shutdown',[],AbortSignal.timeout(Math.max(1,graceful-Date.now()))),graceful);}catch{}
+    const grace=Math.min(Date.now()+250,deadline-750);
+    while(alive()&&Date.now()<grace)await delay(25);
+    if(alive()){
+      try{await until(Promise.resolve().then(()=>this.kill(child)),deadline-250);}catch{}
+      while(alive()&&Date.now()<deadline-250)await delay(25);
+      // Do not report stopped, publish completed files, or start a second
+      // engine if the OS has not confirmed termination of this child.
+      if(alive()){this.terminationFailed=true;throw new Error(MESSAGES.stopped);}
+    }
+    this.terminationFailed=false;
     if(this.child===child){this.child=null;this.port=0;this.secret='';}
-    if(!this.child)await this.forgetDht();
+    if(!this.child)await until(this.forgetDht(),deadline);
   }
   async forgetDht(){
+    if(!this.cleaning)this.cleaning=this.cleanDht().finally(()=>{this.cleaning=null;});
+    return this.cleaning;
+  }
+  async cleanDht(){
     let names=[];try{names=await fs.promises.readdir(this.stateDir);}catch{return;}
     // dht.dat and the temporary copy aria2 writes before replacing it.
     for(const name of names)if(name.startsWith('dht.dat'))await fs.promises.rm(path.join(this.stateDir,name),{force:true}).catch(()=>{});
@@ -291,4 +352,4 @@ class TorrentEngine{
   async dispose(){this.closed=true;await this.starting?.catch(()=>{});await this.stop();}
 }
 
-module.exports={TorrentEngine,MESSAGES,engineArgs,engineEnv,errorMessage,sameFiles,selection,ariaPath};
+module.exports={TorrentEngine,MESSAGES,engineArgs,engineEnv,errorMessage,sameFiles,selection,ariaPath,publicMagnet,readMetadataFile};

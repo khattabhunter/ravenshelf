@@ -4,6 +4,7 @@ const net = require('node:net');
 const { Agent, fetch } = require('undici');
 const {assertFastRedirect}=require('./ff-policy.cjs');
 const {closedHost}=require('./hosts.cjs');
+const {sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 // Hosts that have shut down are never contacted, also through a redirect:
 // their expired names can belong to someone else now.
 function assertOpenHost(url){const gone=closedHost(url.hostname);if(gone)throw new Error(gone.message);}
@@ -56,6 +57,10 @@ async function safeFetch(value, options={}) {
   let {timeoutMs=30000,maxBytes,http1=false,checkRedirect, ...init}=options;
   const signal = timeoutMs>0 ? (init.signal ? AbortSignal.any([init.signal,AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)) : init.signal;
   const headers = new Headers(init.headers || {});
+  for(const name of ['Referer','HX-Current-URL']) if(headers.has(name)) {
+    const clean=sanitizedReferrer(headers.get(name));
+    if(clean)headers.set(name,clean);else headers.delete(name);
+  }
   if(!headers.has('User-Agent')) headers.set('User-Agent','Mozilla/5.0 Ravenshelf/0.3');
   let method=init.method || 'GET', body=init.body;
   for(let n=0;n<8;n++) {
@@ -69,7 +74,13 @@ async function safeFetch(value, options={}) {
     assertFastRedirect(originalUrl,next.href);
     // The caller can refuse a destination, such as one outside a site's own file servers.
     if(checkRedirect) checkRedirect(next.href);
-    if(next.origin!==url.origin) { headers.delete('authorization'); headers.delete('cookie'); }
+    if(next.origin!==url.origin) {
+      headers.delete('authorization'); headers.delete('cookie');
+      for(const name of ['Referer','HX-Current-URL']) {
+        const origin=originReferrer(headers.get(name));
+        if(origin)headers.set(name,origin);else headers.delete(name);
+      }
+    }
     if(res.status===303 || ((res.status===301||res.status===302)&&method==='POST')) {
       method='GET'; body=undefined; headers.delete('content-type'); headers.delete('content-length');
     }

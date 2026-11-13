@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1 — Privacy and recovery
+
+- Minimize browser page context and provider referrer/form headers; remove completed ordinary browser download query tokens and headers while preserving active signed links for resume.
+- Fix native-message authentication when multiple frames arrive together; add the image right-click handoff with private-window exclusions.
+- Validate saved libraries, preserve damaged originals in private local recovery files, and prevent unreadable or newer libraries from being overwritten. Show recovery warnings in English and Arabic.
+- Reject Windows device aliases with spaces before extensions in downloads, cleanup, storage, integrity checks and native updates. Restrict installed-game inspection to Windows PowerShell modules.
+- Strip untrusted torrent metadata, preflight tracker DNS, preserve metadata during queue recovery and enforce bounded, confirmed engine shutdown/startup cleanup. This does not add VPN enforcement or socket-level torrent isolation.
+- Upgrade pinned build dependencies to ASAR 4.3.2, fuses 2.1.3 and js-yaml 5.5.0; retain signed-source and signed-update verification. See [release notes](docs/RELEASE-0.10.1.md).
+
 ## 0.10.0 — More ways to download: torrents, PixelDrain and MultiUpload
 
 - **Torrent downloads**, off until you turn them on. **Settings → Torrent downloads** first shows **What torrents share**: everyone sharing the same torrent can see this PC's IP address (only a VPN hides it), Ravenshelf uploads pieces of a torrent to other people while it downloads, and downloading or sharing games you have no right to can be against the law. They turn on only after you tick **I understand what torrents share.**

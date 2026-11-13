@@ -6,6 +6,7 @@
 const crypto=require('node:crypto');
 const {REQUEST_QUALITIES,youtubeVideoId}=require('./youtube.cjs');
 const {modContext}=require('./mods.cjs');
+const {contextOrigin}=require('./referrer-policy.cjs');
 
 const HOST_NAME='io.github.khattabhunter.ravenshelf';
 // Public half of the key that pins the Chrome/Edge/Brave extension ID. Browsers
@@ -34,7 +35,7 @@ function encodeFrame(value,maxBytes=MAX_RESPONSE_BYTES){
 // Collects length-prefixed JSON frames from a byte stream.
 class FrameReader{
   constructor(maxBytes){this.maxBytes=maxBytes;this.buffer=Buffer.alloc(0);}
-  push(chunk){
+  push(chunk,onFrame){
     this.buffer=Buffer.concat([this.buffer,chunk]);const frames=[];
     while(this.buffer.length>=4){
       const length=this.buffer.readUInt32LE(0);
@@ -44,6 +45,9 @@ class FrameReader{
       const value=JSON.parse(text);
       if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid message.');
       frames.push(value);
+      // The consumer may authenticate the first frame and change the next
+      // frame's size limit before a coalesced request is parsed.
+      if(onFrame&&onFrame(value)===false){this.buffer=Buffer.alloc(0);break;}
     }
     if(this.buffer.length>4+this.maxBytes)throw new Error('Invalid message length.');
     return frames;
@@ -59,7 +63,7 @@ function webAddress(value,{optional=false,schemes=['https:','http:']}={}){
   if(optional&&(value===undefined||value===''))return undefined;
   if(typeof value!=='string'||!value||value.length>MAX_URL||/[\x00-\x1f\x7f]/.test(value))invalid();
   let url;try{url=new URL(value);}catch{invalid();}
-  if(!schemes.includes(url.protocol)||!url.hostname)invalid();
+  if(!schemes.includes(url.protocol)||!url.hostname||url.username||url.password)invalid();
   return url.href;
 }
 function text(value,max,{optional=true}={}){
@@ -80,12 +84,12 @@ function validateRequest(message){
       if(message.incognito!==undefined&&message.incognito!==false)invalid();
       const totalBytes=message.totalBytes===undefined?undefined:message.totalBytes;
       if(totalBytes!==undefined&&(!Number.isSafeInteger(totalBytes)||totalBytes<-1))invalid();
-      return {type:'capture',url:webAddress(message.url),finalUrl:webAddress(message.finalUrl,{optional:true}),referrer:webAddress(message.referrer,{optional:true}),pageUrl:webAddress(message.pageUrl,{optional:true}),filename:text(message.filename,1024),mime:text(message.mime,200),totalBytes:totalBytes>0?totalBytes:undefined,mod:modContext(message.mod)};
+      return {type:'capture',url:webAddress(message.url),finalUrl:webAddress(message.finalUrl,{optional:true}),referrer:contextOrigin(webAddress(message.referrer,{optional:true})),pageUrl:contextOrigin(webAddress(message.pageUrl,{optional:true})),filename:text(message.filename,1024),mime:text(message.mime,200),totalBytes:totalBytes>0?totalBytes:undefined,mod:modContext(message.mod)};
     }
     case 'send':
       exactKeys(message,['url','kind'],['pageUrl']);
       if(!['link','page'].includes(message.kind))invalid();
-      return {type:'send',kind:message.kind,url:webAddress(message.url),pageUrl:webAddress(message.pageUrl,{optional:true})};
+      return {type:'send',kind:message.kind,url:webAddress(message.url),pageUrl:contextOrigin(webAddress(message.pageUrl,{optional:true}))};
     case 'threats':
       exactKeys(message,[]);return {type:'threats'};
     case 'threatRule':

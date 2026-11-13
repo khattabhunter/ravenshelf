@@ -6,6 +6,7 @@ const os=require('node:os');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const {EventEmitter}=require('node:events');
+const {spawn}=require('node:child_process');
 const magnet=require('../src/magnet.cjs');
 const engineModule=require('../src/torrent-engine.cjs');
 const {TorrentEngine,engineArgs,engineEnv,selection,sameFiles,errorMessage}=engineModule;
@@ -16,7 +17,9 @@ const {publicErrorMessage}=require('../src/public-errors.cjs');
 const {validateRequest}=require('../src/browser-protocol.cjs');
 
 const tick=(ms=5)=>new Promise(resolve=>setTimeout(resolve,ms));
-function scratch(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'rs-torrent-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root;}
+const cleanups=new Map();
+function scratch(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'rs-torrent-'));cleanups.set(root,[]);t.after(async()=>{try{for(const cleanup of cleanups.get(root))await cleanup();}finally{cleanups.delete(root);fs.rmSync(root,{recursive:true,force:true,maxRetries:3});}});return root;}
+const beforeCleanup=(root,cleanup)=>cleanups.get(root).push(cleanup);
 
 // A small bencode writer for test torrents.
 function bencode(value){
@@ -80,7 +83,7 @@ test('a torrent file is read only when it is the torrent its magnet link names',
 });
 
 test('a torrent with any name Windows cannot store exactly as written is refused, not renamed',()=>{
-  const refused=[[['..','evil.exe']],[['CON']],[['nul.txt']],[['a:b.bin']],[['trailing.']],[['space ']],[['tab\there']],[['a/b']],[['back\\slash']],[['quote"']],[['star*']],[['']],[['COM\u00b9']],[['x'.repeat(181)]]];
+  const refused=[[['..','evil.exe']],[['CON']],[['nul.txt']],[['con .txt']],[['COM1  .bin']],[['lpt\u00b2 .txt']],[['a:b.bin']],[['trailing.']],[['space ']],[['tab\there']],[['a/b']],[['back\\slash']],[['quote"']],[['star*']],[['']],[['COM\u00b9']],[['x'.repeat(181)]]];
   for(const [parts] of refused){
     const {buffer,infoHash}=torrentFile(multi([[parts,1]]));
     assert.throws(()=>magnet.readTorrent(buffer,infoHash),{message:magnet.MESSAGES.names},JSON.stringify(parts));
@@ -130,6 +133,56 @@ test('the torrent reader refuses malformed data',()=>{
   assert.throws(()=>magnet.decode(Buffer.from('li1ee')),{message:magnet.MESSAGES.damaged},'a torrent is a dictionary');
   assert.throws(()=>magnet.decode(Buffer.alloc(11*1024*1024,0x30)),{message:magnet.MESSAGES.damaged});
   for(const message of Object.values(magnet.MESSAGES))assert.equal(publicErrorMessage(new Error(message),'openMagnet'),message);
+});
+
+test('unhashed metadata cannot add trackers, web seeds or other network destinations',()=>{
+  const fixture=torrentFile(multi(),{announce:'http://127.0.0.1/private','announce-list':[['https://unreviewed.example/announce']],
+    'url-list':['http://192.168.1.1/seed'],'httpseeds':['https://seed.example/data'],nodes:[['private.example',1]],comment:'private fixture comment'});
+  const original=magnet.decode(fixture.buffer).info;
+  const allowed=['https://chosen.example/announce','udp://tracker.example:6969/announce'];
+  const cleaned=magnet.sanitizeTorrent(fixture.buffer,fixture.infoHash,allowed);
+  const decoded=magnet.decode(cleaned);
+  assert.deepEqual([...decoded.root.keys()],['announce','announce-list','info']);
+  assert.deepEqual(decoded.info,original,'info bytes, hash and piece verification remain exactly the same');
+  assert.equal(decoded.root.get('announce').toString(),allowed[0]);
+  assert.deepEqual(decoded.root.get('announce-list').map(tier=>tier.map(item=>item.toString())),allowed.map(item=>[item]));
+  assert.deepEqual(magnet.readTorrent(cleaned,fixture.infoHash),magnet.readTorrent(fixture.buffer,fixture.infoHash));
+  assert.deepEqual([...magnet.decode(magnet.sanitizeTorrent(fixture.buffer,fixture.infoHash)).root.keys()],['info']);
+  assert.throws(()=>magnet.sanitizeTorrent(fixture.buffer,'0'.repeat(40)),{message:magnet.MESSAGES.damaged});
+  assert.throws(()=>magnet.sanitizeTorrent(fixture.buffer,fixture.infoHash,[null]),{message:magnet.MESSAGES.damaged});
+  const stripped=magnet.sanitizeTorrent(fixture.buffer,fixture.infoHash,['http://127.0.0.1/x','https://user:secret@chosen.example/x']);
+  assert.deepEqual([...magnet.decode(stripped).root.keys()],['info']);
+});
+
+test('saved torrent metadata is size bounded and cannot be a hard link or directory',async t=>{
+  const root=scratch(t),file=path.join(root,'metadata.torrent');
+  const fixture=torrentFile(multi());fs.writeFileSync(file,fixture.buffer);
+  assert.deepEqual(await engineModule.readMetadataFile(file),fixture.buffer);
+  const alias=path.join(root,'alias.torrent');fs.linkSync(file,alias);
+  await assert.rejects(engineModule.readMetadataFile(file),{message:engineModule.MESSAGES.stopped});
+  fs.unlinkSync(alias);
+  fs.truncateSync(file,10*1024*1024+1);
+  await assert.rejects(engineModule.readMetadataFile(file),{message:engineModule.MESSAGES.stopped});
+  await assert.rejects(engineModule.readMetadataFile(root),{message:engineModule.MESSAGES.stopped});
+});
+
+test('tracker preflight rejects private, mixed, malformed and failed DNS answers without replacing their hostname',async()=>{
+  const hash='a'.repeat(40),calls=[];
+  const trackers=['https://public.example/announce','udp://public.example:6969/a','http://mixed.example/a','http://private.example/a','http://missing.example/a','http://malformed.example/a','udp://93.184.216.34:6969/a'];
+  const lookup=async(host,options)=>{calls.push([host,options]);
+    if(host==='public.example')return [{address:'93.184.216.34',family:4}];
+    if(host==='mixed.example')return [{address:'93.184.216.34',family:4},{address:'192.168.1.1',family:4}];
+    if(host==='private.example')return [{address:'127.0.0.1',family:4}];
+    if(host==='malformed.example')return [{address:'not an IP'}];
+    throw new Error('fixture DNS failure');};
+  const parsed=await engineModule.publicMagnet(`magnet:?xt=urn:btih:${hash}`+trackers.map(value=>'&tr='+encodeURIComponent(value)).join(''),{lookup});
+  assert.deepEqual(parsed.trackers,[trackers[0],trackers[1],trackers[6]]);
+  assert.equal(calls.filter(([host])=>host==='public.example').length,1,'one lookup per host');
+  assert.ok(calls.every(([,options])=>options.all===true));
+  const cancelled=new AbortController();cancelled.abort();
+  let lookedUp=false;
+  await assert.rejects(engineModule.publicMagnet(`magnet:?xt=urn:btih:${hash}&tr=${encodeURIComponent(trackers[0])}`,{lookup:async()=>{lookedUp=true;return new Promise(()=>{});},signal:cancelled.signal}),{name:'AbortError'});
+  assert.equal(lookedUp,false,'cancelled requests do not start a DNS query');
 });
 
 test('the torrent engine’s command line is fixed and has every safety option',()=>{
@@ -243,7 +296,7 @@ function engineFor(t,fake,options={}){
   const root=scratch(t);
   const engine=new TorrentEngine({tools:fakeTools(root),stateDir:path.join(root,'state'),settings:()=>({uploadLimit:102400,downloadLimit:0}),spawnImpl:fake.spawn,rpcFetch:fake.fetch,kill:fake.kill,appPid:777,
     env:{SystemRoot:'C:\\Windows',USERPROFILE:'C:\\Users\\private-fixture'},pollMs:1,idleMs:30,startTimeoutMs:500,...options});
-  t.after(()=>engine.dispose());
+  beforeCleanup(root,()=>engine.dispose());
   return {engine,root};
 }
 
@@ -253,7 +306,7 @@ test('the engine starts aria2 with a fresh secret, finds a file list, and checks
   const parsed=magnet.parseMagnet(`magnet:?xt=urn:btih:${infoHash}&dn=Game`);
   const peers=[];
   const got=await engine.metadata(parsed,{onStatus:status=>peers.push(status.peers)});
-  assert.deepEqual(got,buffer);assert.ok(peers.includes(3));
+  assert.deepEqual(got,magnet.sanitizeTorrent(buffer,infoHash));assert.ok(peers.includes(3));
   // Right away, before aria2's idle stop: requests without the secret are refused by aria2 (the stand-in does the same).
   const answer=await fake.fetch(`http://127.0.0.1:${fake.port}/jsonrpc`,{body:JSON.stringify({jsonrpc:'2.0',id:'x',method:'aria2.getVersion',params:['token:wrong']})});
   assert.equal((await answer.json()).error.message,'Unauthorized');
@@ -286,6 +339,63 @@ test('aria2 gets a new DHT node ID each time it starts: its DHT file is removed 
   assert.equal(fs.existsSync(path.join(state,'dht.dat')),false,'removed after aria2 stops');
 });
 
+test('download RPC gets only original-magnet trackers that pass preflight, even when saved metadata was changed',async t=>{
+  const fixture=torrentFile(multi(),{announce:'http://127.0.0.1/secret','url-list':['https://unreviewed.example/file'],'announce-list':[['https://extra.example/announce']]});
+  const read=magnet.readTorrent(fixture.buffer,fixture.infoHash),fake=fakeAria2();
+  const seen=[],{engine,root}=engineFor(t,fake,{lookup:async host=>{seen.push(host);return [{address:host==='public.example'?'93.184.216.34':'10.0.0.1',family:4}];}});
+  const original=`magnet:?xt=urn:btih:${fixture.infoHash}&tr=${encodeURIComponent('https://public.example/announce')}&tr=${encodeURIComponent('https://private.example/announce')}`;
+  await engine.download({torrent:fixture.buffer,infoHash:fixture.infoHash,magnet:original,files:read.files,selected:[1],dir:path.join(root,'w')});
+  const sent=magnet.decode(Buffer.from(fake.calls.find(call=>call.method==='addTorrent').params[0],'base64'));
+  assert.deepEqual([...sent.root.keys()],['announce','announce-list','info']);
+  assert.equal(sent.root.get('announce').toString(),'https://public.example/announce');
+  assert.deepEqual(sent.root.get('announce-list').map(tier=>tier.map(value=>value.toString())),[['https://public.example/announce']]);
+  assert.deepEqual(seen,['public.example','private.example'],'injected metadata destinations never get DNS queries');
+  assert.deepEqual(sent.info,magnet.decode(fixture.buffer).info);
+});
+
+test('stop failure retains the live child and never reports successful termination',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{idleMs:60000});
+  await engine.start();
+  const originalRpc=engine.rpcFetch,originalKill=engine.kill;
+  engine.rpcFetch=()=>new Promise(()=>{});engine.kill=async()=>{};
+  const started=Date.now();
+  try{
+    await assert.rejects(engine.stop(Date.now()+400),{message:engineModule.MESSAGES.stopped});
+    assert.ok(Date.now()-started<1000);
+    assert.equal(engine.running,true,'failed termination cannot discard the only child handle');
+    await assert.rejects(engine.start(),{message:engineModule.MESSAGES.stopped},'an engine that could not be stopped cannot be silently reused');
+    assert.equal(fake.spawned.length,1);
+  }finally{engine.rpcFetch=originalRpc;engine.kill=originalKill;await engine.stop();}
+});
+
+test('the default stop path terminates a harmless real child when shutdown RPC stalls',async t=>{
+  const fake=fakeAria2();let child;
+  const {engine}=engineFor(t,fake,{kill:undefined,idleMs:60000,
+    spawnImpl:()=>{child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'});return child;},
+    rpcFetch:async(_url,init)=>{const request=JSON.parse(init.body);if(request.method==='aria2.shutdown')return new Promise(()=>{});return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{version:'fixture'}}));}});
+  try{
+    await engine.start();assert.equal(child.exitCode,null);assert.equal(child.signalCode,null);
+    const started=Date.now();await engine.stop();
+    assert.ok(Date.now()-started<2000,'direct process termination avoids taskkill timeout');
+    assert.ok(child.exitCode!==null||child.signalCode!==null,'the child exit is observed before success');
+    assert.equal(engine.running,false);
+  }finally{if(child&&child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');}
+});
+
+test('DHT cleanup has the stop deadline and a new engine waits for pending cleanup',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{idleMs:60000,startTimeoutMs:100});
+  await engine.start();
+  const original=engine.cleanDht;let release;
+  engine.cleanDht=()=>new Promise(resolve=>{release=resolve;});
+  try{
+    const started=Date.now();
+    await assert.rejects(engine.stop(Date.now()+300),{message:engineModule.MESSAGES.stopped});
+    assert.ok(Date.now()-started<1000);
+    await assert.rejects(engine.start(),{message:engineModule.MESSAGES.stopped});
+    assert.equal(fake.spawned.length,1,'old cleanup cannot overlap a new engine identity');
+  }finally{engine.cleanDht=original;release?.();await engine.cleaning;}
+});
+
 test('with no sharing time, a moment of aria2 still sharing is not reported as sharing',async t=>{
   const {buffer,infoHash}=torrentFile(multi());
   const read=magnet.readTorrent(buffer,infoHash);
@@ -300,13 +410,13 @@ test('a hung aria2 is stopped within seconds when a sharing torrent is stopped, 
   const read=magnet.readTorrent(buffer,infoHash);
   const fake=fakeAria2({share:1e9}),{engine,root}=engineFor(t,fake),dir=path.join(root,'w');fs.mkdirSync(dir);
   const original=fake.fetch;
-  engine.rpcFetch=async(url,init)=>{const body=JSON.parse(init.body);if(['aria2.forceRemove','aria2.removeDownloadResult'].includes(body.method))return new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(init.signal.reason),{once:true}));return original(url,init);};
+  engine.rpcFetch=async(url,init)=>{const body=JSON.parse(init.body);if(['aria2.forceRemove','aria2.removeDownloadResult','aria2.shutdown'].includes(body.method))return new Promise(()=>{});return original(url,init);};
   const ctl=new AbortController(),started=Date.now();
   // The one-second limits use timers that do not keep a test process alive, as they would not keep the app alive either.
   const alive=setInterval(()=>{},50);t.after(()=>clearInterval(alive));
   assert.deepEqual(await engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir,shareMinutes:15},{signal:ctl.signal,onSharing:()=>ctl.abort()}),{complete:true,interrupted:true});
   clearInterval(alive);
-  assert.ok(Date.now()-started<8000,'stopped within seconds');assert.equal(engine.running,false);
+  assert.ok(Date.now()-started<6000,'one total shutdown deadline even when every RPC ignores cancellation');assert.equal(engine.running,false);assert.equal(fake.exits,1);
   // aria2 ending on its own (a crash) also takes its DHT file away.
   const crash=fakeAria2(),second=engineFor(t,crash),state=path.join(second.root,'state');
   await second.engine.start();fs.writeFileSync(path.join(state,'dht.dat'),'x');
@@ -345,6 +455,54 @@ test('the engine tries three ports and then reports that it could not start',asy
   const {infoHash}=torrentFile(multi());
   await assert.rejects(engine.metadata(magnet.parseMagnet(`magnet:?xt=urn:btih:${infoHash}`)),{message:engineModule.MESSAGES.start});
   assert.equal(fake.spawned.length,3);
+});
+
+test('a stalled startup probe cannot hang or launch another engine when termination fails',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{startTimeoutMs:50,idleMs:60000,rpcFetch:()=>new Promise(()=>{}),kill:()=>new Promise(()=>{})});
+  const originalStop=engine.stop.bind(engine);
+  // Keep the same stop policy with a short budget for this failure fixture.
+  engine.stop=deadline=>originalStop(deadline??Date.now()+400);
+  const started=Date.now();
+  try{
+    await assert.rejects(engine.start(),{message:engineModule.MESSAGES.stopped});
+    assert.ok(Date.now()-started<1000,'both startup probe and failed termination are bounded');
+    assert.equal(fake.spawned.length,1,'no second process before the first has exited');
+    assert.equal(engine.running,true,'the live child remains tracked');
+    await assert.rejects(engine.start(),{message:engineModule.MESSAGES.stopped});
+    assert.equal(fake.spawned.length,1);
+  }finally{engine.rpcFetch=fake.fetch;engine.kill=fake.kill;engine.stop=originalStop;await engine.stop();}
+});
+
+test('failed startup probes retry only after each previous child has exited',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{startTimeoutMs:30,idleMs:60000});
+  const fetch=fake.fetch;
+  engine.rpcFetch=async(url,init)=>JSON.parse(init.body).method==='aria2.getVersion'?new Promise(()=>{}):fetch(url,init);
+  const spawn=fake.spawn;
+  engine.spawnImpl=(...args)=>{if(fake.child)assert.notEqual(fake.child.exitCode,null,'previous child was stopped before another spawn');return spawn(...args);};
+  await assert.rejects(engine.start(),{message:engineModule.MESSAGES.start});
+  assert.equal(fake.spawned.length,3);assert.equal(engine.running,false);
+});
+
+test('concurrent starts share the readiness probe rather than accepting an unready child',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{idleMs:60000});
+  let release,probing;const gate=new Promise(resolve=>{release=resolve;}),seen=new Promise(resolve=>{probing=resolve;});
+  engine.rpcFetch=async(url,init)=>{if(JSON.parse(init.body).method==='aria2.getVersion'){probing();await gate;}return fake.fetch(url,init);};
+  let ready=0;const first=engine.start().then(()=>{ready++;});
+  await seen;const second=engine.start().then(()=>{ready++;});
+  try{await tick(10);assert.equal(ready,0,'a live child does not establish RPC readiness');assert.equal(fake.spawned.length,1);}
+  finally{release();await Promise.all([first,second]);}
+  assert.equal(ready,2);assert.equal(fake.spawned.length,1);
+});
+
+test('closing while callers wait for startup never reports a ready engine',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{idleMs:60000});
+  let release,probing;const gate=new Promise(resolve=>{release=resolve;}),seen=new Promise(resolve=>{probing=resolve;});
+  engine.rpcFetch=async(url,init)=>{if(JSON.parse(init.body).method==='aria2.getVersion'){probing();await gate;}return fake.fetch(url,init);};
+  const first=assert.rejects(engine.start(),{message:engineModule.MESSAGES.start});
+  await seen;const second=assert.rejects(engine.start(),{message:engineModule.MESSAGES.start});
+  const closing=engine.dispose();release();
+  await Promise.all([first,second,closing]);
+  assert.equal(fake.spawned.length,1);assert.equal(engine.running,false);
 });
 
 test('the engine downloads only the chosen files, after checking aria2’s file list',async t=>{
@@ -430,7 +588,7 @@ function managerFor(t,runner,more={}){
   const root=scratch(t),marked=[],scanned=[];
   const manager=new DownloadManager({stateFile:path.join(root,'library.json'),downloadDir:path.join(root,'Downloads'),torrent:runner,markFile:async file=>{marked.push(file);},scanFile:async (file,options)=>{scanned.push([file,options]);return {status:'clean',message:''};},...more});
   manager.updateSettings({concurrency:2,defenderScan:true});
-  t.after(()=>manager.stop());
+  beforeCleanup(root,()=>manager.stop());
   const finished=async()=>{for(let i=0;i<2000&&(manager.running.size||manager.downloads.some(d=>['queued','downloading'].includes(d.status)));i++)await tick(2);};
   return {root,manager,marked,scanned,finished};
 }
@@ -529,7 +687,7 @@ function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings
   const manager=new DownloadManager({stateFile:path.join(root,'library.json'),downloadDir:path.join(root,'Downloads')});
   if(settings)manager.settings.torrents=settings;
   if(before)before(root,manager);
-  t.after(()=>manager.stop());
+  beforeCleanup(root,()=>manager.stop());
   const tools={refresh:()=>ready?'ready':'missing',snapshot:()=>({phase:ready?'ready':'missing'}),install(){this.installed=true;},cancel(){},remove:async()=>{},removeOthers:async()=>{},dispose:async()=>{},verified:fakeTools(root).verified};
   const integration=createTorrentIntegration({app:{getPath:()=>root},win:null,manager,register:(name,fn)=>registered.set(name,fn),publish:()=>published.push(1),platform,now,
     folders:{tools:path.join(root,'tools'),state:path.join(root,'state'),store:path.join(root,'store')},
@@ -537,7 +695,7 @@ function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings
   // The pinned tool set is replaced by a stand-in that is always ready (or never).
   integration.engine.tools=tools;
   const original=integration.tools;Object.assign(original,{refresh:tools.refresh,install:()=>{tools.installed=true;return tools.snapshot();},remove:tools.remove});
-  t.after(()=>integration.beforeQuit());
+  beforeCleanup(root,()=>integration.beforeQuit());
   return {root,manager,registered,integration,tools,call:(name,value)=>registered.get(name)(value)};
 }
 
@@ -553,6 +711,15 @@ test('at start, saved file lists of torrents no longer in the downloads are remo
   // No saved file lists at all is fine too.
   const empty=integrationFor(t);await empty.integration.pruned;
   assert.equal(fs.existsSync(path.join(empty.root,'store')),false);
+});
+
+test('unreadable or partly recovered queue state never prunes saved torrent metadata',async t=>{
+  for(const recovery of [{stateCanSave:false},{stateRecoveryWarning:'A saved download could not be recovered.'}]){
+    const name='a'.repeat(40)+'.torrent';
+    const s=integrationFor(t,{before:(root,manager)=>{Object.assign(manager,recovery);fs.mkdirSync(path.join(root,'store'));fs.writeFileSync(path.join(root,'store',name),'fixture metadata');}});
+    await s.integration.pruned;
+    assert.equal(fs.readFileSync(path.join(s.root,'store',name),'utf8'),'fixture metadata');
+  }
 });
 
 test('torrents are off until the user accepts what they share, and cannot be turned off while downloading',async t=>{
@@ -592,7 +759,7 @@ test('a magnet link is read, its files are shown, and only the chosen ones are q
   assert.equal(d.kind,'torrent');assert.equal(path.basename(d.folder),'My Game');
   assert.deepEqual(d.torrent.files.filter(file=>file.selected).map(file=>file.index),[1,2]);
   assert.equal(d.url.includes('seed.example'),false,'the queued link is the checked one');
-  assert.deepEqual(fs.readFileSync(path.join(s.root,'store',infoHash+'.torrent')),buffer,'the checked file list is kept for resuming');
+  assert.deepEqual(fs.readFileSync(path.join(s.root,'store',infoHash+'.torrent')),magnet.sanitizeTorrent(buffer,infoHash),'only the checked info bytes and reviewed trackers are kept for resuming');
   assert.equal(s.integration.snapshot().requests.length,0);
   await assert.rejects(s.call('addTorrent',{id:view.id,selected:[1]}),{message:TORRENT.request});
   // A second look at the same torrent uses the kept list and asks no one.

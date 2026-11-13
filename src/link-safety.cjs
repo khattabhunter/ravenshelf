@@ -7,6 +7,7 @@ const net=require('node:net');
 const {safeFetch,safeURL,isPublicIP}=require('./net.cjs');
 const {filenameFromHeaders}=require('./providers.cjs');
 const {closedHost}=require('./hosts.cjs');
+const {originReferrer}=require('./referrer-policy.cjs');
 
 const SNIFF_BYTES=4096;
 const PROGRAMS=new Set(['exe','msi','msix','msixbundle','appx','appxbundle','appinstaller','com','scr','pif','cpl']);
@@ -138,7 +139,8 @@ async function inspectLink(start,{fetcher=safeFetch,referer=null,lookupHost=()=>
     if(privateDestination(current.href))return result('blocked','The link tried to reach a device on your own network.',{privateDestination:true});
     try{safeURL(current.href);}catch{return result('manual','This link uses an address Ravenshelf does not download from.');}
     const headers={'Accept-Encoding':'identity',Range:`bytes=0-${SNIFF_BYTES-1}`};
-    if(referer&&hop===0){try{headers.Referer=safeURL(referer).href;}catch{}}
+    const context=hop===0?originReferrer(referer):undefined;
+    if(context){try{headers.Referer=safeURL(context).href;}catch{}}
     let response;
     try{response=await fetcher(current.href,{method:'GET',redirect:'manual',headers,timeoutMs,signal});}
     catch(error){

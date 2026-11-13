@@ -41,6 +41,7 @@ function harness(fetcher,addresses=[{address:'93.184.216.34',family:4}]) {
    if(name==='undici')return {Agent:class {constructor(options){agentOptions=options;}},fetch:fetcher};
    if(name==='./ff-policy.cjs')return require('../src/ff-policy.cjs');
    if(name==='./hosts.cjs')return require('../src/hosts.cjs');
+   if(name==='./referrer-policy.cjs')return require('../src/referrer-policy.cjs');
    throw Error('Unexpected dependency: '+name);
  }};
  vm.runInNewContext(source,sandbox,{filename:'net.cjs'});
@@ -73,6 +74,26 @@ test('manual redirect mode leaves the host form destination for the caller',asyn
  let calls=0;const h=harness(async()=>{calls++;return new Response(null,{status:302,headers:{location:'https://other.example/file'}});});
  const result=await h.safeFetch('https://example.org/form',{redirect:'manual'});
  assert.equal(result.status,302);assert.equal(calls,1);await result.body?.cancel();
+});
+
+test('referrers discard private queries and fragments and lose paths across origins',async()=>{
+ const seen=[];const h=harness(async(url,options)=>{
+   seen.push(new Headers(options.headers));
+   if(seen.length===1)return new Response(null,{status:302,headers:{location:'/next'}});
+   if(seen.length===2)return new Response(null,{status:302,headers:{location:'https://cdn.example.net/file'}});
+   return new Response('file');
+ });
+ await h.safeFetch('https://files.example.org/start',{headers:{rEfErEr:'https://provider.example.org/download/123?private_token=fixture#private-fragment','HX-Current-URL':'https://provider.example.org/download/123?private_token=fixture#private-fragment'}});
+ for(const name of ['Referer','HX-Current-URL']) assert.deepEqual(seen.map(headers=>headers.get(name)),['https://provider.example.org/download/123','https://provider.example.org/download/123','https://provider.example.org/']);
+ assert.ok(seen.every(headers=>!JSON.stringify([...headers]).includes('private')));
+});
+
+test('invalid and local referrer values are omitted without changing the file request',async()=>{
+ for(const referer of ['https://user:password@example.org/private','http://example.org/private','https://192.168.1.1/private','https://files.local/private','not a URL']){
+   let seen;const h=harness(async(url,options)=>{seen=new Headers(options.headers);return new Response('ok');});
+   assert.equal(await(await h.safeFetch('https://files.example.org/file',{headers:{Referer:referer,'HX-Current-URL':referer}})).text(),'ok');
+   assert.equal(seen.has('Referer'),false);assert.equal(seen.has('HX-Current-URL'),false);
+ }
 });
 test('a caller can refuse where a request is sent on to, before that address is contacted',async()=>{
  const hops={'https://a.example.org/1':'https://b.example.org/2','https://b.example.org/2':'/3?x=1','https://b.example.org/3?x=1':'https://c.example.net/4'};

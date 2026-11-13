@@ -1130,6 +1130,9 @@ function applyState(next) {
   if (typeof next.headerStorageWarning === 'string') state.headerStorageWarning = next.headerStorageWarning;
   const credentialWarning = $('#credential-warning');
   if (credentialWarning) { credentialWarning.textContent = state.headerStorageWarning ? localMessage(state.headerStorageWarning) : ''; credentialWarning.hidden = !state.headerStorageWarning; }
+  if (typeof next.stateRecoveryWarning === 'string') state.stateRecoveryWarning = next.stateRecoveryWarning;
+  const recoveryWarning = $('#state-recovery-warning');
+  if (recoveryWarning) { recoveryWarning.textContent = state.stateRecoveryWarning ? localMessage(state.stateRecoveryWarning) : ''; recoveryWarning.hidden = !state.stateRecoveryWarning; }
   if(next.completionAction)state.completionAction=next.completionAction;
   if(next.updater)state.updater=next.updater;
   if(next.downloadSchedule)state.downloadSchedule=next.downloadSchedule;

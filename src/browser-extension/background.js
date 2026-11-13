@@ -184,6 +184,7 @@ async function buildMenus() {
   await quiet(() => menus.removeAll());
   const done = () => { void api.runtime.lastError; };
   menus.create({ id: 'ravenshelf-link', title: t('Download with Ravenshelf'), contexts: ['link'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
+  menus.create({ id: 'ravenshelf-image', title: t('Download this image with Ravenshelf'), contexts: ['image'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
   menus.create({ id: 'ravenshelf-page', title: t('Download this file with Ravenshelf'), contexts: ['page'], documentUrlPatterns: P.SEND_PAGE_PATTERNS.slice() }, done);
   // On YouTube the video area opens YouTube's own menu first; right-click again for this one.
   menus.create({ id: 'ravenshelf-youtube', title: t('Download this video with Ravenshelf'), contexts: ['page', 'video'], documentUrlPatterns: P.YOUTUBE_PAGE_PATTERNS.slice() }, done);
@@ -192,7 +193,8 @@ async function sendToApp(kind, url, pageUrl, incognito) {
   if (incognito) { notify('private', 'Private window', 'Ravenshelf does not take downloads from private windows.'); return { ok: false, error: 'private' }; }
   if (!isWeb(url) || url.length > 8192 || (kind === 'page' && !P.canSendPage(url))) return { ok: false, error: 'invalid' };
   const message = { type: 'send', kind, url };
-  if (kind === 'link' && isWeb(pageUrl) && pageUrl.length <= 8192) message.pageUrl = pageUrl;
+  const context = P.contextOrigin(pageUrl);
+  if (kind === 'link' && context) message.pageUrl = context;
   const reply = await ask(message, 8000);
   report(reply, url);
   return reply;
@@ -211,6 +213,7 @@ async function sendMedia(url, quality, incognito, announce) {
 }
 if (menus) menus.onClicked.addListener((info, tab) => {
   const incognito = Boolean(tab && tab.incognito);
+  if (info.menuItemId === 'ravenshelf-image') { sendToApp('link', info.srcUrl, info.pageUrl, incognito).catch(() => {}); return; }
   if (info.menuItemId === 'ravenshelf-youtube') { sendMedia(info.pageUrl, 'default', incognito, true).catch(() => {}); return; }
   const link = info.menuItemId === 'ravenshelf-link';
   if (!link && info.menuItemId !== 'ravenshelf-page') return;

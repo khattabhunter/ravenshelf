@@ -209,8 +209,8 @@ test('scans interrupted by closing the app run again on the next start', async t
   const folder = path.join(w.downloadDir, 'Game'); fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, 'part01.rar'), 'abc');
   fs.writeFileSync(w.stateFile, JSON.stringify({ settings: { downloadDir: w.downloadDir }, downloads: [
-    { id: 'interrupted', status: 'completed', folder, name: 'part01.rar', headers: {}, scan: { status: 'scanning' } },
-    { id: 'finished', status: 'completed', folder, name: 'part01.rar', headers: {}, scan: { status: 'clean', message: 'ok' } },
+    { id: 'interrupted', status: 'completed', folder, name: 'part01.rar', url: 'https://files.example.com/interrupted', sourceUrl: 'https://files.example.com/interrupted', headers: {}, scan: { status: 'scanning' } },
+    { id: 'finished', status: 'completed', folder, name: 'part01.rar', url: 'https://files.example.com/finished', sourceUrl: 'https://files.example.com/finished', headers: {}, scan: { status: 'clean', message: 'ok' } },
   ] }));
   const scanned = [];
   const manager = w.open({ scanFile: async file => { scanned.push(file); return { status: 'clean', message: 'Microsoft Defender found no threats.' }; } });

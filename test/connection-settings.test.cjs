@@ -188,8 +188,8 @@ test('scan review replaces a clean badge with a neutral alert and keeps untruste
   assert.ok(!scan.className.split(/\s+/).includes('clean'));
 });
 
-test('real applyState shows the global credential warning as text and clears it across views',()=>{
-  const f=rendererFixture(),warning=f.get('#credential-warning');
+for (const [key,selector] of [['headerStorageWarning','#credential-warning'],['stateRecoveryWarning','#state-recovery-warning']]) test(`real applyState shows ${key} as text and preserves it across partial updates`,()=>{
+  const f=rendererFixture(),warning=f.get(selector);
   Object.defineProperty(warning,'innerHTML',{set(){assert.fail('Credential warnings must never be rendered as HTML');}});
   warning.insertAdjacentHTML=()=>assert.fail('Credential warnings must never be inserted as HTML');
   f.run('applyState({})');assert.equal(warning.hidden,true);assert.equal(warning.textContent,'');
@@ -197,12 +197,12 @@ test('real applyState shows the global credential warning as text and clears it 
   f.context.warningPayload=payload;f.context.window.warningPayloadRan=false;
   for(const view of ['discover','downloads','library','settings']){
     f.context.warningView=view;
-    f.run('currentView=warningView;applyState({headerStorageWarning:warningPayload})');
+    f.run(`currentView=warningView;applyState({${key}:warningPayload})`);
     assert.equal(warning.hidden,false,view);assert.equal(warning.textContent,payload);
     f.run('applyState({settings:{connectionsPerFile:2}})');
     assert.equal(warning.hidden,false,'unrelated partial updates must preserve the warning');
     assert.equal(warning.textContent,payload);
-    f.run('applyState({headerStorageWarning:""})');
+    f.run(`applyState({${key}:""})`);
     assert.equal(warning.hidden,true,view);assert.equal(warning.textContent,'');
   }
   assert.equal(f.context.window.warningPayloadRan,false);
