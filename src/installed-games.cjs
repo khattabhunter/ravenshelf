@@ -213,7 +213,10 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   let discovery={steamRoots:[],uninstall:[],gog:[]};
   try{discovery=await runPowerShell({action:'discover'});}catch(e){warnings.add(scanWarning(e));}
   const roots=[...(discovery.steamRoots||[]),path.join(process.env['ProgramFiles(x86)']||'C:\\Program Files (x86)','Steam')];
-  for(const extra of extraFolders){const p=validLocalPath(extra);if(!p)throw new Error('Choose a local game or library folder, not a whole drive or network share.');if(fs.existsSync(path.join(p,'steamapps')))roots.push(p);}
+  // A saved folder that can't be scanned (a whole drive or a network share) is
+  // skipped with a note, so it never stops the whole scan.
+  const usable=[];
+  for(const extra of extraFolders){const p=typeof extra==='string'&&!extra.split(/[\\/]/).some(part=>/[. ]$/.test(part))?validLocalPath(extra):null;if(!p){warnings.add('Choose a local game or library folder, not a whole drive or network share.');continue;}usable.push(extra);if(fs.existsSync(path.join(p,'steamapps')))roots.push(p);}
   const steamRoots=new Map();
   for(const candidate of roots){const root=safeDirectory(candidate);if(!root)continue;steamRoots.set(keyPath(root),root);
     try{for(const lib of libraryRootsFromVdf(readSmall(path.join(root,'steamapps','libraryfolders.vdf')))){const p=safeDirectory(lib);if(p)steamRoots.set(keyPath(p),p);}}catch{}
@@ -233,9 +236,9 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   if(stale)warnings.add(`${stale} stale game registrations pointed to missing folders and were not counted as installed.`);
   progress('Checking executable version information…');
   for(const game of games){if(Date.now()>context.deadline)break;game.candidates=findExecutables(game.installPath,game.title,context);if(game.executable&&inside(game.installPath,game.executable)&&!BAD_EXE.test(path.basename(game.executable)))game.candidates=[game.executable,...game.candidates.filter(x=>x!==game.executable)].slice(0,3);}
-  const folderRoots=[path.join((process.env.SystemDrive||'C:')+path.sep,'Games'),...[...steamRoots.values()].map(root=>path.join(root,'steamapps','common')),...extraFolders];
+  const folderRoots=[path.join((process.env.SystemDrive||'C:')+path.sep,'Games'),...[...steamRoots.values()].map(root=>path.join(root,'steamapps','common')),...usable];
   for(const raw of folderRoots){const root=safeDirectory(raw);if(!root)continue;if(Date.now()>context.deadline)break;locations.add(root);
-    const isExtra=extraFolders.some(x=>keyPath(x)===keyPath(root));
+    const isExtra=usable.some(x=>keyPath(x)===keyPath(root));
     const entries=directoryEntries(root),direct=entries.some(x=>x.isFile()&&/\.exe$/i.test(x.name)&&!BAD_EXE.test(x.name));
     const looksLikeGame=direct||entries.some(x=>x.isDirectory()&&/^(?:Engine|Binaries|bin|bin64|Win64)$/i.test(x.name));
     const folders=isExtra&&looksLikeGame?[root]:entries.filter(x=>x.isDirectory()&&!x.isSymbolicLink()&&!SKIP_DIR.test(x.name)).slice(0,100).map(x=>path.join(root,x.name));

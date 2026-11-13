@@ -43,7 +43,7 @@ internal static class RavenshelfUpdater
     static void ValidateSegment(string segment)
     {
         if (segment.Length == 0 || segment == "." || segment == ".." || segment.EndsWith(".") || segment.EndsWith(" ") ||
-            segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || Regex.IsMatch(segment, @"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)", RegexOptions.IgnoreCase)) throw Invalid();
+            segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || Regex.IsMatch(segment, @"^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) throw Invalid();
     }
     static void ValidatePathText(string value)
     {

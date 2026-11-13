@@ -4,6 +4,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
 const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
+const {gameFolder}=require('./library-state.cjs');
 const {safeURL}=require('./net.cjs');
 const {imageResponse}=require('./image-loader.cjs');
 const {createHeaderVault}=require('./header-vault.cjs');
@@ -98,7 +99,7 @@ function compactGame(value){
   let url;try{url=safeURL(value.url);}catch{return null;}
   if(url.hostname!=='fitgirl-repacks.site')return null;
   let image='';try{image=value.image?safeURL(value.image).href:'';}catch{}
-  return {id:String(value.id||url.pathname).slice(0,1000),url:url.href,title:String(value.title||'Untitled game').slice(0,500),image,
+  return {id:String(value.id||url.pathname).slice(0,1000),url:url.href,title:String(value.title||'Untitled game').replace(/[\0\r\n]+/g,' ').slice(0,500),image,
     repackSize:String(value.repackSize||'').slice(0,100),originalSize:String(value.originalSize||'').slice(0,100),date:String(value.date||'').slice(0,100),genres:String(value.genres||'').slice(0,300),steamAppId:/^\d{1,12}$/.test(String(value.steamAppId))?String(value.steamAppId):null};
 }
 function compactGames(games,limit=1000){
@@ -254,6 +255,8 @@ app.whenReady().then(async()=>{
     const result=await localDialog.showOpenDialog(win,{title:'Choose an installed game or game library folder',properties:['openDirectory']});
     if(result.canceled)return null;
     const folder=result.filePaths[0],folders=Array.isArray(manager.settings.gameFolders)?manager.settings.gameFolders:[];
+    // The scan reads only local folders; a network share is refused here, not saved and dropped later.
+    if(!gameFolder(folder))throw new Error('Choose a local game or library folder, not a whole drive or network share.');
     if(folders.length>=20&&!folders.some(p=>p.toLowerCase()===folder.toLowerCase()))throw new Error('You can scan up to 20 custom game folders.');
     if(!folders.some(p=>p.toLowerCase()===folder.toLowerCase()))manager.updateSettings({gameFolders:[...folders,folder]});
     // Finish any in-progress scan before rescanning with the newly chosen path.
@@ -304,7 +307,7 @@ app.whenReady().then(async()=>{
     }
     if(Array.isArray(patch?.favorites))changes.favorites=compactGames(patch.favorites);
     if(Array.isArray(patch?.collections)){
-      const seen=new Set();changes.collections=patch.collections.slice(0,100).filter(c=>c&&typeof c.id==='string'&&/^[\w-]{1,100}$/.test(c.id)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,name:String(c.name||'My collection').trim().slice(0,80)||'My collection',games:compactGames(c.games,500)}));
+      const seen=new Set();changes.collections=patch.collections.slice(0,100).filter(c=>c&&typeof c.id==='string'&&/^[\w-]{1,100}$/.test(c.id)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,name:String(c.name||'My collection').replace(/[\0\r\n]+/g,' ').trim().slice(0,80)||'My collection',games:compactGames(c.games,500)}));
     }
     manager.updateSettings(changes);features.configure(changes);return appState();
   });

@@ -7,8 +7,8 @@ const {safeName,folderName,isWindowsDeviceName}=require('../src/safe-name.cjs');
 const {parseManifest}=require('../src/integrity-worker.cjs');
 const {scanConfiguredArchives}=require('../src/download-storage.cjs');
 const {createDownloadCleanup}=require('../src/download-cleanup.cjs');
-const unsafe=['con .txt','NUL   .rar','aux .zip','Prn  .bin','COM1 .7z','LPT0 .bin','COM¹ .rar','lpt² .txt','COM³'];
-const normal=['con x.txt','conx .txt','com10 .txt','my con .rar','con-file .txt'];
+const unsafe=['con .txt','NUL   .rar','aux .zip','Prn  .bin','COM1 .7z','LPT0 .bin','COM¹ .rar','lpt² .txt','COM³','CONIN$','conout$ .txt','Conin$.log'];
+const normal=['con x.txt','conx .txt','com10 .txt','my con .rar','con-file .txt','conin.txt','conout.log','conin$x.txt','console.txt','connect.txt'];
 
 test('Windows device aliases are prefixed for new downloads and unchanged ordinary names remain stable',()=>{
  for(const name of unsafe){assert.equal(isWindowsDeviceName(name),true,name);assert.ok(safeName(name).startsWith('_'),name);assert.equal(safeName(safeName(name)),safeName(name));}
@@ -48,4 +48,15 @@ test('cleanup rejects device aliases before filesystem access while ordinary bro
  assert.equal(unsafeReads,0);
  const preview=await cleanup.preview(['normal']);assert.equal(preview.items.length,1);assert.equal(preview.warnings.length,0);
  const result=await cleanup.deletePreview({ids:['normal'],token:preview.token});assert.deepEqual(result.removedIds,['normal']);assert.equal(result.bytesFreed,7);
+});
+
+test('the updater helper refuses exactly the device names the app refuses',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'..','src','updater-helper.cs'),'utf8');
+ const cs=/Regex\.IsMatch\(segment, @"([^"]+)", RegexOptions\.IgnoreCase \| RegexOptions\.CultureInvariant\)/.exec(source);assert.ok(cs,'the C# device-name pattern is found');
+ const js=/\/\^\(\?:(.+?)\) \*\(\?:\\\.\|\$\)\/i\.test/.exec(fs.readFileSync(path.join(__dirname,'..','src','safe-name.cjs'),'utf8'));assert.ok(js,'the JavaScript device-name pattern is found');
+ // The same alternatives and ending, written for each language.
+ assert.equal(cs[1],'^('+js[1]+') *(?:\\.|$)');
+ const csPattern=new RegExp(cs[1],'i');
+ for(const name of unsafe)assert.equal(csPattern.test(name),true,name);
+ for(const name of normal)assert.equal(csPattern.test(name),false,name);
 });

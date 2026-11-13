@@ -4,9 +4,10 @@
 // that judges a file by its name judges this form of it, so the name that was
 // checked is the name that is saved.
 // Windows also treats spaces before a device's extension and superscript
-// port digits as device names. Readers and cleanup must reject the same names
-// the downloader prefixes, without normalizing an existing path into another.
-const isWindowsDeviceName=value=>typeof value==='string'&&/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)/i.test(value);
+// port digits as device names, and CONIN$ and CONOUT$ name the console.
+// Readers and cleanup must reject the same names the downloader prefixes,
+// without normalizing an existing path into another.
+const isWindowsDeviceName=value=>typeof value==='string'&&/^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)/i.test(value);
 function safeName(value,fallback='download') {
   let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
   if(!s || s==='.' || s==='..') s=fallback;
