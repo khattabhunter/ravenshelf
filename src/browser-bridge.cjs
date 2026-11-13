@@ -15,8 +15,9 @@ const {inspectLink,assessDownload,nameReasons,nameFromURL}=require('./link-safet
 const {hashFile}=require('./virustotal.cjs');
 const {fromNexus,modFolder:gameFolder,MODS_FOLDER}=require('./mods.cjs');
 const {safeName,folderName}=require('./safe-name.cjs');
+const {PASTE_HOSTS,PIXELDRAIN_HOSTS}=require('./hosts.cjs');
 
-const PROVIDER_ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com','paste.fitgirl-repacks.site'];
+const PROVIDER_ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com',...PIXELDRAIN_HOSTS,...PASTE_HOSTS];
 const MAX_PENDING=50;
 const CAPTURE_TTL_MS=60*60*1000;
 const FINISHED_TTL_MS=10*60*1000;

@@ -2,6 +2,9 @@
 const {MESSAGES:TOOL_MESSAGES}=require('./media-tools.cjs');
 const {MESSAGES:MEDIA_MESSAGES}=require('./media-downloads.cjs');
 const {LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_MOVED_NOTE:MOD_LINK_MOVED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED}=require('./mods.cjs');
+const {MESSAGES:PIXELDRAIN_MESSAGES}=require('./pixeldrain.cjs');
+const {MESSAGES:MULTIUP_MESSAGES}=require('./multiup.cjs');
+const {CLOSED_HOSTS}=require('./hosts.cjs');
 
 // Only developer-authored messages cross the main-process error boundary.
 // Do not redact arbitrary exception text: paths, credentials and response data
@@ -162,7 +165,10 @@ const MESSAGES=new Map([
   // Fixed messages of the YouTube helper programs and yt-dlp runner.
   ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES),
   // Fixed messages about a mod file's download link.
-  MOD_LINK_EXPIRED,MOD_LINK_MOVED,MOD_LINK_DROPPED
+  MOD_LINK_EXPIRED,MOD_LINK_MOVED,MOD_LINK_DROPPED,
+  // Fixed messages about PixelDrain, MultiUpload and hosts that have shut down.
+  ...Object.values(PIXELDRAIN_MESSAGES),...Object.values(MULTIUP_MESSAGES),...CLOSED_HOSTS.map(entry=>entry.message),
+  'Only the first 20 PixelDrain lists were expanded.','Only the first 500 MultiUpload files were looked up.'
 ].map(message=>[message,message]));
 // The connector check failing means this copy of the app was altered or damaged.
 const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';

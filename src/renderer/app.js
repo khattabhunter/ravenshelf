@@ -3,6 +3,8 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const api = window.atlas;
+// Hosts whose manual steps open in Ravenshelf's protected window.
+const PROTECTED_HOSTS = ['FuckingFast', 'DataNodes', 'FileKeeper'];
 // The window's language, English or Arabic, with the texts of that language
 // (see i18n.js). The main process serves both with the page.
 const i18n = globalThis.RavenshelfI18n.createTranslator(globalThis.RAVENSHELF_LOCALE);
@@ -437,6 +439,8 @@ function renderGameDetails(game) {
     panel.append(el('p', 'warning-note', t('No supported file-host links were found on this page. Open the source page to inspect the available links, or import a link set.')));
     panel.append(button(t('Import links'), 'button secondary', 'plus', () => { $('#game-dialog').close(); openImport(); }));
   }
+  const closedMirrors = (Array.isArray(game.closedMirrors) ? game.closedMirrors : []).filter(name => typeof name === 'string').slice(0, 5);
+  if (closedMirrors.length) panel.append(el('p', 'small-text closed-mirrors', t('Not offered because these hosts have shut down: {hosts}.', { hosts: joinLabels(closedMirrors) })));
   panel.append(results); body.append(panel);
   const installation = el('details', 'installation-section');
   installation.append(el('summary', '', t('Installation notes')));
@@ -501,7 +505,7 @@ function renderCheckedLinks(container, links, warnings, title, preflight = null)
   const ready = links.filter(link => link.status === 'ready');
   const manual = links.filter(link => link.status === 'manual');
   const browserSteps = manual.filter(link => /browser verification|browser check|captcha|challenge|browser (?:download )?steps?|requires (?:a )?browser/i.test(link.message || ''));
-  const missing = links.filter(link => link.status === 'unavailable' && /not found|deleted|HTTP (?:404|410)\b/i.test(link.message || ''));
+  const missing = links.filter(link => link.status === 'unavailable' && /not found|deleted|removed|closed in|shut down|HTTP (?:404|410)\b/i.test(link.message || ''));
   const unverified = links.filter(link => link.status !== 'ready' && !browserSteps.includes(link) && !missing.includes(link));
   const summary = el('div', 'links-summary');
   summary.append(el('span', 'result-chip', tn(ready.length, '{n} ready', '{n} ready')));
@@ -545,7 +549,9 @@ function renderCheckedLinks(container, links, warnings, title, preflight = null)
     copy.append(name, el('div', 'link-message', link.message ? localMessage(link.message) : status === 'ready' ? (localMessage(link.host) || t('Direct link')) + ' · ' + t('Ready') : status === 'manual' ? t('Open the protected host window to continue.') : t('This link could not be verified.')));
     row.append(marker, copy);
     if (link.size) row.append(el('span', 'link-size', formatBytes(link.size)));
-    if (status === 'manual') row.append(button(t('Open protected host'), 'text-button', 'external', () => attempt(() => api.openHost({ url: link.sourceUrl || link.url, gameTitle: title }))));
+    // FuckingFast, DataNodes and FileKeeper open in Ravenshelf's protected window; other hosts, such as PixelDrain, in your browser.
+    if (status === 'manual' && PROTECTED_HOSTS.includes(link.host)) row.append(button(t('Open protected host'), 'text-button', 'external', () => attempt(() => api.openHost({ url: link.sourceUrl || link.url, gameTitle: title }))));
+    else if (status === 'manual') row.append(button(t('Open in browser'), 'text-button', 'external', () => attempt(() => api.openExternal(link.sourceUrl || link.url))));
     list.append(row);
   });
   wrapper.append(list);

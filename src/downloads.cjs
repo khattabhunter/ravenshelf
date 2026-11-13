@@ -15,6 +15,8 @@ const {MEDIA_FOLDER,QUALITIES,VIDEO_ID,canonicalUrl,cleanTitle}=require('./youtu
 const {removeMediaWorkspace}=require('./media-downloads.cjs');
 const {SITE:MOD_SITE,MODS_FOLDER,modFolder,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_LINK_REFUSED,LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED,assertFileServer}=require('./mods.cjs');
 const {safeName,folderName:safeFolderName}=require('./safe-name.cjs');
+const {oneConnection}=require('./hosts.cjs');
+const {MESSAGES:PIXELDRAIN,downloadRefusal}=require('./pixeldrain.cjs');
 const APP_VERSION=require('../package.json').version;
 // YouTube jobs waiting or running at once; more are refused until some finish.
 const MAX_MEDIA_JOBS=50;
@@ -313,7 +315,7 @@ class DownloadManager extends EventEmitter {
     d.status='downloading';d.error='';d.speed=0;d.connectionMode='checking';d.connectionNote='';d.activeConnections=0;this.changed();
     const partial=path.join(d.folder,d.name+'.atlas-part'), final=path.join(d.folder,d.name);
     // Nexus Mods serves free accounts one connection per file, so mod files never use more.
-    const workspace=workspaceFor(partial,d.id),connections=d.mod?1:Math.min(normalizeConnections(this.settings.connectionsPerFile),this.hostBackoff.policy(d.url).connectionLimit);
+    const workspace=workspaceFor(partial,d.id),connections=d.mod||oneConnection(d.url)?1:Math.min(normalizeConnections(this.settings.connectionsPerFile),this.hostBackoff.policy(d.url).connectionLimit);
     fs.mkdirSync(d.folder,{recursive:true});
     let offset=0,progressFrom=null;
     let lastActivity=Date.now(),intentionalWaits=0;
@@ -434,9 +436,14 @@ class DownloadManager extends EventEmitter {
           res=await request(headers);responseBody=res.body;
         }
       }
-      d.connectionMode='single';if(!d.connectionNote)d.connectionNote=d.mod?ONE_CONNECTION_NOTE:connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
+      d.connectionMode='single';if(!d.connectionNote)d.connectionNote=d.mod?ONE_CONNECTION_NOTE:oneConnection(d.url)?PIXELDRAIN.note:connections===1?'One connection selected.':offset?'Resuming an existing download with one connection.':'This file uses one connection.';
       // A mod file's link that Nexus Mods no longer accepts: say what to do, not just a number.
-      if(!res.ok){await res.body?.cancel();throw new Error(d.mod&&MOD_LINK_REFUSED.includes(res.status)?MOD_LINK_EXPIRED:`Host returned HTTP ${res.status}. Check the source link or retry.`);}
+      if(!res.ok){
+        // PixelDrain says why it refused (a captcha, its free limit); only its refusal code is read.
+        const refused=oneConnection(d.url)?await downloadRefusal(res):null;
+        if(!refused)try{await res.body?.cancel();}catch{/* The refusal was already read. */}
+        throw new Error(refused||(d.mod&&MOD_LINK_REFUSED.includes(res.status)?MOD_LINK_EXPIRED:`Host returned HTTP ${res.status}. Check the source link or retry.`));
+      }
       const encoding=res.headers.get('content-encoding');
       if(encoding&&encoding.toLowerCase()!=='identity'){await res.body?.cancel();throw new Error('Host ignored the uncompressed transfer request. Use another mirror to preserve reliable byte ranges.');}
       const type=(res.headers.get('content-type')||'').toLowerCase();
