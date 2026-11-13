@@ -227,8 +227,24 @@ test('a MultiUpload copy must be a link to one file, and lookups that fail keep 
     throw new Error('unexpected '+url);
   });
   const result=await providers.expandLinks([`https://multiup.io/download/${HASH}/a`,`https://multiup.io/download/${'d'.repeat(32)}/b`,'https://pixeldrain.com/l/Slow1234'].join('\n'));
-  assert.deepEqual(plain(result.links).map(link=>link.url),['https://datanodes.to/dn1/Game.part1.rar',`https://multiup.io/download/${'d'.repeat(32)}/b`],'a PixelDrain list is not taken as a copy');
+  assert.deepEqual(plain(result.links).map(link=>link.url),['https://datanodes.to/dn1/Game.part1.rar',`https://multiup.io/download/${'d'.repeat(32)}/b`,'https://pixeldrain.com/l/Slow1234'],'a PixelDrain list is not taken as a copy; a list that could not be read stays');
   assert.deepEqual(plain(result.warnings),[multiup.MESSAGES.failed,pixeldrain.MESSAGES.failed]);
+});
+
+test('a game page with one host is expanded as if that host had been chosen; a PixelDrain list that is gone is left out',async()=>{
+  const html=`<article><h1 class="entry-title"><a href="https://fitgirl-repacks.site/one/">One</a></h1><div class="entry-content"><h3>#1 One</h3>
+    <a href="https://multiup.io/download/${HASH}/Game.part1.rar">Filehoster: MultiUpload</a></div></article>`;
+  const providers=providersFixture(async url=>{
+    if(url==='https://fitgirl-repacks.site/one/')return page(html);
+    if(url===`https://multiup.io/en/mirror/${HASH}`)return page(mirrorPage([['datanodes.to','https://datanodes.to/dn1/Game.part1.rar']]));
+    if(url==='https://pixeldrain.com/api/list/Gone1234')return json({success:false,value:'not_found'},404);
+    throw new Error('unexpected '+url);
+  });
+  const one=await providers.expandLinks('https://fitgirl-repacks.site/one/');
+  assert.deepEqual(plain(one.links).map(link=>[link.host,link.url]),[['DataNodes','https://datanodes.to/dn1/Game.part1.rar']]);
+  assert.equal(plain(one.warnings).some(warning=>/alternative mirrors/.test(warning)),false,'one host is not a choice');
+  const gone=await providers.expandLinks('https://pixeldrain.com/l/Gone1234');
+  assert.deepEqual(plain(gone.links),[]);assert.deepEqual(plain(gone.warnings),[pixeldrain.MESSAGES.missing]);
 });
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));

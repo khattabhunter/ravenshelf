@@ -110,13 +110,13 @@ test('torrent names made to look like something else are refused: hidden text, d
   const sigma=torrentFile(multi([[['\u03c3.bin'],1],[['\u03c2.bin'],1]]));
   assert.throws(()=>magnet.readTorrent(sigma.buffer,sigma.infoHash),{message:magnet.MESSAGES.names});
   // Ordinary game files are fine, programs included.
-  const fine=torrentFile(multi([[['setup.exe'],1],[['fg-01.bin'],1],[['Redist','vc_redist.x64.exe'],1],[['Name with  two spaces.txt'],1],[['\u0627\u0644\u0644\u0639\u0628\u0629.bin'],1]]));
-  assert.equal(magnet.readTorrent(fine.buffer,fine.infoHash).files.length,5);
+  const fine=torrentFile(multi([[['setup.exe'],1],[['fg-01.bin'],1],[['Redist','vc_redist.x64.exe'],1],[['Name with  two spaces.txt'],1],[['\u0627\u0644\u0644\u0639\u0628\u0629.bin'],1],[['\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645.bin'],1]]));
+  assert.equal(magnet.readTorrent(fine.buffer,fine.infoHash).files.length,6,'a Persian name with a zero-width non-joiner is fine');
 });
 
 test('magnet trackers on this PC or the home network are left out; hidden text is taken out of the name',()=>{
   const hash='0123456789abcdef0123456789abcdef01234567';
-  const trackers=['udp://127.0.0.1:53','http://192.168.1.1/cgi?x=1','http://[::1]/a','udp://10.1.2.3:6969','http://169.254.1.1/','http://localhost/a','http://router/a','http://nas.local/a','http://box.lan/a','http://printer.home.arpa/a','http://tracker.localhost/a','udp://tracker.example.org:1337/announce','http://93.184.216.34/announce'];
+  const trackers=['udp://127.1:80','udp://0177.0.0.1:1','udp://192.168.001.001:2','udp://[::ffff:127.0.0.1]:3','udp://127.0.0.1:53','http://192.168.1.1/cgi?x=1','http://[::1]/a','udp://10.1.2.3:6969','http://169.254.1.1/','http://localhost/a','http://router/a','http://nas.local/a','http://box.lan/a','http://printer.home.arpa/a','http://tracker.localhost/a','udp://tracker.example.org:1337/announce','http://93.184.216.34/announce'];
   const read=magnet.parseMagnet(`magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent('Game\u202e\u200b Name')}`+trackers.map(tracker=>'&tr='+encodeURIComponent(tracker)).join(''));
   assert.deepEqual(read.trackers,['udp://tracker.example.org:1337/announce','http://93.184.216.34/announce']);
   assert.equal(read.name,'Game Name');
@@ -293,6 +293,26 @@ test('with no sharing time, a moment of aria2 still sharing is not reported as s
   const shared=[];
   assert.deepEqual(await engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir:path.join(root,'w'),shareMinutes:0},{onSharing:minutes=>shared.push(minutes)}),{complete:true,interrupted:false});
   assert.deepEqual(shared,[]);
+});
+
+test('a hung aria2 is stopped within seconds when a sharing torrent is stopped, and its DHT file goes when it exits by itself',async t=>{
+  const {buffer,infoHash}=torrentFile(multi());
+  const read=magnet.readTorrent(buffer,infoHash);
+  const fake=fakeAria2({share:1e9}),{engine,root}=engineFor(t,fake),dir=path.join(root,'w');fs.mkdirSync(dir);
+  const original=fake.fetch;
+  engine.rpcFetch=async(url,init)=>{const body=JSON.parse(init.body);if(['aria2.forceRemove','aria2.removeDownloadResult'].includes(body.method))return new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(init.signal.reason),{once:true}));return original(url,init);};
+  const ctl=new AbortController(),started=Date.now();
+  // The one-second limits use timers that do not keep a test process alive, as they would not keep the app alive either.
+  const alive=setInterval(()=>{},50);t.after(()=>clearInterval(alive));
+  assert.deepEqual(await engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir,shareMinutes:15},{signal:ctl.signal,onSharing:()=>ctl.abort()}),{complete:true,interrupted:true});
+  clearInterval(alive);
+  assert.ok(Date.now()-started<8000,'stopped within seconds');assert.equal(engine.running,false);
+  // aria2 ending on its own (a crash) also takes its DHT file away.
+  const crash=fakeAria2(),second=engineFor(t,crash),state=path.join(second.root,'state');
+  await second.engine.start();fs.writeFileSync(path.join(state,'dht.dat'),'x');
+  crash.child.exitCode=1;crash.child.emit('exit',1);
+  await tick(50);
+  assert.equal(fs.existsSync(path.join(state,'dht.dat')),false);
 });
 
 test('a start while aria2 is stopping waits for the stop, then starts aria2 again',async t=>{

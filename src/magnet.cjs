@@ -24,7 +24,8 @@ const BASE32='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const TRACKER_SCHEMES=new Set(['udp:','http:','https:']);
 const controls=/[\x00-\x1f\x7f]/g,CONTROL=/[\x00-\x1f\x7f]/;
 // Invisible format characters (text-direction marks, zero-width characters) can make a name read as something else.
-const FORMAT=/\p{Cf}/u,FORMATS=/\p{Cf}/gu;
+// Zero-width joiner and non-joiner are kept: Persian, Kurdish and Urdu names written in Arabic letters need them.
+const FORMAT=/(?![\u200c\u200d])\p{Cf}/u,FORMATS=/(?![\u200c\u200d])\p{Cf}/gu;
 // Names a tracker on this PC or the home network would have; they are never contacted.
 const LOCAL_NAME=/(?:^|\.)(?:localhost|local|lan|home|internal|intranet|corp|localdomain|home\.arpa)$/i;
 
@@ -57,7 +58,9 @@ function parseMagnet(value){
     let u;try{u=new URL(raw);}catch{continue;}
     if(!TRACKER_SCHEMES.has(u.protocol)||u.username||u.password||!u.hostname||u.href.length>MAX_TRACKER)continue;
     // Only public trackers: not this PC, the home network or a name without a dot.
-    const host=u.hostname.replace(/^\[|\]$/g,'').replace(/\.$/,'');
+    // udp: is not a web scheme, so its host is read the way a web address's is
+    // ("127.1" and "0177.0.0.1" are 127.0.0.1) before it is judged.
+    let host;try{host=new URL('http://'+u.host).hostname.replace(/^\[|\]$/g,'').replace(/\.$/,'');}catch{continue;}
     if(net.isIP(host)?!isPublicIP(host):(!host.includes('.')||LOCAL_NAME.test(host)))continue;
     if(!trackers.includes(u.href))trackers.push(u.href);
   }

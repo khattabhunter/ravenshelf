@@ -160,3 +160,13 @@ test('redirect loops stop after the hop limit',async()=>{
   const result=await inspectLink('https://loop.example/a',{fetcher,maxHops:5});
   assert.equal(result.status,'unavailable');assert.match(result.message,/too many/);assert.equal(calls.length,6);
 });
+
+test('a browser download from a host that has shut down is not contacted, also after a redirect',async()=>{
+  const {fetcher,calls}=fetcherFrom({'https://short.example/x':redirect('https://www.zippyshare.com/v/abc/file.html')});
+  const viaRedirect=await inspectLink('https://short.example/x',{fetcher});
+  assert.equal(viaRedirect.status,'unavailable');assert.match(viaRedirect.message,/^ZippyShare closed in March 2023/);
+  assert.deepEqual(calls.map(call=>call.url),['https://short.example/x']);
+  const direct=await inspectLink('https://letsupload.io/file/abc',{fetcher});
+  assert.equal(direct.status,'unavailable');assert.match(direct.message,/^LetsUpload has shut down/);
+  assert.equal(calls.length,1,'nothing more was requested');
+});

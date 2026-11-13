@@ -251,12 +251,14 @@ async function expandLinks(text) {
   const found=[],warnings=[],seen=new Set(),pastes=new Set(),notices=new Set(),fromPage=new Set(),pageHost=new Map();
   const collect=url=>{ if(!seen.has(url)){seen.add(url);found.push(url);} };
   const notice=message=>{ if(!notices.has(message)){notices.add(message);warnings.push(message);} };
-  for(const raw of extractUrls(text)) {
+  // One pasted link: a paste is decrypted, a game page gives its hosts' links.
+  // A page with one host is expanded as if that host had been chosen.
+  const take=async(raw,{page=true}={})=>{
     const url=validUrl(raw);
     if(isPasteHost(url.hostname)) {
-      if(pastes.has(url.href)) continue;
+      if(pastes.has(url.href)) return true;
       pastes.add(url.href);
-      if(pastes.size>20) {warnings.push('Only the first 20 paste pages were expanded.');break;}
+      if(pastes.size>20) {warnings.push('Only the first 20 paste pages were expanded.');return false;}
       try {
         if(!/^[a-f0-9]{16}$/i.test(url.search.slice(1)) || !url.hash) throw new Error('A paste link needs its complete # decryption key.');
         const key=url.hash.slice(1); url.hash='';
@@ -267,18 +269,26 @@ async function expandLinks(text) {
         const notes=decrypted.split(/\r?\n/).filter(line=>line.trim()&&!/https?:\/\//i.test(line)).join('\n').replace(/^#+\s*/gm,'').trim();
         if(notes) warnings.push(`Source notes: ${notes.slice(0,2000)}`);
       } catch(error) { warnings.push(`Could not expand paste: ${publicErrorMessage(error,'paste')}`); }
-    } else if(url.hostname==='fitgirl-repacks.site') {
+    } else if(page&&url.hostname==='fitgirl-repacks.site') {
       try {
         const game=await getGame(url.href);
+        if(game.groups.length===1){
+          for(const link of game.groups[0].urls){ try{ if(!await take(link,{page:false})) break; }catch{} if(found.length>=1000) break; }
+          return true;
+        }
         // With several hosts to choose from, MultiUpload and PixelDrain-list links
         // are looked up only after the user picks that host, so that their copies
         // do not join another host's group (and nothing is requested before then).
         // Each link keeps its host group's name (a paste link under "PixelDrain" is PixelDrain's).
-        for(const group of game.groups) for(const link of group.urls) { collect(link); if(!pageHost.has(link)) pageHost.set(link,group.host); if(game.groups.length>1) fromPage.add(link); }
-        warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.');
+        for(const group of game.groups) for(const link of group.urls) { collect(link); if(!pageHost.has(link)) pageHost.set(link,group.host); fromPage.add(link); }
+        if(game.groups.length>1) warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.');
       }
       catch(error){warnings.push(publicErrorMessage(error,'getGame'));}
     } else collect(url.href);
+    return true;
+  };
+  for(const raw of extractUrls(text)) {
+    if(!await take(raw)) break;
     if(found.length>=1000) break;
   }
   // Links that stand for other links: a closed host's (dropped with a note),
@@ -293,7 +303,12 @@ async function expandLinks(text) {
     if(isPixeldrainHost(host)&&pixeldrain.isPixeldrainList(url)){
       if(++lists>20)return {urls:[],note:'Only the first 20 PixelDrain lists were expanded.'};
       try{return {urls:await pixeldrain.listFiles(url,{fetcher:safeFetch,readText})};}
-      catch(error){return {urls:[],note:Object.values(pixeldrain.MESSAGES).includes(error?.message)?error.message:pixeldrain.MESSAGES.failed};}
+      catch(error){
+        const message=Object.values(pixeldrain.MESSAGES).includes(error?.message)?error.message:pixeldrain.MESSAGES.failed;
+        // A list that is gone is left out; one PixelDrain would not show now stays, to open in the browser.
+        const gone=[pixeldrain.MESSAGES.missing,pixeldrain.MESSAGES.removed,pixeldrain.MESSAGES.virus].includes(message);
+        return {urls:gone?[]:[url],note:message};
+      }
     }
     if(isMultiupHost(host)&&multiup.multiupLink(url)){
       if(++mirrorPages>500)return {urls:[],note:'Only the first 500 MultiUpload files were looked up.'};

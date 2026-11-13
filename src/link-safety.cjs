@@ -6,6 +6,7 @@
 const net=require('node:net');
 const {safeFetch,safeURL,isPublicIP}=require('./net.cjs');
 const {filenameFromHeaders}=require('./providers.cjs');
+const {closedHost}=require('./hosts.cjs');
 
 const SNIFF_BYTES=4096;
 const PROGRAMS=new Set(['exe','msi','msix','msixbundle','appx','appxbundle','appinstaller','com','scr','pif','cpl']);
@@ -130,6 +131,9 @@ async function inspectLink(start,{fetcher=safeFetch,referer=null,lookupHost=()=>
     chain.push({url:current.href,host:current.hostname.toLowerCase(),listed:listed||null});
     // Never contact a listed host, not even to look at its response.
     if(listed)return result('blocked',`${current.hostname} is on Ravenshelf’s list of ${listed.label}.`);
+    // A host that has shut down is not contacted; its old name may belong to someone else now.
+    const gone=closedHost(current.hostname);
+    if(gone)return result('unavailable',gone.message);
     if(current.protocol==='http:')return result('manual','This link is not encrypted (HTTP), so Ravenshelf will not download it.',{insecure:true});
     if(privateDestination(current.href))return result('blocked','The link tried to reach a device on your own network.',{privateDestination:true});
     try{safeURL(current.href);}catch{return result('manual','This link uses an address Ravenshelf does not download from.');}

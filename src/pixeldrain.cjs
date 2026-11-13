@@ -15,7 +15,7 @@ const MESSAGES=Object.freeze({
   removed:'PixelDrain removed this file. Choose another mirror.',
   virus:'PixelDrain flagged this file as possibly harmful. Choose another mirror.',
   missing:'File not found or deleted.',
-  list:'Import this PixelDrain list to see its files first.',
+  list:'Ravenshelf couldn’t read the files of this PixelDrain list. Open it in your browser.',
   ready:'PixelDrain file found; contents have not been scanned.',
   failed:'PixelDrain did not answer as expected. Try again later or open the link in your browser.',
   note:'PixelDrain allows one connection per file.'

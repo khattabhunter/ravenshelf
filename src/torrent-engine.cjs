@@ -27,7 +27,7 @@ const MESSAGES=Object.freeze({
   missing:'This torrent’s saved file list is missing. Add it again from its magnet link.'
 });
 const ENV_KEEP=['systemroot','windir'];
-const START_TIMEOUT_MS=15000,RPC_TIMEOUT_MS=15000,MAX_ANSWER=8*1024*1024,METADATA_TIMEOUT_MS=10*60*1000,IDLE_MS=60*1000,POLL_MS=1000;
+const DROP_MS=5000,START_TIMEOUT_MS=15000,RPC_TIMEOUT_MS=15000,MAX_ANSWER=8*1024*1024,METADATA_TIMEOUT_MS=10*60*1000,IDLE_MS=60*1000,POLL_MS=1000;
 const STATUS_KEYS=['status','totalLength','completedLength','downloadSpeed','uploadSpeed','uploadLength','connections','numSeeders','errorCode','seeder'];
 // aria2's exit and error numbers that mean the disk, or the files on it.
 const SPACE_CODES=new Set(['9']),WRITE_CODES=new Set(['13','15','16','17','18']);
@@ -143,7 +143,7 @@ class TorrentEngine{
       try{child=this.spawnImpl(paths.aria2c,args,{cwd:temp,env:engineEnv(this.env,temp),windowsHide:true,shell:false,stdio:['ignore','ignore','ignore']});}
       catch{throw new Error(MESSAGES.start);}
       let exited=false;
-      child.once('exit',()=>{exited=true;if(this.child===child){this.child=null;this.port=0;this.secret='';}});
+      child.once('exit',()=>{exited=true;if(this.child===child){this.child=null;this.port=0;this.secret='';if(!this.starting||this.stopping)this.forgetDht().catch(()=>{});}});
       child.once('error',()=>{exited=true;});
       this.child=child;this.port=port;this.secret=secret;
       const deadline=Date.now()+this.startTimeoutMs;
@@ -190,9 +190,12 @@ class TorrentEngine{
   }
   async drop(gid,stop){
     if(!this.running)return;
-    if(stop)await this.rpc('forceRemove',[gid]).catch(()=>{});
-    for(let i=0;i<50;i++){
-      try{await this.rpc('removeDownloadResult',[gid]);return true;}catch{await delay(100);}
+    // At most five seconds in all, each call one second, so a hung aria2 is stopped soon.
+    const deadline=Date.now()+DROP_MS,quick=()=>AbortSignal.timeout(1000);
+    if(stop)await this.rpc('forceRemove',[gid],quick()).catch(()=>{});
+    while(Date.now()<deadline){
+      try{await this.rpc('removeDownloadResult',[gid],quick());return true;}
+      catch(error){if(!Number.isInteger(error?.rpcCode)||!this.running)break;await delay(100);}
     }
     // aria2 would not let go of it (still downloading or sharing): stopping
     // aria2 itself is the only sure way to end the uploading.
