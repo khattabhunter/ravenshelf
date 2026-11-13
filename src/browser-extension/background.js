@@ -170,18 +170,31 @@ const MAX_DOWNLOAD_DECISIONS = 256, MAX_FINISHED_DOWNLOADS = 4096;
 // A clock that never jumps with the system time.
 const monotonic = () => typeof performance === 'object' && performance && typeof performance.now === 'function' ? performance.now() : Date.now();
 // Firefox throws away what was downloaded when it pauses a download from a
-// server that can't resume. Such an address is not paused again for a while,
-// so starting the download again works.
-const unpausable = new Map(), UNPAUSABLE_MS = 10 * 60000, MAX_UNPAUSABLE = 100;
-function rememberUnpausable(url) {
-  unpausable.delete(url); unpausable.set(url, monotonic());
-  if (unpausable.size > MAX_UNPAUSABLE) unpausable.delete(unpausable.keys().next().value);
+// server that can't resume. Downloads from such a site are not paused again
+// for a while (they are still checked while they run), so starting one again
+// works. The sites are kept in session storage, which outlives the background
+// page being unloaded, by origin only, since file hosts sign each address.
+const UNPAUSABLE_MS = 10 * 60000, MAX_UNPAUSABLE = 100;
+function webOrigin(url) {
+  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : ''; } catch (error) { return ''; }
 }
-function isUnpausable(url) {
-  const at = unpausable.get(url);
-  if (at === undefined) return false;
-  if (monotonic() - at > UNPAUSABLE_MS) { unpausable.delete(url); return false; }
-  return true;
+function liveUntil(until, now) { return typeof until === 'number' && until > now && until - now <= UNPAUSABLE_MS; }
+async function unpausableSites() {
+  try { const saved = await withTimeout(api.storage.session.get('unpausable'), 1000); const sites = saved && saved.unpausable; return sites && typeof sites === 'object' && !Array.isArray(sites) ? sites : {}; } catch (error) { return {}; }
+}
+async function rememberUnpausable(url) {
+  const origin = webOrigin(url);
+  if (!origin) return;
+  const now = Date.now(), kept = {};
+  for (const [site, until] of Object.entries(await unpausableSites())) if (site !== origin && liveUntil(until, now)) kept[site] = until;
+  kept[origin] = now + UNPAUSABLE_MS;
+  const sites = Object.keys(kept);
+  while (sites.length > MAX_UNPAUSABLE) delete kept[sites.shift()];
+  await quiet(() => api.storage.session.set({ unpausable: kept }));
+}
+async function isUnpausable(url) {
+  const origin = webOrigin(url);
+  return Boolean(origin) && liveUntil((await unpausableSites())[origin], Date.now());
 }
 // Chrome reports a new download before it knows the file's name; the name
 // arrives with the filename event, which also holds the download. Wait this
@@ -224,7 +237,7 @@ async function handleDownload(record) {
   if (plan.kind === 'block') return decide(record.item, plan);
   const current = await currentDownload(record.id);
   if (!current || current.state !== 'in_progress' || current.paused || current.incognito || record.item.incognito || record.userChanged) return 'continue';
-  if (!record.releases.length && !isUnpausable(record.item.url)) {
+  if (!record.releases.length && !await isUnpausable(record.item.url)) {
     // Firefox, and Chromium saves without a filename event: only intercept if
     // the browser really paused. A small file may already have finished.
     record.pausing = true;
@@ -233,7 +246,7 @@ async function handleDownload(record) {
     // Firefox's pause of a download from a server that can't resume cancels
     // it and throws its data away. That was not the user: Ravenshelf is still
     // asked, and if it leaves the download to the browser, the user is told.
-    if (after && after.state === 'interrupted' && after.paused !== true) { record.discarded = true; record.userChanged = false; }
+    if (!api.downloads.onDeterminingFilename && after && after.state === 'interrupted' && after.paused !== true) { record.discarded = true; record.userChanged = false; }
     record.pausing = false;
   }
   const canTake = async () => {
@@ -270,10 +283,13 @@ function captureDownload(item, release) {
   downloadDecisions.set(item.id, record);
   handleDownload(record).catch(() => 'continue').then(async result => {
     if (result === 'continue' && record.discarded && !record.userChanged) {
-      // The browser lost this download while it was held. Firefox can start it
-      // again with Retry; the same address is not paused next time.
-      rememberUnpausable(record.item.url);
-      notify('retry-download', 'Start this download again', 'Your browser could not keep this download while Ravenshelf checked it. Choose Retry in your browser’s downloads list, or start it again.');
+      // Firefox lost this download while it was held. It can start it again
+      // with Retry, and the site's downloads are not paused next time.
+      const current = await currentDownload(record.id);
+      if (current && current.state === 'interrupted' && current.paused !== true) {
+        await rememberUnpausable(record.item.url);
+        notify(`retry-download-${record.id}`, 'Start this download again', 'Your browser could not keep this download while Ravenshelf checked it. Choose Retry in your browser’s downloads list, or start it again.');
+      }
     } else if (result === 'continue' && record.ownsPause && !record.userChanged) {
       const current = await currentDownload(record.id);
       if (heldByPause(current) && current.canResume !== false) await quiet(() => api.downloads.resume(record.id));

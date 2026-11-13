@@ -82,6 +82,7 @@ for(const mutation of ['content','replacement','hardlink'])test(`a reused recove
   try{
     assert.deepEqual(read(),bytes);assert.equal(fs.fstatSync(copy).nlink,1);
     atomicJSON(result.file,{schemaVersion:1,...result.data});assert.deepEqual(read(),bytes,'repair leaves an intact copy of the original');assert.equal(fs.fstatSync(copy).nlink,1);
+    const atPath=fs.statSync(result.recoveryFile),held=fs.fstatSync(copy);assert.deepEqual([atPath.dev,atPath.ino],[held.dev,held.ino],'and it is still the file at the copy’s name');
   }finally{fs.closeSync(copy);}
 });
 

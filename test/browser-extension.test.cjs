@@ -240,6 +240,7 @@ test('automatic capture resumes the original browser download after unavailable,
   for(const firefox of [false,true])for(const reply of [{ok:false,error:'not-running'},{ok:false,error:'invalid'},{ok:false,error:'busy'},{ok:true,action:'browser'},new Error('native unavailable')]){
     const b=fakeBrowser({firefox,native:()=>reply}),item={id:1,url:'https://cdn.example/photo.jpg',filename:'photo.jpg'};
     b.api.downloads.onCreated.emit(item);await tick(firefox?15:FILENAME_WAIT+60);
+    assert.ok(b.of('native').length>=1,'Ravenshelf was asked');
     assert.deepEqual(b.calls.filter(c=>['pause','resume','cancel','erase','removeFile'].includes(c[0])),[['pause',1],['resume',1]]);
     assert.equal(b.itemOf(1).paused,false,'the download runs again');assert.equal(b.itemOf(1).state,'in_progress');
     if(!firefox){let released=0;b.api.downloads.onDeterminingFilename.emit(item,()=>released++);await tick();assert.equal(released,1);assert.equal(b.of('native').length,1);}
@@ -324,12 +325,14 @@ test('Firefox: its own pause (reported as interrupted and paused) is not taken f
 
 test('Firefox: a pause that throws the data away is not taken for the user; Ravenshelf is still asked, and otherwise the user is told',async()=>{
   for(const [reply,late] of [[{ok:true,action:'take',id:'accepted'},false],[{ok:true,action:'block',reason:'Listed.'},false],[{ok:true,action:'browser'},false],[{ok:false,error:'not-running'},true],[{ok:true,action:'browser'},true]]){
-    const b=fakeBrowser({firefox:true,native:()=>reply});
+    // With a late change event, Ravenshelf answers later still, so the event
+    // reaches a decision that is still open.
+    const b=fakeBrowser({firefox:true,native:()=>late?new Promise(resolve=>setTimeout(()=>resolve(reply),20)):reply});
     // A server that can't resume: the pause cancels and keeps nothing. The
     // change event may come during the pause or only afterwards.
     b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);const next={state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false};
       if(late){Object.assign(b.itemOf(id),next);setTimeout(()=>b.api.downloads.onChanged.emit({id,state:{previous:'in_progress',current:'interrupted'},error:{current:'USER_CANCELED'}}),5);}else b.change(id,next);};
-    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(40);
+    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(60);
     assert.equal(b.of('native').length,1,'Ravenshelf is still asked');
     const steps=b.calls.filter(c=>['pause','resume','cancel','erase','removeFile'].includes(c[0])).map(c=>c[0]);
     const retry=b.of('notify').filter(c=>c[1]==='Start this download again');
@@ -337,11 +340,55 @@ test('Firefox: a pause that throws the data away is not taken for the user; Rave
     else if(reply.action==='block'){assert.deepEqual(steps,['pause','cancel','erase']);assert.ok(b.of('notify').some(c=>/blocked a download/.test(c[1])));assert.equal(retry.length,0);}
     else{
       assert.deepEqual(steps,['pause'],'nothing to resume, and the entry stays for Retry');assert.equal(retry.length,1,'the user is told');
-      // Starting it again: the same address is not paused this time.
-      b.api.downloads.onCreated.emit({id:2,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(40);
+      // Starting it again: the same site is not paused this time.
+      b.api.downloads.onCreated.emit({id:2,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(60);
       assert.equal(b.of('pause').length,1);assert.equal(b.of('native').length,2);assert.equal(b.calls.filter(c=>c[1]===2&&['cancel','erase','resume'].includes(c[0])).length,0);
     }
   }
+});
+
+test('Firefox: a site whose download was dropped is remembered across background restarts, by site, for ten minutes',async()=>{
+  const dropping=b=>{b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};};
+  const first=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});dropping(first);
+  first.api.downloads.onCreated.emit({id:1,url:'https://host.example/dl/one?token=a',filename:'one.zip'});await tick(40);
+  assert.equal(first.of('notify').filter(c=>c[1]==='Start this download again').length,1);
+  const saved=structuredClone(first.store.session.unpausable);
+  assert.deepEqual(Object.keys(saved),['https://host.example'],'only the site is kept, not the signed address');
+  // The background page was unloaded: a new one reads the same session storage.
+  const woken=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});dropping(woken);woken.store.session.unpausable=structuredClone(saved);
+  woken.api.downloads.onCreated.emit({id:7,url:'https://host.example/dl/two?token=b',filename:'two.zip'});await tick(40);
+  assert.equal(woken.of('pause').length,0,'a new signed address on the same site is not paused');assert.equal(woken.of('native').length,1,'but it is still checked');
+  woken.api.downloads.onCreated.emit({id:8,url:'https://other.example/file.zip',filename:'file.zip'});await tick(40);
+  assert.deepEqual(woken.of('pause'),[['pause',8]],'other sites are paused as usual');
+  // After ten minutes (or with a stored time that can't be right) the site is paused again.
+  for(const until of [Date.now()-1,Date.now()+60*60000]){
+    const later=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});later.store.session.unpausable={'https://host.example':until};
+    later.api.downloads.onCreated.emit({id:9,url:'https://host.example/dl/three',filename:'three.zip'});await tick(40);
+    assert.equal(later.of('pause').length,1,String(until));
+  }
+});
+
+test('Firefox: no Retry notice for a dropped download the user already removed',async()=>{
+  const b=fakeBrowser({firefox:true,native:()=>new Promise(resolve=>setTimeout(()=>resolve({ok:true,action:'browser'}),20))});
+  b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};
+  b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(5);
+  b.items.delete(1);b.api.downloads.search=async()=>[];
+  await tick(60);
+  assert.equal(b.of('notify').filter(c=>c[1]==='Start this download again').length,0);assert.equal(b.store.session.unpausable,undefined);
+});
+
+test('two downloads dropped at once each get their own Retry notice; Chrome interruptions never do',async()=>{
+  const b=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});
+  b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};
+  b.api.downloads.onCreated.emit({id:1,url:'https://a.example/one.zip',filename:'one.zip'});
+  b.api.downloads.onCreated.emit({id:2,url:'https://b.example/two.zip',filename:'two.zip'});await tick(60);
+  assert.equal(b.of('notify').filter(c=>c[1]==='Start this download again').length,2);
+  // Chrome only drops a download on a real interruption, which is not a pause it made.
+  const c=fakeBrowser({native:()=>({ok:true,action:'browser'})});
+  c.api.downloads.pause=async id=>{c.calls.push(['pause',id]);c.change(id,{state:'interrupted',paused:false,error:'NETWORK_FAILED',canResume:true});};
+  c.api.downloads.onCreated.emit({id:3,url:'https://a.example/three.zip',filename:'three.zip'});await tick(FILENAME_WAIT+60);
+  assert.equal(c.of('notify').filter(n=>n[1]==='Start this download again').length,0);assert.equal(c.store.session.unpausable,undefined);
+  for(const kind of ['cancel','erase','removeFile'])assert.equal(c.of(kind).length,0,kind);
 });
 
 test('Firefox: Retry during the decision wins over a late answer about the dropped download',async()=>{
