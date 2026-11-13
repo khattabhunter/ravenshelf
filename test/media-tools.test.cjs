@@ -84,6 +84,9 @@ async function root(t){
   return path.join(dir,'media-tools');
 }
 async function settled(tools){const end=Date.now()+5000;while(tools.task){if(Date.now()>end)throw new Error('Setup did not finish.');await new Promise(resolve=>setTimeout(resolve,5));}}
+// Waits for a condition instead of a fixed time, so a slow test machine
+// cannot reach the next step before setup has got that far.
+async function until(condition,message){const end=Date.now()+5000;while(!condition()){if(Date.now()>end)throw new Error(message);await new Promise(resolve=>setTimeout(resolve,5));}}
 
 test('the pinned helper programs come from their publishers’ GitHub releases with exact sizes and hashes',()=>{
   assert.deepEqual(TOOLS.map(tool=>tool.id),['yt-dlp','deno','ffmpeg']);
@@ -162,11 +165,11 @@ test('wrong sizes, wrong file types and stalled downloads are refused',async t=>
 
 test('setup can be cancelled and leaves nothing behind',async t=>{
   const dir=await root(t),{tools:list,bodies}=fixtureTools();
-  let release;const gate=new Promise(resolve=>{release=resolve;});
-  const {fetcher}=githubFetcher(bodies,{override:original=>original.endsWith('deno.zip')&&new Response(new ReadableStream({async pull(controller){await gate;controller.enqueue(new Uint8Array([0x50]));}}),{status:200})});
+  let release,asked=false;const gate=new Promise(resolve=>{release=resolve;});
+  const {fetcher}=githubFetcher(bodies,{override:original=>original.endsWith('deno.zip')&&(asked=true)&&new Response(new ReadableStream({async pull(controller){await gate;controller.enqueue(new Uint8Array([0x50]));}}),{status:200})});
   const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list});
   tools.install();
-  await new Promise(resolve=>setTimeout(resolve,50));
+  await until(()=>asked,'Deno was never requested.').catch(async error=>{tools.cancel();release();await settled(tools);throw error;});
   tools.cancel();release();await settled(tools);
   assert.deepEqual({phase:tools.snapshot().phase,message:tools.snapshot().message},{phase:'missing',message:MESSAGES.cancelled});
   assert.deepEqual(fs.readdirSync(dir),[]);
@@ -340,7 +343,7 @@ test('cancelling while parts are downloading stops every connection',async t=>{
   const {fetcher}=githubFetcher(bodies,{ranges:true,part:context=>{if(context.original!==list[1].url)return null;open++;return hangingPart(context,()=>{open--;});}});
   const tools=new MediaTools({root:dir,fetcher,platform:'win32',tools:list,...quick});
   tools.install();
-  await new Promise(resolve=>setTimeout(resolve,50));
+  await until(()=>open>=2,'several parts were open').catch(async error=>{tools.cancel();await settled(tools);throw error;});
   assert.ok(open>=2,'several parts were open');
   tools.cancel();await settled(tools);
   assert.deepEqual({phase:tools.snapshot().phase,message:tools.snapshot().message},{phase:'missing',message:MESSAGES.cancelled});

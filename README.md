@@ -4,13 +4,13 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.4)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.5)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.10.4 prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.4) and download `Ravenshelf-0.10.4-Windows.exe` from **Assets**.
+1. Open the [v0.10.5 prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.5) and download `Ravenshelf-0.10.5-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -18,7 +18,7 @@
 
 The preview is not code-signed, so Windows may show a SmartScreen notice the first time. Do not turn off Windows security protections to use Ravenshelf. Only obtain files you have permission to download.
 
-Version **0.10.4** changes how game pictures load (pictures of pages you left are cancelled, a few requests per site at a time, waiting out "too many requests" pauses, a memory-only cache) and adds **Settings → Picture loading**, a local summary that helps find out why pictures sometimes stop loading after several pages. These are improvements under test, not a confirmed fix ([release notes](docs/RELEASE-0.10.4.md)). Version 0.10.3 adds a choice to keep Ravenshelf running in the background with a tray icon, sends browser Save image, video, audio and file downloads to Ravenshelf for review, and includes fixes from independent reviews: for example, Chrome now waits for a file's real name before deciding, and a full exit can no longer hang ([release notes](docs/RELEASE-0.10.3.md)). Version 0.10.2 fixed saved lists reached through a junction and hardened the torrent tracker check ([release notes](docs/RELEASE-0.10.2.md)). Existing settings and downloads stay in place. Reload the browser extension after updating to activate its changes.
+Version **0.10.5** is a maintenance update: the app works the same as 0.10.4, and a test that could fail by chance on a slow PC was made reliable ([release notes](docs/RELEASE-0.10.5.md)). Version 0.10.4 changes how game pictures load (pictures of pages you left are cancelled, a few requests per site at a time, waiting out "too many requests" pauses, a memory-only cache) and adds **Settings → Picture loading**, a local summary that helps find out why pictures sometimes stop loading after several pages. These are improvements under test, not a confirmed fix ([release notes](docs/RELEASE-0.10.4.md)). Version 0.10.3 adds a choice to keep Ravenshelf running in the background with a tray icon, sends browser Save image, video, audio and file downloads to Ravenshelf for review, and includes fixes from independent reviews: for example, Chrome now waits for a file's real name before deciding, and a full exit can no longer hang ([release notes](docs/RELEASE-0.10.3.md)). Version 0.10.2 fixed saved lists reached through a junction and hardened the torrent tracker check ([release notes](docs/RELEASE-0.10.2.md)). Existing settings and downloads stay in place. Reload the browser extension after updating to activate its changes.
 
 Version 0.10.0 adds more ways to download: **torrents** from magnet links (off until you agree to what torrents share, with aria2 fetched once and checked), **PixelDrain** and **MultiUpload** links, and FitGirl's new paste address; ZippyShare, BayFiles and LetsUpload are named as closed instead of tried ([release notes](docs/RELEASE-0.10.0.md), [guide](docs/USER-GUIDE.md#torrent-downloads)). Version 0.9.0 added **Can you run it?**: a game's details compare its Steam requirement lists with this PC, line by line, and Ravenshelf warns before you queue files that won't fit on the download drive ([release notes](docs/RELEASE-0.9.0.md), [guide](docs/USER-GUIDE.md#can-you-run-it)). Version 0.8.0 added Arabic, chosen in **Settings → Language**, and a **Mods** page that lists the mod files you downloaded on Nexus Mods, by game ([release notes](docs/RELEASE-0.8.0.md), [Language](docs/USER-GUIDE.md#language), [Mods](docs/USER-GUIDE.md#the-mods-page)). Version 0.7.0 added a **PC specs** page that shows what is inside this PC without sending it anywhere, and files the mods you download on Nexus Mods by game ([release notes](docs/RELEASE-0.7.0.md)). Version 0.6.1 makes YouTube's one-time setup take about a minute and YouTube downloads faster ([release notes](docs/RELEASE-0.6.1.md)). Version 0.6.0 added YouTube downloads: a Ravenshelf button in YouTube's player with a choice of quality, and **Download with Ravenshelf** when you right-click a video. A one-time setup fetches the helper programs it needs from their official releases and checks every file ([release notes](docs/RELEASE-0.6.0.md), [guide](docs/USER-GUIDE.md#youtube-downloads)). Version 0.5.0 added a browser extension for Chrome, Edge, Brave and Firefox: downloads you start in the browser go to Ravenshelf to be checked before anything is saved, dangerous sites are blocked, and FuckingFast and FileKeeper pages can no longer redirect you or open pop-ups elsewhere. It is off until you connect it in **Settings → Browser extension**. See the [0.5.0 release notes](docs/RELEASE-0.5.0.md) and [the extension guide](docs/USER-GUIDE.md#browser-extension).
 
@@ -51,16 +51,16 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.10.4-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.10.5-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.10.4-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.10.5-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
-A matching checksum detects a mismatch with the published file; provenance records its build origin. From 0.4.2, the release's `.sigstore.json` file is the same signed record; you can pass it to the command with `--bundle .\Ravenshelf-0.10.4-Windows.exe.sigstore.json` instead of fetching it from GitHub. Neither certifies that software is malware-free, and the executable remains unsigned.
+A matching checksum detects a mismatch with the published file; provenance records its build origin. From 0.4.2, the release's `.sigstore.json` file is the same signed record; you can pass it to the command with `--bundle .\Ravenshelf-0.10.5-Windows.exe.sigstore.json` instead of fetching it from GitHub. Neither certifies that software is malware-free, and the executable remains unsigned.
 
 ## Features
 
@@ -94,7 +94,7 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Host support
 
-| Source | Status in 0.10.0 |
+| Source | Status in 0.10.5 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
