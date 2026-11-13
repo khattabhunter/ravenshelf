@@ -687,7 +687,9 @@ class DownloadManager extends EventEmitter {
     const scanTask=new Promise(resolve=>{scanFinished=resolve;});this.scanTasks.set(id,scanTask);
     this.changed();
     try{
-      const result=await this.scanFile(path.join(d.folder,d.name));
+      // A torrent with several files is published as one folder, scanned as a whole.
+      const folder=d.kind==='torrent'&&Boolean(d.torrent?.files?.some(file=>file.path.includes('/')));
+      const result=await this.scanFile(path.join(d.folder,d.name),{folder});
       const status=['clean','threat','missing','unavailable','error','review'].includes(result?.status)?result.status:'error';
       d.scan={status,message:String(result?.message||'').slice(0,300),scannedAt:result?.scannedAt||new Date().toISOString()};
     }catch{d.scan={status:'error',message:'Microsoft Defender could not finish this scan.',scannedAt:new Date().toISOString()};}

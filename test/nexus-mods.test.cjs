@@ -547,12 +547,12 @@ test('the Nexus Mods script only reads: it adds nothing to the page, presses not
 test('the toolbar window has a switch for every feature, Nexus Mods included',()=>{
   const html=read('popup.html'),script=read('popup.js');
   const switches=JSON.parse(/const SWITCHES = Object\.freeze\((\[[^\]]+\])\)/.exec(script)[1].replace(/'/g,'"'));
-  assert.deepEqual(switches,['capture','protection','guard','youtube','nexus']);
+  assert.deepEqual(switches,['capture','protection','guard','youtube','nexus','magnets']);
   for(const key of switches)assert.match(html,new RegExp(`<input type="checkbox" id="${key}">`),key);
   // The switch says what it does, including that it reads the page.
   assert.match(html,/<strong data-i18n>Sort Nexus Mods files by game<\/strong><small data-i18n>Reads which game, mod and files a Nexus Mods page is about, so that a file you download there is saved in a Mods folder for its game\.<\/small>/);
   const background=read('background.js');
-  assert.match(background,/\['capture', 'protection', 'guard', 'youtube', 'nexus'\]\.includes\(message\.key\)/,'the background accepts the same switches');
+  assert.match(background,/\['capture', 'protection', 'guard', 'youtube', 'nexus', 'magnets'\]\.includes\(message\.key\)/,'the background accepts the same switches');
   for(const key of switches)assert.match(background,new RegExp(`\\b${key}: (?:true|current\\.${key})`),key);
 });
 

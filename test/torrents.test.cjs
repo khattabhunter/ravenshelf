@@ -330,7 +330,7 @@ function fakeRunner({sharing=false,missing=false}={}){
 }
 function managerFor(t,runner,more={}){
   const root=scratch(t),marked=[],scanned=[];
-  const manager=new DownloadManager({stateFile:path.join(root,'library.json'),downloadDir:path.join(root,'Downloads'),torrent:runner,markFile:async file=>{marked.push(file);},scanFile:async file=>{scanned.push(file);return {status:'clean',message:''};},...more});
+  const manager=new DownloadManager({stateFile:path.join(root,'library.json'),downloadDir:path.join(root,'Downloads'),torrent:runner,markFile:async file=>{marked.push(file);},scanFile:async (file,options)=>{scanned.push([file,options]);return {status:'clean',message:''};},...more});
   manager.updateSettings({concurrency:2,defenderScan:true});
   t.after(()=>manager.stop());
   const finished=async()=>{for(let i=0;i<2000&&(manager.running.size||manager.downloads.some(d=>['queued','downloading'].includes(d.status)));i++)await tick(2);};
@@ -355,7 +355,7 @@ test('a torrent job downloads into a hidden folder and appears in one step, with
   assert.equal(fs.existsSync(torrentWorkspace(d)),false);
   assert.deepEqual(q.marked.sort(),[path.join(final,'MD5','fitgirl-bins.md5'),path.join(final,'fg-01.bin'),path.join(final,'setup.exe')].sort());
   for(let i=0;i<200&&!q.scanned.length;i++)await tick(2);
-  assert.deepEqual(q.scanned,[final],'the whole folder is scanned');
+  assert.deepEqual(q.scanned,[[final,{folder:true}]],'the whole folder is scanned as a folder');
   assert.equal(d.total,33);assert.equal(d.received,33);
   // The window gets counts, not the file list.
   const shown=q.manager.state().downloads[0].torrent;
@@ -367,6 +367,19 @@ test('a torrent job downloads into a hidden folder and appears in one step, with
   assert.equal(q.manager.downloads[1].status,'completed',q.manager.downloads[1].error);
   assert.equal(q.manager.downloads[1].name,'Game [FitGirl Repack] (1)');
   assert.deepEqual(fs.readdirSync(path.join(q.root,'Downloads','My Game','Game [FitGirl Repack] (1)')),['setup.exe']);
+});
+
+test('a torrent of one file is published and scanned as that file',async t=>{
+  const {buffer,infoHash}=torrentFile({name:'Game.iso',length:7,'piece length':16384,pieces:Buffer.alloc(20)});
+  const read=magnet.readTorrent(buffer,infoHash),q=managerFor(t,fakeRunner());
+  q.manager.addTorrent({infoHash,magnet:`magnet:?xt=urn:btih:${infoHash}&dn=Game.iso`,name:read.name,files:filesOf(read,[read.files[0].index]),gameTitle:'My Game'});
+  await q.finished();
+  const [d]=q.manager.downloads;
+  assert.equal(d.status,'completed',d.error);
+  const final=path.join(q.root,'Downloads','My Game','Game.iso');
+  assert.equal(fs.statSync(final).isFile(),true);
+  for(let i=0;i<200&&!q.scanned.length;i++)await tick(2);
+  assert.deepEqual(q.scanned,[[final,{folder:false}]]);
 });
 
 test('torrent jobs refuse unsafe paths, empty choices and paths too long for Windows',t=>{
