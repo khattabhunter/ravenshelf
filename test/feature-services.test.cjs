@@ -127,6 +127,26 @@ test('failed earlier shutdown cleanup disposes update services without installin
   assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);
 });
 
+test('an approved update that a failed or timed-out exit skips is announced once and never installed',async t=>{
+  const shown=[];class FakeNotification{static isSupported(){return true;}constructor(options){this.options=options;}on(){}show(){shown.push(this.options);}}
+  const failed=fixture(t,{settings:{notificationsEnabled:true},Notification:FakeNotification});Object.assign(failed.instances.updater.state,{phase:'ready',installApproved:true});
+  await failed.services.beforeQuit({install:false});failed.services.cancelInstall();
+  assert.deepEqual(shown.map(item=>item.title),['Ravenshelf update not installed']);assert.match(shown[0].body,/could not finish shutting down, so the update was not installed/);
+  assert.equal(failed.calls.prepare.length,0);assert.equal(failed.calls.spawn.length,0);
+  // The time limit can pass while the update is being prepared: the helper is then never started.
+  const late=fixture(t,{settings:{notificationsEnabled:true},Notification:FakeNotification});Object.assign(late.instances.updater.state,{phase:'ready',installApproved:true});
+  const prepare=late.instances.updater.prepareInstall.bind(late.instances.updater);
+  late.instances.updater.prepareInstall=async options=>{const prepared=await prepare(options);late.services.cancelInstall();return prepared;};
+  await late.services.beforeQuit();assert.equal(late.calls.prepare.length,1);assert.equal(late.calls.spawn.length,0);assert.equal(shown.length,2);
+  // An update whose helper already started is not reported as skipped.
+  const started=fixture(t,{settings:{notificationsEnabled:true},Notification:FakeNotification});Object.assign(started.instances.updater.state,{phase:'ready',installApproved:true});
+  await started.services.beforeQuit();started.services.cancelInstall();assert.equal(started.calls.spawn.length,1);assert.equal(shown.length,2);
+  // Nothing approved, or notifications off: nothing is shown.
+  const idle=fixture(t,{settings:{notificationsEnabled:true},Notification:FakeNotification});idle.services.cancelInstall();await idle.services.beforeQuit({install:false});
+  const quiet=fixture(t,{Notification:FakeNotification});Object.assign(quiet.instances.updater.state,{phase:'ready',installApproved:true});quiet.services.cancelInstall();
+  await quiet.services.beforeQuit();assert.equal(quiet.calls.prepare.length,0);assert.equal(shown.length,2);
+});
+
 test('close behavior settings accept only the three supported choices',()=>{
   const {featureSettings}=require('../src/feature-services.cjs');
   for(const value of ['ask','background','quit'])assert.deepEqual(featureSettings({closeBehavior:value}),{closeBehavior:value});

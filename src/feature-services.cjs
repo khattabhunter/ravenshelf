@@ -51,7 +51,13 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
   // after any helper launched by the previous session has certainly finished.
   // This runs whether or not automatic update checks are enabled.
   const cleanupTimers=updatesSupported?[10000,20*60*1000].map(delay=>{const timer=setTimeout(()=>{updater.cleanupLeftovers().catch(()=>{});},delay);timer.unref?.();return timer;}):[];
-  let restartOnExit=false,closing=false,storageTask=null,storageController=null;
+  let restartOnExit=false,closing=false,installSkipped=false,installStarted=false,storageTask=null,storageController=null;
+  // A shutdown that failed or ran out of time never installs an update. An
+  // update the user approved is announced as not installed, not dropped silently.
+  function skipInstall(){
+    if(installSkipped||installStarted)return;installSkipped=true;
+    const update=updater.snapshot();if(update.phase==='ready'&&update.installApproved===true)notifier.notInstalled();
+  }
   const operations=new Set();
   function track(operation){
     if(closing)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
@@ -162,6 +168,7 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
     snapshot:()=>({updater:updater.snapshot(),clipboardInbox:inbox.snapshot(),verification:verifier.snapshot()}),
     configure,observe:()=>notifier.observe(manager.downloads),
     validateBatch:(links,allowIncomplete)=>{const result=analyzeArchiveSet(links);if(result.errors.length&&allowIncomplete!==true)throw new Error('Archive parts are missing or inconsistent. Review the link set before downloading.');return result;},
+    cancelInstall:skipInstall,
     async beforeQuit({install=true}={}){
       closing=true;
       for(const timer of cleanupTimers)clearTimeout(timer);
@@ -171,9 +178,13 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
       await pending;
       // Install only an update the user chose to download and that verified.
       const update=updater.snapshot();
-      if(!install||update.phase!=='ready'||update.installApproved!==true)return;
-      const prepared=await updater.prepareInstall({restart:restartOnExit});if(!prepared)return;
-      await new Promise((resolve,reject)=>{const child=spawn(prepared.helper,[prepared.job],{detached:true,windowsHide:true,stdio:'ignore'});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
+      if(!install)skipInstall();
+      if(installSkipped||update.phase!=='ready'||update.installApproved!==true)return;
+      try{
+        const prepared=await updater.prepareInstall({restart:restartOnExit});if(!prepared||installSkipped)return;
+        installStarted=true;
+        await new Promise((resolve,reject)=>{const child=spawn(prepared.helper,[prepared.job],{detached:true,windowsHide:true,stdio:'ignore'});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
+      }catch(error){installStarted=false;skipInstall();throw error;}
     }
   };
 }

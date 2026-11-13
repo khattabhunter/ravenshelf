@@ -9,12 +9,17 @@ const MESSAGES=Object.freeze({
   promptFailed:'Ravenshelf could not show the close options. Try again.',
   shutdown:'Ravenshelf could not finish shutting down. Try Exit again.'
 });
+// A cleanup step that never settles must not keep a hidden process that holds
+// the single-instance lock, so exit goes ahead as a failed cleanup after this.
+const SHUTDOWN_TIMEOUT_MS=45000;
+// The tray icon, relative to src; the package check confirms it is shipped.
+const TRAY_ICON='browser-extension/icons/icon-32.png';
 
 // Window visibility does not own services. Hiding keeps downloads and browser
 // handoffs running; only the application's serialized quit path stops them.
 class AppLifecycle{
-  constructor({app,win,Tray,Menu,dialog,icon,getSettings=()=>({}),saveSettings=()=>{},translate=value=>value,onError=()=>{}}){
-    Object.assign(this,{app,win,Tray,Menu,dialog,icon,getSettings,saveSettings,translate,onError});
+  constructor({app,win,Tray,Menu,dialog,nativeImage,icon,getSettings=()=>({}),saveSettings=()=>{},translate=value=>value,onError=()=>{}}){
+    Object.assign(this,{app,win,Tray,Menu,dialog,nativeImage,icon,getSettings,saveSettings,translate,onError});
     this.tray=null;this.pending=null;this.promptAbort=null;this.quitting=false;this.disposed=false;
     this.onClose=event=>{if(this.quitting||this.disposed)return;event.preventDefault();void this.requestClose();};
     this.onBeforeQuit=()=>this.beginQuit();
@@ -48,7 +53,11 @@ class AppLifecycle{
     try{
       if(this.tray?.isDestroyed())this.destroyTray();
       if(!this.tray){
-        this.tray=new this.Tray(this.icon);
+        // Windows accepts an icon that failed to load and shows an empty tray
+        // slot: with nothing to click there would be no way back to the window.
+        const image=this.nativeImage.createFromPath(this.icon);
+        if(image.isEmpty())throw new Error();
+        this.tray=new this.Tray(image);
         this.tray.on('click',this.onShow);this.tray.on('double-click',this.onShow);
       }
       if(!this.refreshMenu())throw new Error();
@@ -74,6 +83,9 @@ class AppLifecycle{
     const behavior=closeBehavior(this.getSettings()?.closeBehavior);
     if(behavior==='background')return this.background();
     if(behavior==='quit')return this.quit();
+    // The prompt belongs to the window, and Windows hides the dialogs of a
+    // minimized or hidden window: bring the window back so the prompt is seen.
+    if(this.win.isMinimized()||!this.win.isVisible())this.show();
     const controller=new AbortController();this.promptAbort=controller;
     const t=this.translate;
     let result;
@@ -115,7 +127,7 @@ class AppLifecycle{
 // Every service gets its cleanup attempt even when an earlier one fails.
 // Installing a previously verified, approved update is allowed only after all
 // preceding shutdown steps succeeded; ordinary background hiding never calls it.
-async function shutdownServices({manager,browserIntegration,media,torrents,features}={}){
+async function stopServices({manager,browserIntegration,media,torrents,features},signal){
   let failed=false;
   // Closing intake is synchronous: a slow download checkpoint must not allow
   // another browser file to be handed to a review that is about to disappear.
@@ -123,8 +135,23 @@ async function shutdownServices({manager,browserIntegration,media,torrents,featu
   for(const [service,method]of [[manager,'stop'],[browserIntegration,'beforeQuit'],[media,'beforeQuit'],[torrents,'beforeQuit']]){
     try{await service?.[method]?.();}catch{failed=true;}
   }
-  try{await features?.beforeQuit?.({install:!failed});}catch{failed=true;}
+  try{await features?.beforeQuit?.({install:!failed&&!signal.aborted});}catch{failed=true;}
   if(failed)throw new Error(MESSAGES.shutdown);
 }
+// When the time limit passes, shutdown fails: the queue is checkpointed, an
+// update is never installed, and the caller can let the process exit.
+function shutdownServices(services={},{timeoutMs=SHUTDOWN_TIMEOUT_MS,timers={setTimeout,clearTimeout}}={}){
+  const watchdog=new AbortController();let timer;
+  const expired=new Promise((_resolve,reject)=>{
+    timer=timers.setTimeout(()=>{
+      watchdog.abort();
+      try{services.features?.cancelInstall?.();}catch{}
+      try{services.manager?.save?.();}catch{}
+      reject(new Error(MESSAGES.shutdown));
+    },timeoutMs);
+    timer?.unref?.();
+  });
+  return Promise.race([stopServices(services,watchdog.signal),expired]).finally(()=>timers.clearTimeout(timer));
+}
 
-module.exports={AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,shutdownServices};
+module.exports={AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,SHUTDOWN_TIMEOUT_MS,TRAY_ICON,shutdownServices};

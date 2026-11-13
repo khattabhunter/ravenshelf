@@ -20,5 +20,7 @@ class NotificationAlerts{
   // Download and install in Settings.
   available(version){if(!this.enabled()||this.availableVersion===version)return;this.availableVersion=version;try{this.show({title:'Ravenshelf update available',body:`Version ${version} is available. Open Settings to review and install it.`});}catch{}}
   update(version){if(!this.enabled()||this.updateVersion===version)return;this.updateVersion=version;try{this.show({title:'Ravenshelf update ready',body:'The verified update installs when Ravenshelf fully exits, or you choose Restart now in Settings.'});}catch{}}
+  // Shown as Ravenshelf exits without installing the update the user approved.
+  notInstalled(){if(!this.enabled())return;try{this.show({title:'Ravenshelf update not installed',body:'Ravenshelf could not finish shutting down, so the update was not installed. Open Ravenshelf and check for updates to try again.'});}catch{}}
 }
 module.exports={NotificationAlerts};

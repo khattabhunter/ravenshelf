@@ -14,8 +14,8 @@ const source=fs.readFileSync(sourceFile,'utf8');
 const turn=()=>new Promise(setImmediate);
 const event=()=>({prevented:false,preventDefault(){this.prevented=true;}});
 
-async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatures=false}={}){
-  const handlers=new Map(),windows=[],trays=[],dialogs=[],errors=[],calls=[],quitEvents=[],featureOptions=[];
+async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatures=false,emptyIcon=false,shutdownMs}={}){
+  const handlers=new Map(),windows=[],trays=[],dialogs=[],prompts=[],errors=[],calls=[],quitEvents=[],featureOptions=[];
   const profile=path.resolve(__dirname,'.unused-main-lifecycle-profile');
   let releaseStop,releaseFeatures,manager,featureApp;
   const stopGate=blockStop?new Promise(resolve=>{releaseStop=resolve;}):Promise.resolve();
@@ -31,7 +31,7 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
   class BrowserWindow extends EventEmitter{
     constructor(options){super();this.options=options;this.visible=true;this.destroyed=false;this.minimized=false;this.shows=0;this.loaded=false;
       this.webContents=new EventEmitter();Object.assign(this.webContents,{mainFrame:{url:'atlas://app/index.html'},sent:[],send:(...args)=>this.webContents.sent.push(args),setWindowOpenHandler(){},reload(){}});windows.push(this);}
-    isDestroyed(){return this.destroyed;}isMinimized(){return this.minimized;}
+    isDestroyed(){return this.destroyed;}isMinimized(){return this.minimized;}isVisible(){return this.visible;}
     restore(){this.minimized=false;this.emit('restore');}show(){this.visible=true;this.shows++;}focus(){this.emit('focus');}hide(){this.visible=false;}
     close(){if(this.destroyed)return;const closing=event();this.emit('close',closing);if(!closing.prevented)this.destroy();return closing;}
     destroy(){if(this.destroyed)return;this.destroyed=true;this.visible=false;this.emit('closed');}
@@ -41,9 +41,10 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
     constructor(icon){super();this.icon=icon;this.destroyed=false;trays.push(this);}
     isDestroyed(){return this.destroyed;}setContextMenu(menu){this.menu=menu;}setToolTip(){}destroy(){this.destroyed=true;}
   }
-  const dialog={showErrorBox:(title,message)=>errors.push({title,message}),showMessageBox:async(_win,options)=>{dialogs.push(options);return {response:2,checkboxChecked:false};}};
+  const dialog={showErrorBox:(title,message)=>errors.push({title,message}),showMessageBox:async(parent,options)=>{dialogs.push(options);prompts.push({minimized:parent.minimized,visible:parent.visible});return {response:2,checkboxChecked:false};}};
   const session={defaultSession:{setPermissionRequestHandler(){},setPermissionCheckHandler(){},clearCache:async()=>{}},fromPartition:()=>{throw new Error('Unexpected browser session');}};
-  const electron={app,BrowserWindow,Tray,Menu:{buildFromTemplate:items=>items,setApplicationMenu(){}},dialog,session,protocol:{registerSchemesAsPrivileged(){},handle(){}},ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},powerMonitor:new EventEmitter(),shell:{},clipboard:{},safeStorage:{}};
+  const nativeImage={createFromPath:file=>({file,isEmpty:()=>emptyIcon})};
+  const electron={app,BrowserWindow,Tray,nativeImage,Menu:{buildFromTemplate:items=>items,setApplicationMenu(){}},dialog,session,protocol:{registerSchemesAsPrivileged(){},handle(){}},ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},powerMonitor:new EventEmitter(),shell:{},clipboard:{},safeStorage:{}};
   const cleanup=async(name,gate)=>{calls.push(name);if(gate)await gate;if(fail.includes(name))throw new Error('Private '+name+' fixture failure');};
   class DownloadManager extends EventEmitter{
     constructor(){super();manager=this;this.settings={closeBehavior:behavior,favorites:[]};this.downloads=[{id:'fixture-download',status:'downloading',received:3,total:10}];this.saved=0;}
@@ -68,14 +69,14 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
       featureApp=injected;
       // The updater uses app.quit(), not the window's close operation.
       register('installUpdate',()=>{setImmediate(()=>injected.quit());return {phase:'ready'};});
-      return {snapshot:()=>({}),observe(){},configure(){},beforeQuit:async options=>{featureOptions.push(options);await cleanup('features',featureGate);}};
+      return {snapshot:()=>({}),observe(){},configure(){},cancelInstall(){calls.push('cancelInstall');},beforeQuit:async options=>{featureOptions.push(options);await cleanup('features',featureGate);}};
     }},
     './browser-integration.cjs':{createBrowserIntegration:()=>({snapshot:()=>({}),beforeQuit:()=>cleanup('browser')})},
     './media-integration.cjs':{createMediaIntegration:()=>({snapshot:()=>({}),beforeQuit:()=>cleanup('media')})},
     './torrent-integration.cjs':{createTorrentIntegration:()=>({snapshot:()=>({}),beforeQuit:()=>cleanup('torrents')})},
     './providers.cjs':{},'./catalog.cjs':{},'./installed-games.cjs':{scanInstalledGames:()=>{throw new Error('Unexpected installed-games scan');}}
   };
-  const context=vm.createContext({module:{exports:{}},require:name=>Object.hasOwn(modules,name)?modules[name]:nativeRequire(name),__dirname:path.dirname(sourceFile),process:{env:{ATLAS_TEST_DIR:profile},platform:process.platform},console:{error:(...args)=>errors.push(args.join(' '))},Buffer,URL,Response,AbortController,AbortSignal,setImmediate,setTimeout,clearTimeout});
+  const context=vm.createContext({module:{exports:{}},require:name=>Object.hasOwn(modules,name)?modules[name]:nativeRequire(name),__dirname:path.dirname(sourceFile),process:{env:{ATLAS_TEST_DIR:profile,...(shutdownMs===undefined?{}:{ATLAS_SHUTDOWN_TIMEOUT_MS:String(shutdownMs)})},platform:process.platform},console:{error:(...args)=>errors.push(args.join(' '))},Buffer,URL,Response,AbortController,AbortSignal,setImmediate,setTimeout,clearTimeout});
   vm.runInContext(source,context,{filename:sourceFile});
   for(let i=0;i<20&&!windows[0]?.loaded;i++)await turn();
   assert.equal(windows[0]?.loaded,true,JSON.stringify(errors));
@@ -87,7 +88,7 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
     assert.equal(app.exits,1,'the fixture must finish cleanup rather than leave a live lifecycle');
   };
   t.after(closeDown);
-  return {app,win,manager,trays,dialogs,calls,errors,quitEvents,featureOptions,call,context,featureApp,releaseStop:()=>releaseStop?.(),releaseFeatures:()=>releaseFeatures?.(),closeDown};
+  return {app,win,manager,trays,dialogs,prompts,calls,errors,quitEvents,featureOptions,call,context,featureApp,releaseStop:()=>releaseStop?.(),releaseFeatures:()=>releaseFeatures?.(),closeDown};
 }
 
 test('main prevents repeated quit attempts until its single ordered cleanup finishes',async t=>{
@@ -111,6 +112,34 @@ test('main attempts every cleanup after failures and forbids update installation
   assert.deepEqual(f.featureOptions,[{install:false}]);assert.equal(f.dialogs.length,0);
   assert.ok(f.errors.some(value=>typeof value==='string'&&value.includes('could not finish cleanup')));
   assert.ok(!JSON.stringify(f.errors).includes('Private '));
+});
+
+test('a cleanup step that never settles still exits at the time limit and never installs the update',async t=>{
+  const f=await mainFixture(t,{blockStop:true,shutdownMs:25}),saved=f.manager.saved;
+  f.app.quit();await turn();assert.equal(f.app.exits,0);assert.deepEqual(f.calls,['completion','catalog','manager']);
+  for(let i=0;i<200&&!f.app.exits;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(f.app.exits,1,'the process exits instead of hiding with the single-instance lock');
+  assert.equal(f.quitEvents.at(-1).prevented,false);assert.equal(f.win.destroyed,true);assert.equal(f.dialogs.length,0);
+  assert.equal(f.manager.saved,saved+1,'the queue is checkpointed');assert.deepEqual(f.calls,['completion','catalog','manager','cancelInstall']);
+  assert.deepEqual(f.featureOptions,[]);assert.ok(f.errors.some(value=>typeof value==='string'&&value.includes('could not finish cleanup')));
+  // A step that settles after the limit lets the rest clean up, but the update is never installed.
+  f.releaseStop();for(let i=0;i<10;i++)await turn();
+  assert.deepEqual(f.featureOptions,[{install:false}]);assert.equal(f.app.exits,1);assert.equal(f.quitEvents.length,2);
+});
+
+test('the shutdown time limit is cleared when cleanup finishes in time',async t=>{
+  const f=await mainFixture(t,{shutdownMs:25});f.app.quit();await f.closeDown();const saved=f.manager.saved;
+  await new Promise(resolve=>setTimeout(resolve,75));
+  assert.equal(f.manager.saved,saved);assert.ok(!f.calls.includes('cancelInstall'));assert.deepEqual(f.featureOptions,[{install:true}]);
+  assert.equal(f.app.exits,1);assert.ok(!f.errors.some(value=>typeof value==='string'&&value.includes('could not finish cleanup')));
+});
+
+test('a tray icon that cannot be loaded keeps the window visible instead of hiding it',async t=>{
+  const f=await mainFixture(t,{behavior:'background',emptyIcon:true});
+  assert.equal((await f.call('windowAction','background')).action,'visible');
+  assert.equal(f.win.visible,true);assert.equal(f.trays.length,0);
+  assert.deepEqual(f.errors,[{title:'Ravenshelf',message:'Ravenshelf could not stay in the background. The window is still open.'}]);
+  assert.equal(f.win.close().prevented,true);await turn();assert.equal(f.win.visible,true);assert.equal(f.trays.length,0);
 });
 
 test('main background action and remembered window close leave downloads and services running',async t=>{
@@ -150,6 +179,12 @@ test('a cancelled Windows session-end query preserves the close choice and worki
   assert.equal(f.dialogs.length,0);assert.equal(f.win.close().prevented,true);await turn();assert.equal(f.dialogs.length,1);
   assert.equal(f.win.visible,true);await f.call('windowAction','background');assert.equal(f.win.visible,false);
   f.trays[0].emit('click');assert.equal(f.win.visible,true);assert.equal(f.quitEvents.length,0);
+});
+
+test('the close prompt restores a minimized window before it opens',async t=>{
+  const f=await mainFixture(t);f.win.minimized=true;const shows=f.win.shows;
+  assert.equal(f.win.close().prevented,true);await turn();
+  assert.deepEqual(f.prompts,[{minimized:false,visible:true}]);assert.equal(f.win.shows,shows+1);assert.equal(f.quitEvents.length,0);
 });
 
 test('confirmed Windows session end bypasses the close prompt',async t=>{

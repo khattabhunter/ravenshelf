@@ -14,6 +14,12 @@ test('update-available alerts appear once per version, name only the version and
   alerts.update('0.5.1');assert.equal(shown.at(-1).title,'Ravenshelf update ready');assert.match(shown.at(-1).body,/installs when Ravenshelf fully exits, or you choose Restart now/);
   const failing=new NotificationAlerts({show:()=>{throw new Error('Notification service unavailable');}});assert.doesNotThrow(()=>failing.available('0.5.2'));
 });
+test('a skipped update alert respects the setting and a failing notification service',()=>{
+  const shown=[];let enabled=false;const alerts=new NotificationAlerts({show:n=>shown.push(n),enabled:()=>enabled});
+  alerts.notInstalled();assert.equal(shown.length,0);enabled=true;alerts.notInstalled();
+  assert.deepEqual(shown,[{title:'Ravenshelf update not installed',body:'Ravenshelf could not finish shutting down, so the update was not installed. Open Ravenshelf and check for updates to try again.'}]);
+  const failing=new NotificationAlerts({show:()=>{throw new Error('Notification service unavailable');}});assert.doesNotThrow(()=>failing.notInstalled());
+});
 test('unfinished or uncertain antivirus results need attention, even when the download is complete',()=>{
   for(const status of ['threat','review','error','missing','unavailable']){
     const shown=[],alerts=new NotificationAlerts({show:value=>shown.push(value)});

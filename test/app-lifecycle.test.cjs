@@ -2,13 +2,13 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {EventEmitter}=require('node:events');
-const {AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,shutdownServices}=require('../src/app-lifecycle.cjs');
+const {AppLifecycle,closeBehavior,CLOSE_BEHAVIORS,MESSAGES,SHUTDOWN_TIMEOUT_MS,shutdownServices}=require('../src/app-lifecycle.cjs');
 const turn=()=>new Promise(setImmediate);
-function fixture(t,{behavior,failTray,failSave=false,ignoreAbort=false,save}={}){
+function fixture(t,{behavior,failTray,emptyIcon=false,failSave=false,ignoreAbort=false,save}={}){
   const calls=[],errors=[],dialogs=[],trays=[],settings={closeBehavior:behavior};
   const app=new EventEmitter();app.quit=()=>{calls.push('quit');app.emit('before-quit');};
   const win=new EventEmitter();let destroyed=false,minimized=false,visible=true;
-  Object.assign(win,{isDestroyed:()=>destroyed,isMinimized:()=>minimized,
+  Object.assign(win,{isDestroyed:()=>destroyed,isMinimized:()=>minimized,isVisible:()=>visible,
     restore:()=>{calls.push('restore');minimized=false;},show:()=>{calls.push('show');visible=true;},focus:()=>calls.push('focus'),hide:()=>{calls.push('hide');visible=false;}});
   class Tray extends EventEmitter{
     constructor(icon){super();if(failTray==='constructor')throw new Error('private diagnostic');this.icon=icon;this.destroyed=false;trays.push(this);calls.push('tray');}
@@ -21,9 +21,10 @@ function fixture(t,{behavior,failTray,failSave=false,ignoreAbort=false,save}={})
   const dialog={showMessageBox:(parent,options)=>new Promise(resolve=>{
     const done=result=>{options.signal.removeEventListener('abort',abort);resolve(result);};
     const abort=()=>{if(!ignoreAbort)done({response:2,checkboxChecked:false});};
-    dialogs.push({parent,options,answer:done});options.signal.addEventListener('abort',abort,{once:true});
+    dialogs.push({parent,options,answer:done,calls:[...calls]});options.signal.addEventListener('abort',abort,{once:true});
   })};
-  const lifecycle=new AppLifecycle({app,win,Tray,Menu,dialog,icon:'fixture.ico',getSettings:()=>settings,
+  const nativeImage={createFromPath:file=>({file,isEmpty:()=>emptyIcon})};
+  const lifecycle=new AppLifecycle({app,win,Tray,Menu,dialog,nativeImage,icon:'fixture.ico',getSettings:()=>settings,
     saveSettings:async patch=>{calls.push('save');if(failSave)throw new Error('private saved-path failure');if(save)await save(patch);Object.assign(settings,patch);},
     onError:error=>errors.push(error.message)});
   t.after(()=>lifecycle.dispose());
@@ -85,6 +86,27 @@ test('tray failures keep the window visible and never save a background preferen
   }
 });
 
+test('a tray icon that could not be loaded counts as a tray failure and keeps the window visible',async t=>{
+  const f=fixture(t,{behavior:'background',emptyIcon:true});
+  assert.equal(await f.lifecycle.requestClose(),false);assert.equal(f.lifecycle.background(),false);
+  assert.equal(f.visible(),true);assert.equal(f.trays.length,0);assert.ok(!f.calls.includes('hide'));
+  assert.deepEqual(f.errors,[MESSAGES.trayUnavailable,MESSAGES.trayUnavailable]);
+  const ask=fixture(t,{emptyIcon:true}),pending=ask.lifecycle.requestClose();await turn();ask.dialogs[0].answer({response:0,checkboxChecked:true});
+  assert.equal(await pending,false);assert.equal(ask.visible(),true);assert.equal(ask.settings.closeBehavior,undefined);
+  assert.equal(ask.trays.length,0);assert.deepEqual(ask.errors,[MESSAGES.trayUnavailable]);
+  const loaded=fixture(t,{behavior:'background'});assert.equal(await loaded.lifecycle.requestClose(),true);
+  assert.equal(loaded.trays[0].icon.file,'fixture.ico','the tray gets the image loaded from the icon file');
+});
+
+test('the close prompt brings a minimized or hidden window back before it opens',async t=>{
+  const f=fixture(t);f.minimize();const pending=f.lifecycle.requestClose();await turn();
+  assert.equal(f.dialogs.length,1);assert.deepEqual(f.dialogs[0].calls,['restore','show','focus']);
+  f.dialogs[0].answer({response:2,checkboxChecked:false});assert.equal(await pending,false);
+  const hidden=fixture(t);hidden.win.hide();const asked=hidden.lifecycle.requestClose();await turn();
+  assert.deepEqual(hidden.dialogs[0].calls,['hide','show','focus']);assert.equal(hidden.visible(),true);
+  hidden.dialogs[0].answer({response:2,checkboxChecked:false});assert.equal(await asked,false);
+});
+
 test('a failed remembered-choice save keeps the window open for either choice',async t=>{
   for(const response of [0,1]){
     const f=fixture(t,{failSave:true}),pending=f.lifecycle.requestClose();await turn();f.dialogs[0].answer({response,checkboxChecked:true});
@@ -134,4 +156,33 @@ test('every shutdown cleanup is attempted after a failure and update installatio
     assert.deepEqual(calls,['manager','browser','media','torrents','features']);assert.equal(install,failed==='features');
   }
   await shutdownServices();
+});
+
+test('a shutdown step that never settles fails at the time limit, checkpoints the queue and never installs an update',async()=>{
+  for(const saveFails of [false,true]){
+    const calls=[],timers=[];let stop;
+    const fake={setTimeout:(fn,ms)=>{const timer={fn,ms,cleared:false};timers.push(timer);return timer;},clearTimeout:timer=>{if(timer)timer.cleared=true;}};
+    const pending=shutdownServices({manager:{stop:()=>{calls.push('manager');return new Promise(resolve=>{stop=resolve;});},save:()=>{calls.push('save');if(saveFails)throw new Error('private save failure');}},
+      browserIntegration:{beforeQuit:()=>calls.push('browser')},media:{beforeQuit:()=>calls.push('media')},torrents:{beforeQuit:()=>calls.push('torrents')},
+      features:{cancelInstall:()=>calls.push('cancelInstall'),beforeQuit:options=>calls.push(['features',options])}},{timeoutMs:1234,timers:fake});
+    await turn();assert.equal(timers.length,1);assert.equal(timers[0].ms,1234);assert.deepEqual(calls,['manager']);
+    timers[0].fn();await assert.rejects(pending,{message:MESSAGES.shutdown});
+    assert.deepEqual(calls,['manager','cancelInstall','save']);
+    // A step that settles after the limit still lets the rest clean up, but never installs.
+    stop();for(let i=0;i<5;i++)await turn();
+    assert.deepEqual(calls.slice(3),['browser','media','torrents',['features',{install:false}]]);
+  }
+});
+
+test('the shutdown time limit is about 45 seconds and is cleared when cleanup finishes in time',async()=>{
+  assert.equal(SHUTDOWN_TIMEOUT_MS,45000);
+  for(const failed of [false,true]){
+    const calls=[],timers=[];
+    const fake={setTimeout:(fn,ms)=>{const timer={fn,ms,cleared:false};timers.push(timer);return timer;},clearTimeout:timer=>{if(timer)timer.cleared=true;}};
+    const pending=shutdownServices({manager:{stop:()=>{calls.push('manager');if(failed)throw new Error('private stop failure');},save:()=>calls.push('save')},
+      features:{cancelInstall:()=>calls.push('cancelInstall'),beforeQuit:options=>calls.push(['features',options])}},{timers:fake});
+    if(failed)await assert.rejects(pending,{message:MESSAGES.shutdown});else await pending;
+    assert.equal(timers.length,1);assert.equal(timers[0].ms,SHUTDOWN_TIMEOUT_MS);assert.equal(timers[0].cleared,true);
+    assert.deepEqual(calls,['manager',['features',{install:!failed}]]);
+  }
 });

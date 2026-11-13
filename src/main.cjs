@@ -1,5 +1,5 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification,Menu,Tray}=require('electron');
+const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification,Menu,Tray,nativeImage}=require('electron');
 const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
@@ -25,7 +25,7 @@ const {markFromInternet}=require('./motw.cjs');
 const {createHardwareService}=require('./hardware.cjs');
 const i18n=require('./i18n.cjs');
 const {modContext,MODS_FOLDER}=require('./mods.cjs');
-const {AppLifecycle,shutdownServices}=require('./app-lifecycle.cjs');
+const {AppLifecycle,shutdownServices,TRAY_ICON}=require('./app-lifecycle.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media,torrents,lifecycle;
 let exiting=false,exitReady=false,exitTask=null;
@@ -226,7 +226,7 @@ app.whenReady().then(async()=>{
   media=createMediaIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
   torrents=createTorrentIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
   browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),receiveMagnet:request=>torrents.receive(request),isTest:Boolean(isTest)});
-  lifecycle=new AppLifecycle({app,win,Tray,Menu,dialog,icon:path.join(__dirname,'browser-extension','icons','icon-32.png'),
+  lifecycle=new AppLifecycle({app,win,Tray,Menu,dialog,nativeImage,icon:path.join(__dirname,TRAY_ICON),
     getSettings:()=>manager.settings,saveSettings:patch=>manager.updateSettings(patch),translate:text=>local().t(text),
     onError:error=>localDialog.showErrorBox('Ravenshelf',publicErrorMessage(error))});
   // A shutdown query can be cancelled by another application: checkpoint,
@@ -371,7 +371,10 @@ app.on('before-quit',event=>{
   catalogRefresh?.stop();
   for(const browser of hostWindows)browser.destroy();
   for(const browser of mediaWindows)browser.destroy();
-  exitTask=shutdownServices({manager,browserIntegration,media,torrents,features})
+  // A cleanup that fails or passes its time limit still exits, and never
+  // installs an update. Isolated validation profiles may shorten the limit.
+  const testLimit=Number(process.env.ATLAS_SHUTDOWN_TIMEOUT_MS);
+  exitTask=shutdownServices({manager,browserIntegration,media,torrents,features},isTest&&testLimit>0?{timeoutMs:testLimit}:undefined)
     .catch(()=>console.error('Ravenshelf could not finish cleanup. The current app was kept.'))
     .finally(()=>{exitReady=true;lifecycle?.dispose();app.quit();});
 });
