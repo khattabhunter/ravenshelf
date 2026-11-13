@@ -23,16 +23,23 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   const supported=platform==='win32';
   // Isolated test profiles never write to the Windows registry.
   const registers=supported&&!isTest;
+  // Whether a notification can be shown at all (Windows may still hide it).
+  const canNotify=()=>{
+    if(manager.settings.notificationsEnabled===false||isTest)return false;
+    try{return typeof Notification==='function'&&Notification.isSupported();}catch{return false;}
+  };
   const reveal=({source}={})=>{
     if(!win||win.isDestroyed())return;
     // A normal Save should not undo the user's choice to keep the app in the
     // background. Its notification can reveal the pending review when clicked.
-    if(source==='download'&&typeof win.isVisible==='function'&&!win.isVisible())return;
+    // Without notifications the window is shown, so a download the browser
+    // handed over never seems to vanish.
+    if(source==='download'&&typeof win.isVisible==='function'&&!win.isVisible()&&canNotify())return;
     if(win.isMinimized())win.restore();win.show();win.focus();
   };
   const notify=({title,body})=>{
-    if(manager.settings.notificationsEnabled===false||isTest)return;
-    try{if(typeof Notification==='function'&&Notification.isSupported()){const alert=new Notification({title,body});alert.on('click',reveal);alert.show();}}catch{}
+    if(!canNotify())return;
+    try{const alert=new Notification({title,body});alert.on('click',reveal);alert.show();}catch{}
   };
   const threatLists=new ThreatLists({dir:path.join(profile,'threat-lists'),onChange:()=>publish(),...listOptions});
   const virusTotal=new VirusTotal({file:path.join(profile,'virustotal.json'),storage:safeStorage,...virusTotalOptions});

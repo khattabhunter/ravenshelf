@@ -172,6 +172,10 @@ class BrowserBridge extends EventEmitter{
         return {action:'block',id:capture.id,reason:blocked.message};
       }
     }
+    // A link Ravenshelf already blocked stays blocked, even when the review
+    // list is full or the same address arrives again.
+    const earlier=[...this.captures.values()].find(capture=>capture.status==='blocked'&&[capture.request.url,capture.request.finalUrl].some(address=>address&&(address===request.url||address===request.finalUrl)));
+    if(earlier)return {action:'block',id:earlier.id,reason:earlier.verdict?.reasons?.find(item=>item.level==='blocked')?.message||'It failed Ravenshelf’s safety checks.'};
     const deceptive=request.filename&&nameReasons(request.filename).find(reason=>reason.level==='blocked');
     if(deceptive){
       const capture=this.record(browser,source,request,{status:'blocked',verdict:{level:'blocked',reasons:[deceptive]},filename:request.filename});
@@ -179,6 +183,13 @@ class BrowserBridge extends EventEmitter{
     }
     const target=request.finalUrl||request.url;
     if(new URL(target).protocol==='http:'){
+      // Without the browser's name for the file, an unencrypted download could
+      // be a program named only by the server, so it is not left to the browser.
+      if(source==='download'&&!request.filename){
+        const unknown={code:'insecure-unknown',level:'blocked',message:'This download is not encrypted (HTTP) and the browser did not report its file name, so Ravenshelf stopped it.'};
+        const capture=this.record(browser,source,request,{status:'blocked',verdict:{level:'blocked',reasons:[unknown]},filename:safeName(nameFromURL(target))});
+        return {action:'block',id:capture.id,reason:unknown.message};
+      }
       const verdict=assessDownload({filename:request.filename||safeName(nameFromURL(target)),insecure:true});
       if(verdict.level==='blocked'){
         const capture=this.record(browser,source,request,{status:'blocked',verdict,filename:request.filename||safeName(nameFromURL(target))});

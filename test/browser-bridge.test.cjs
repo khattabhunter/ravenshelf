@@ -246,10 +246,44 @@ test('listed, deceptive and unencrypted program downloads are blocked at once',a
   assert.ok(bridge.snapshot().captures.some(capture=>capture.name==='invoice.pdf.exe'),'local paths from the browser are reduced to the file name');
   assert.ok(!JSON.stringify(bridge.snapshot()).includes('Player'),'the local download folder is not kept');
   assert.equal(decide({url:'http://plain.example/setup.exe'}).action,'block');
-  assert.deepEqual(decide({url:'http://plain.example/notes.zip'}),{action:'browser'});
+  assert.deepEqual(decide({url:'http://plain.example/notes.zip',filename:'notes.zip'}),{action:'browser'});
+  // Without the browser's file name, the server could still name a program:
+  // an unencrypted download is then never left to the browser.
+  for(const url of ['http://plain.example/notes.zip','http://plain.example/get?id=1']){
+    const unnamed=decide({url});
+    assert.equal(unnamed.action,'block',url);assert.match(unnamed.reason,/did not report its file name/);
+  }
   assert.equal(events.notes.length,0,'the browser shows quick blocks, so the app does not notify a second time');
   assert.equal(events.revealed,0,'blocked downloads do not steal focus');
   assert.ok(bridge.snapshot().captures.every(capture=>capture.status==='blocked'));
+});
+
+test('a right-click send of an unencrypted link is still left to the browser, since nothing downloads there',async t=>{
+  const {bridge}=bridgeFixture(t);
+  assert.deepEqual(bridge.receive('chromium',protocol.validateRequest({v:1,type:'send',kind:'link',url:'http://plain.example/notes.zip'})),{action:'browser'});
+  assert.equal(bridge.receive('chromium',protocol.validateRequest({v:1,type:'send',kind:'link',url:'http://plain.example/setup.exe'})).action,'block');
+});
+
+test('a link blocked during its check stays blocked when it comes again, even with a full review list',async t=>{
+  let gate=null;
+  const inspect=async url=>{if(gate)await gate;return url.includes('trap')
+    ?{status:'ready',url,sourceUrl:url,filename:'movie.mp4',size:10,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'windows-program'}
+    :{status:'ready',url,sourceUrl:url,filename:'f.zip',size:1,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'zip'};};
+  const {bridge}=bridgeFixture(t,{inspect});
+  const capture=message=>bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',...message}));
+  const first=capture({url:'https://cdn.example/trap',filename:'movie.mp4'});
+  assert.equal(first.action,'take');
+  await until(()=>bridge.snapshot().captures.find(item=>item.id===first.id).status==='blocked','the check');
+  const again=capture({url:'https://cdn.example/trap',filename:'movie.mp4'});
+  assert.equal(again.action,'block');assert.equal(again.id,first.id);assert.ok(again.reason.length>0);
+  const viaRedirect=capture({url:'https://other.example/go',finalUrl:'https://cdn.example/trap',filename:'movie.mp4'});
+  assert.equal(viaRedirect.action,'block','the same file reached through a redirect is blocked too');
+  let release;gate=new Promise(resolve=>{release=resolve;});
+  for(let i=0;bridge.pendingCount()<MAX_PENDING;i++)capture({url:`https://cdn.example/${i}.zip`});
+  assert.equal(capture({url:'https://cdn.example/new.zip'}).action,'browser','a full list still leaves new legitimate saves to the browser');
+  assert.equal(capture({url:'https://cdn.example/trap',filename:'movie.mp4'}).action,'block','but never a link already blocked');
+  assert.equal(bridge.receive('chromium',protocol.validateRequest({v:1,type:'send',kind:'link',url:'https://cdn.example/trap'})).action,'block');
+  release();
 });
 
 test('a normal download is taken, checked, and queued only when the user chooses',async t=>{

@@ -1214,6 +1214,7 @@
  "This copied link is no longer available.": "لم يعد هذا الرابط المنسوخ متاحًا.",
  "This download has no Nexus Mods page.": "ليس لهذا التنزيل صفحة على Nexus Mods.",
  "This download is being removed. Wait for the operation to finish.": "تجري إزالة هذا التنزيل. انتظر حتى تنتهي العملية.",
+ "This download is not encrypted (HTTP) and the browser did not report its file name, so Ravenshelf stopped it.": "هذا التنزيل غير مشفّر (HTTP) ولم يُبلغ المتصفح عن اسم ملفه، لذا أوقفه Ravenshelf.",
  "This file contains a Windows program even though its name ends in .{ext}.": "يحتوي هذا الملف على برنامج Windows مع أن اسمه ينتهي بالامتداد {ext}.",
  "This file is already in your Downloads list.": "هذا الملف موجود بالفعل في قائمة «التنزيلات».",
  "This file is already in your Downloads list. Resume or retry it there, or remove the old entry and download it again.": "هذا الملف موجود بالفعل في قائمة «التنزيلات». استأنفه أو أعد محاولته هناك، أو أزل العنصر القديم ونزّله مرة أخرى.",

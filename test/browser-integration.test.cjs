@@ -10,7 +10,7 @@ const {createBrowserIntegration}=require('../src/browser-integration.cjs');
 const {publicErrorMessage}=require('../src/public-errors.cjs');
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
-function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={}}={}){
+function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={},Notification=null}={}){
   const profile=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-integration-'));
   t.after(()=>fs.rmSync(profile,{recursive:true,force:true}));
   const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[],placed:[],place:null};
@@ -31,7 +31,7 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
   const integration=createBrowserIntegration({
     app:{getPath:()=>profile,getVersion:()=>'0.5.0'},win:{isDestroyed:()=>false,isVisible:()=>windowState.visible,isMinimized:()=>false,restore(){},show(){windowState.visible=true;windowState.shown++;},focus(){windowState.focused++;}},manager,
     shell:{openPath:async folder=>{events.opened.push(folder);return openPathError;},openExternal:async url=>{events.external.push(url);}},
-    safeStorage,Notification:null,register:(name,fn)=>handles.set(name,fn),publish:()=>{events.published++;},
+    safeStorage,Notification,register:(name,fn)=>handles.set(name,fn),publish:()=>{events.published++;},
     resolveProvider:null,assertQueueAvailable:()=>{events.queueChecks++;},isTest,platform,setup,
     bridgeOptions:{platform:process.platform,...bridge},
     listOptions:{fetcher:async()=>new Response('',{status:404})},
@@ -184,16 +184,36 @@ test('quit immediately returns native browser fallback while the download checkp
   assert.equal(prepared,true);assert.equal(f.events.unregistered,0);assert.equal(fs.existsSync(f.endpoint),false);
 });
 
+// A system notification that can be shown, as on Windows with notifications on.
+const shownNotices=()=>{const shown=[];return {shown,Notification:class{static isSupported(){return true;}constructor(options){this.options=options;}on(){}show(){shown.push(this.options);}}};};
 test('automatic saves keep a background window hidden while explicit media menus reveal the pending review',async t=>{
   const notices=[];
   const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:'photo.png',size:100,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'png'});
-  const f=fixture(t,{bridge:{inspect,notify:note=>notices.push(note)}});
+  const f=fixture(t,{bridge:{inspect,notify:note=>notices.push(note)},Notification:shownNotices().Notification});
   await f.call('setBrowserIntegration',true);f.windowState.visible=false;
   const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
   assert.equal(capture.action,'take');assert.equal(f.windowState.visible,false);assert.equal(f.windowState.shown,0);assert.equal(f.windowState.focused,0);
   assert.equal(notices.length,1);assert.match(notices[0].body,/Nothing downloads until you choose/);assert.equal(f.events.added.length,0);
   const sent=await fromExtension(f,{type:'send',kind:'link',url:'https://cdn.example/video.mp4'});
   assert.equal(sent.action,'take');assert.equal(f.windowState.visible,true);assert.equal(f.windowState.shown,1);assert.equal(f.windowState.focused,1);assert.equal(f.events.added.length,0);
+});
+test('with notifications off or unsupported, an automatic save shows the hidden window so the download never seems to vanish',async t=>{
+  const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:'photo.png',size:100,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'png'});
+  for(const [label,Notification,enabled] of [['notifications turned off',shownNotices().Notification,false],['notifications unsupported',class{static isSupported(){return false;}},true],['no notification support',null,true]]){
+    const notices=shownNotices();
+    const f=fixture(t,{bridge:{inspect},Notification:Notification===null?null:Notification});
+    f.manager.settings.notificationsEnabled=enabled;
+    await f.call('setBrowserIntegration',true);f.windowState.visible=false;
+    const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
+    assert.equal(capture.action,'take',label);assert.equal(f.windowState.visible,true,label);assert.equal(f.windowState.shown,1,label);assert.equal(f.events.added.length,0,label);
+    assert.equal(notices.shown.length,0,label);
+  }
+  // With notifications on, the notice is shown and the window stays in the background.
+  const notices=shownNotices();
+  const f=fixture(t,{bridge:{inspect},Notification:notices.Notification});
+  await f.call('setBrowserIntegration',true);f.windowState.visible=false;
+  const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
+  assert.equal(capture.action,'take');assert.equal(f.windowState.visible,false);assert.equal(notices.shown.length,1);assert.match(notices.shown[0].body,/Nothing downloads until you choose/);
 });
 test('a file downloaded on Nexus Mods is queued into Mods under its game; other browser downloads go to Browser downloads',async t=>{
   const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:decodeURIComponent(new URL(url).pathname.split('/').pop()),size:3072,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'7z'});
