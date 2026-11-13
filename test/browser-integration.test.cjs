@@ -8,6 +8,7 @@ const net=require('node:net');
 const protocol=require('../src/browser-protocol.cjs');
 const {createBrowserIntegration}=require('../src/browser-integration.cjs');
 const {publicErrorMessage}=require('../src/public-errors.cjs');
+const {SETTINGS_READ_ONLY,SESSION_ONLY}=require('../src/library-state.cjs');
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
 function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={},Notification=null}={}){
@@ -15,7 +16,9 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
   t.after(()=>fs.rmSync(profile,{recursive:true,force:true}));
   const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[],placed:[],place:null};
   const manager={settings:{downloadDir:profile,notificationsEnabled:true,...(enabled?{browserIntegrationEnabled:true}:{})},downloads:[],
-    updateSettings(changes){Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){},
+    updateSettings(changes){if(this.readOnly)throw new Error(SETTINGS_READ_ONLY);Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){},
+    // As DownloadManager: turning off still applies, until restart, when settings can't be saved.
+    turnOff(changes){if(!this.readOnly){this.updateSettings(changes);return true;}Object.assign(this.settings,changes);return false;},
     // The title the queue files a game's mods under: by default as for a game it has not seen yet.
     modTitle(mod){events.placed.push(mod);return events.place?events.place(mod):mod.gameName||mod.game;}};
   const versions={...existingVersions};
@@ -92,6 +95,27 @@ test('a failed setup leaves the switch off and explains the problem',async t=>{
   await assert.rejects(other.call('setBrowserIntegration',true),/available on Windows only/);
   assert.equal(other.manager.settings.browserIntegrationEnabled,false);
   assert.equal(other.integration.snapshot().supported,false);
+});
+
+test('in a read-only session the connector can still be disconnected until restart, but not connected again',async t=>{
+  const f=fixture(t);
+  assert.equal((await f.call('setBrowserIntegration',true)).bridge.running,true);
+  f.manager.readOnly=true;
+  await assert.rejects(f.call('setBrowserIntegration',false),{message:SESSION_ONLY});
+  const state=f.integration.snapshot();
+  assert.equal(state.enabled,false);assert.equal(state.phase,'off');assert.equal(state.bridge.running,false);
+  assert.equal(f.events.unregistered,1);assert.equal(fs.existsSync(f.endpoint),false);assert.equal(f.manager.settings.browserIntegrationEnabled,false);
+  await assert.rejects(f.call('setBrowserIntegration',true),{message:SETTINGS_READ_ONLY});
+  assert.equal(f.integration.snapshot().bridge.running,false);assert.equal(f.events.registered,1,'nothing was started');
+  assert.equal(publicErrorMessage(new Error(SESSION_ONLY),'setBrowserIntegration'),SESSION_ONLY);
+});
+
+test('when connecting fails and the switch cannot be turned back off, the real reason is still reported',async t=>{
+  const failure=Object.assign(new Error('reg.exe failed'),{code:'EPERM'}),f=fixture(t,{registerError:failure}),update=f.manager.updateSettings;
+  f.manager.updateSettings=function(changes){if(changes.browserIntegrationEnabled===false)throw Object.assign(new Error('rollback write failed'),{code:'ENOSPC'});return update.call(this,changes);};
+  await assert.rejects(f.call('setBrowserIntegration',true),error=>error===failure);
+  const state=f.integration.snapshot();
+  assert.equal(state.phase,'error');assert.equal(state.problem,publicErrorMessage({code:'EPERM'},'setBrowserIntegration'));assert.equal(state.bridge.running,false);
 });
 
 test('an enabled connection starts with Ravenshelf, and quitting keeps it registered',async t=>{

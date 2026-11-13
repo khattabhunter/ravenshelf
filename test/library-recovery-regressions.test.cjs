@@ -1,6 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const {loadLibrary,validateLibrary,settingsFrom,downloadFrom,MAX_DOWNLOADS,RECOVERED,BLOCKED,LIST_FULL,SETTINGS_READ_ONLY}=require('../src/library-state.cjs');
+const {loadLibrary,validateLibrary,settingsFrom,downloadFrom,MAX_BYTES,MAX_DOWNLOADS,RECOVERED,BLOCKED,LIST_FULL,LIST_TOO_LARGE,SETTINGS_READ_ONLY}=require('../src/library-state.cjs');
+const {publicErrorMessage}=require('../src/public-errors.cjs');
 const {DownloadManager,atomicJSON}=require('../src/downloads.cjs');
 const base=path.resolve(__dirname,'.library-recovery-fixtures');fs.mkdirSync(base,{recursive:true});
 function fixture(t){
@@ -132,4 +133,79 @@ test('a late dialog setting cannot change the shutdown checkpoint or remembered 
     assert.throws(()=>manager.updateSettings({closeBehavior:'quit',downloadDir:path.join(w.root,'late')}),/Ravenshelf is closing/);
     assert.strictEqual(manager.settings,previous);assert.equal(writes,0);assert.equal(events,0);assert.equal(fs.readFileSync(w.file,'utf8'),checkpoint);
   }finally{manager.save=save;}
+});
+
+// Review fixes after 0.10.3
+
+const copies=w=>fs.readdirSync(w.root).filter(name=>name.includes('.recovery-'));
+const QUALITY=Object.keys(require('../src/youtube.cjs').QUALITIES)[0];
+const torrentEntry=name=>({infoHash:'a'.repeat(40),magnet:'magnet:?xt=urn:btih:'+'a'.repeat(40),name,files:[{index:1,path:name,length:1,selected:true,padding:false}]});
+
+test('trimming old finished history is maintenance: no damage warning, no recovery copy, and the shorter list is saved',async t=>{
+  const w=fixture(t),busy=Array.from({length:MAX_DOWNLOADS},(_,i)=>job(w.folder,i));
+  const done={...job(w.folder,'done'),status:'completed'},scanning={...job(w.folder,'scan'),status:'completed',scan:{status:'queued'}},cancelled={...job(w.folder,'cancelled'),status:'cancelled'};
+  fs.writeFileSync(w.file,JSON.stringify({settings:{language:'ar'},downloads:[done,scanning,cancelled,...busy]}));
+  const loaded=loadLibrary(w.file),ids=loaded.data.downloads.map(d=>d.id);
+  assert.equal(loaded.warning,'');assert.equal(loaded.canSave,true);assert.equal(loaded.trimmed,true);assert.equal(loaded.recoveryFile,undefined);assert.deepEqual(copies(w),[]);
+  assert.equal(ids.length,MAX_DOWNLOADS+1);assert.ok(ids.includes('job-scan'),'a finished file still waiting for its scan is kept');assert.ok(!ids.includes('job-done')&&!ids.includes('job-cancelled'));
+  const first=w.open();assert.equal(first.stateRecoveryWarning,'');assert.equal(first.state().stateRecoveryWarning,'');assert.deepEqual(copies(w),[]);
+  assert.deepEqual(first.scanQueue,['job-scan'],'the pending scan runs again');
+  const saved=JSON.parse(fs.readFileSync(w.file,'utf8'));assert.equal(saved.downloads.length,MAX_DOWNLOADS+1);assert.equal(saved.settings.language,'ar');
+  // A legacy job finishes: the next start trims it quietly too.
+  first.downloads.find(d=>d.id==='job-0').status='completed';await first.stop();
+  const again=w.open();assert.equal(again.stateRecoveryWarning,'');assert.deepEqual(copies(w),[]);
+  assert.equal(again.downloads.some(d=>d.id==='job-0'),false);assert.ok(again.downloads.some(d=>d.id==='job-scan'));assert.equal(again.downloads.length,MAX_DOWNLOADS);
+});
+
+test('a damaged list that is also trimmed still keeps its recovery copy and warning',t=>{
+  const w=fixture(t),busy=Array.from({length:MAX_DOWNLOADS},(_,i)=>job(w.folder,i));
+  fs.writeFileSync(w.file,JSON.stringify({downloads:[null,{...job(w.folder,'done'),status:'completed'},...busy]}));
+  const loaded=loadLibrary(w.file);assert.equal(loaded.warning,RECOVERED);assert.ok(loaded.recoveryFile);assert.equal(copies(w).length,1);assert.equal(loaded.data.downloads.length,MAX_DOWNLOADS);
+});
+
+test('a list too large to read back is never written: the old file stays and nothing new is added until it fits',async t=>{
+  const w=fixture(t);fs.writeFileSync(w.file,JSON.stringify({settings:{language:'ar'},downloads:[job(w.folder)]}));
+  const manager=w.open();manager.pump=()=>{};assert.equal(manager.maxStateBytes,MAX_BYTES,'the same limit as reading');
+  const original=fs.readFileSync(w.file),events=[];manager.on('state',state=>events.push(state));
+  manager.maxStateBytes=100;
+  assert.equal(manager.save(),false);assert.deepEqual(fs.readFileSync(w.file),original);assert.deepEqual(fs.readdirSync(w.root).filter(name=>name.endsWith('.tmp')),[]);
+  assert.equal(manager.stateTooLarge,true);assert.equal(manager.state().stateRecoveryWarning,LIST_TOO_LARGE);assert.equal(publicErrorMessage(new Error(LIST_TOO_LARGE)),LIST_TOO_LARGE);
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/new.zip',filename:'new.zip'}],gameTitle:'New game'}),{message:LIST_TOO_LARGE});
+  assert.throws(()=>manager.addMedia({videoId:'abcdefghijk',quality:QUALITY}),{message:LIST_TOO_LARGE});
+  assert.throws(()=>manager.addTorrent(torrentEntry('New')),{message:LIST_TOO_LARGE});
+  assert.throws(()=>manager.updateSettings({concurrency:1}),{message:LIST_TOO_LARGE});assert.equal(manager.settings.concurrency,2);
+  assert.equal(manager.downloads.length,1);assert.equal(fs.existsSync(path.join(w.root,'Downloads','New game')),false);assert.deepEqual(fs.readFileSync(w.file),original);
+  // Once the list fits again (finished downloads removed), saving and adding resume.
+  manager.maxStateBytes=MAX_BYTES;assert.equal(manager.save(),true);assert.equal(manager.stateTooLarge,false);assert.equal(manager.state().stateRecoveryWarning,'');
+  const size=fs.statSync(w.file).size,before=fs.readFileSync(w.file);manager.maxStateBytes=size+50;
+  // A new download that would push the list over the limit is taken out again and refused.
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/big.zip',filename:'big.zip'}],gameTitle:'Game'}),{message:LIST_TOO_LARGE});
+  assert.equal(manager.downloads.length,1);assert.deepEqual(fs.readFileSync(w.file),before);assert.equal(manager.stateTooLarge,false);
+  assert.equal(loadLibrary(w.file).canSave,true,'the kept file still opens');
+});
+
+test('in a read-only session a feature can still be turned off until restart, but nothing can be turned on',t=>{
+  const w=fixture(t),original=JSON.stringify({schemaVersion:99,settings:{clipboardWatchEnabled:true},downloads:[]});fs.writeFileSync(w.file,original);
+  const manager=w.open(),events=[];manager.on('state',state=>events.push(state));assert.equal(manager.stateCanSave,false);
+  assert.equal(manager.turnOff({clipboardWatchEnabled:false}),false);
+  assert.equal(manager.settings.clipboardWatchEnabled,false);assert.equal(events.length,1);assert.equal(events[0].settings.clipboardWatchEnabled,false);assert.equal(fs.readFileSync(w.file,'utf8'),original);
+  assert.throws(()=>manager.updateSettings({clipboardWatchEnabled:true}),{message:SETTINGS_READ_ONLY});assert.equal(manager.settings.clipboardWatchEnabled,false);
+  // A list that can be saved keeps the choice as usual.
+  const saving=fixture(t).open();assert.equal(saving.turnOff({clipboardWatchEnabled:false}),true);assert.equal(JSON.parse(fs.readFileSync(saving.stateFile,'utf8')).settings.clipboardWatchEnabled,false);
+});
+
+test('nothing new joins the list once the manager is closing',async t=>{
+  const w=fixture(t),manager=w.open();await manager.stop();
+  const closing={message:'Ravenshelf is closing. Wait for cleanup to finish.'};
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/late.zip',filename:'late.zip'}],gameTitle:'Late game'}),closing);
+  assert.throws(()=>manager.addMedia({videoId:'abcdefghijk',quality:QUALITY}),closing);
+  assert.throws(()=>manager.addTorrent(torrentEntry('Late')),closing);
+  assert.equal(manager.downloads.length,0);assert.equal(fs.existsSync(path.join(w.root,'Downloads','Late game')),false);
+});
+
+test('a full list refuses a new game before making its folder',t=>{
+  const w=fixture(t),manager=w.open();manager.pump=()=>{};
+  for(let i=0;i<MAX_DOWNLOADS;i++)manager.downloads.push({id:'x'+i,status:'completed',name:'x'+i+'.bin',folder:w.folder,url:'https://files.example.com/x'+i});
+  assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/new.zip',filename:'new.zip'}],gameTitle:'Another game'}),{message:LIST_FULL});
+  assert.equal(fs.existsSync(path.join(w.root,'Downloads','Another game')),false);assert.equal(manager.downloads.length,MAX_DOWNLOADS);
 });

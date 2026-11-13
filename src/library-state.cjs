@@ -18,6 +18,8 @@ const BLOCKED='Saved data could not be read safely. The original library is unch
 const READ_ONLY='Ravenshelf can’t add downloads now because its saved list is read-only. See the message at the top of the window.';
 const SETTINGS_READ_ONLY='Settings can’t be saved while the saved list is read-only. See the message at the top of the window.';
 const LIST_FULL='Your downloads list is full (10,000 downloads). Remove finished downloads before adding more.';
+const LIST_TOO_LARGE='Ravenshelf’s download list is too large to save. Remove finished downloads to continue.';
+const SESSION_ONLY='Turned off for now. Ravenshelf can’t save settings, so this lasts until restart.';
 const FUTURE='This library was saved by a newer Ravenshelf version. The original library is unchanged; use that version to keep your settings and downloads.';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&[Object.prototype,null].includes(Object.getPrototypeOf(value));
 const text=(value,max=2000)=>typeof value==='string'&&value.length<=max&&!/[\0\r\n]/.test(value);
@@ -148,8 +150,10 @@ function downloadFrom(value){
   if(d.sourceIdentity!==undefined&&(typeof d.sourceIdentity!=='string'||!/^[a-f0-9]{64}$/.test(d.sourceIdentity)))delete d.sourceIdentity;
   return d;
 }
+// `changed`: the saved file needs rewriting. `repaired`: damage was found, so
+// the original is preserved first. Trimming old history alone is maintenance.
 function validateLibrary(value){
-  if(!object(value)||value.schemaVersion!==undefined&&value.schemaVersion!==SCHEMA_VERSION)return {data:{settings:{},downloads:[]},changed:true,future:object(value)&&Number.isSafeInteger(value.schemaVersion)&&value.schemaVersion>SCHEMA_VERSION};
+  if(!object(value)||value.schemaVersion!==undefined&&value.schemaVersion!==SCHEMA_VERSION)return {data:{settings:{},downloads:[]},changed:true,repaired:true,future:object(value)&&Number.isSafeInteger(value.schemaVersion)&&value.schemaVersion>SCHEMA_VERSION};
   const {settings,changed:settingsChanged}=settingsFrom(value.settings);
   let changed=settingsChanged||value.downloads!==undefined&&!Array.isArray(value.downloads);
   const downloads=[],ids=new Set();
@@ -159,12 +163,13 @@ function validateLibrary(value){
   // Trim old finished history, never unfinished jobs. Legacy queues can be
   // larger than today's admission limit; existing jobs can still resume while
   // DownloadManager refuses new additions until the queue is below that limit.
+  // A finished file whose Defender scan is still pending is kept to be scanned.
   if(downloads.length>MAX_DOWNLOADS){
     let over=downloads.length-MAX_DOWNLOADS;const drop=new Set();
-    for(const d of downloads){if(!over)break;if(['completed','cancelled'].includes(d.status)){drop.add(d);over--;}}
-    return {data:{settings,downloads:downloads.filter(d=>!drop.has(d))},changed:changed||drop.size>0};
+    for(const d of downloads){if(!over)break;if(['completed','cancelled'].includes(d.status)&&!['queued','scanning'].includes(d.scan?.status)){drop.add(d);over--;}}
+    return {data:{settings,downloads:downloads.filter(d=>!drop.has(d))},changed:changed||drop.size>0,repaired:changed,trimmed:drop.size>0};
   }
-  return {data:{settings,downloads},changed};
+  return {data:{settings,downloads},changed,repaired:changed};
 }
 // The profile folder can be reached through a junction or link (for example
 // AppData moved to another drive). Resolve it once; the real folders are then
@@ -258,9 +263,11 @@ function loadLibrary(file,{io=fs,wait}={}){
   }
   // From here on the real path that was checked and read is the one written.
   file=verification.file;
-  let parsed;try{parsed=validateLibrary(JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')));}catch{parsed={data:{settings:{},downloads:[]},changed:true};}
+  let parsed;try{parsed=validateLibrary(JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')));}catch{parsed={data:{settings:{},downloads:[]},changed:true,repaired:true};}
   if(parsed.future)return {data:parsed.data,canSave:false,warning:FUTURE,file};
-  if(!parsed.changed)return {data:parsed.data,canSave:true,warning:'',file};
+  // Old finished history trimmed from an intact list: no warning and no copy;
+  // the caller saves the shorter list.
+  if(!parsed.repaired)return {data:parsed.data,canSave:true,warning:'',file,...(parsed.trimmed?{trimmed:true}:{})};
   // EXCL creates a new sibling, never replaces any recovery file. The original
   // remains in place until a later successful atomic save; failed backup means
   // saving is disabled, not permission to discard the only copy. A copy is
@@ -329,4 +336,4 @@ function pruneRecoveryCopies(file,keep,io){
     for(const {copy,name}of copies){if(kept.size<MAX_RECOVERY_COPIES||kept.has(name)){kept.add(name);continue;}try{io.unlinkSync(copy);}catch{}}
   }catch{}
 }
-module.exports={loadLibrary,validateLibrary,downloadFrom,settingsFrom,readStateFile,localPath,filename,gameFolder,SCHEMA_VERSION,MAX_BYTES,MAX_DOWNLOADS,MAX_RECOVERY_COPIES,RECOVERED,BLOCKED,FUTURE,READ_ONLY,SETTINGS_READ_ONLY,LIST_FULL};
+module.exports={loadLibrary,validateLibrary,downloadFrom,settingsFrom,readStateFile,localPath,filename,gameFolder,SCHEMA_VERSION,MAX_BYTES,MAX_DOWNLOADS,MAX_RECOVERY_COPIES,RECOVERED,BLOCKED,FUTURE,READ_ONLY,SETTINGS_READ_ONLY,LIST_FULL,LIST_TOO_LARGE,SESSION_ONLY};

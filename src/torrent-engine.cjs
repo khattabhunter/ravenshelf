@@ -116,8 +116,11 @@ async function killEngine(child){if(child&&child.exitCode===null&&child.signalCo
 // without IPv6. (aria2 then makes its own lookups.) Those lookups use the small thread pool that file
 // reads and writes share, so at most two run at a time, across all checks, and
 // a place is given back only when its lookup has really ended.
+// These refusals are internal: a tracker whose name is not looked up is
+// skipped, and the user never sees why.
+const LOOKUP_SLOTS_INVALID='Tracker lookups need one or two places.',LOOKUP_BUSY='Too many tracker lookups are waiting.';
 function createSystemLookup({lookupImpl=dns.promises.lookup,slots=LOOKUP_SLOTS}={}){
-  if(!Number.isInteger(slots)||slots<1||slots>LOOKUP_SLOTS)throw new Error(MESSAGES.stopped);
+  if(!Number.isInteger(slots)||slots<1||slots>LOOKUP_SLOTS)throw new RangeError(LOOKUP_SLOTS_INVALID);
   let running=0,waiting=0;const queue=new Set(),inflight=new Map();
   const forget=job=>{if(inflight.get(job.host)===job)inflight.delete(job.host);};
   const settle=(job,waiter,ok,value)=>{
@@ -144,7 +147,7 @@ function createSystemLookup({lookupImpl=dns.promises.lookup,slots=LOOKUP_SLOTS}=
     if(signal?.aborted)return Promise.reject(abortError(signal));
     // Bound both distinct queued names and callers joining shared names.
     // Normal preflights are also bounded by their own three-second deadline.
-    if(waiting>=MAX_LOOKUP_WAITERS)return Promise.reject(new Error(MESSAGES.stopped));
+    if(waiting>=MAX_LOOKUP_WAITERS)return Promise.reject(Object.assign(new Error(LOOKUP_BUSY),{code:'LOOKUP_BUSY'}));
     // A name already being looked up, or waiting for a place, for this or
     // another check, is joined, but each caller owns only its own wait.
     let job=inflight.get(host);

@@ -11,11 +11,12 @@ const {EventEmitter}=require('node:events');
 const {createRequire}=require('node:module');
 const sourceFile=path.resolve(__dirname,'../src/main.cjs'),nativeRequire=createRequire(sourceFile);
 const source=fs.readFileSync(sourceFile,'utf8');
+const {SETTINGS_READ_ONLY,SESSION_ONLY}=require('../src/library-state.cjs');
 const turn=()=>new Promise(setImmediate);
 const event=()=>({prevented:false,preventDefault(){this.prevented=true;}});
 
 async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatures=false,emptyIcon=false,shutdownMs}={}){
-  const handlers=new Map(),windows=[],trays=[],dialogs=[],prompts=[],errors=[],calls=[],quitEvents=[],featureOptions=[];
+  const handlers=new Map(),windows=[],trays=[],dialogs=[],prompts=[],errors=[],calls=[],quitEvents=[],featureOptions=[],configured=[];
   const profile=path.resolve(__dirname,'.unused-main-lifecycle-profile');
   let releaseStop,releaseFeatures,manager,featureApp;
   const stopGate=blockStop?new Promise(resolve=>{releaseStop=resolve;}):Promise.resolve();
@@ -49,7 +50,9 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
   class DownloadManager extends EventEmitter{
     constructor(){super();manager=this;this.settings={closeBehavior:behavior,favorites:[]};this.downloads=[{id:'fixture-download',status:'downloading',received:3,total:10}];this.saved=0;}
     state(){return {settings:{...this.settings},downloads:this.downloads.map(value=>({...value}))};}
-    updateSettings(patch){Object.assign(this.settings,patch);this.save();this.emit('state');return this.state();}
+    updateSettings(patch){if(this.stateCanSave===false)throw new Error(SETTINGS_READ_ONLY);Object.assign(this.settings,patch);this.save();this.emit('state');return this.state();}
+    // As the real manager: turning off still applies, until restart, when settings can't be saved.
+    turnOff(patch){if(this.stateCanSave!==false){this.updateSettings(patch);return true;}Object.assign(this.settings,patch);this.emit('state');return false;}
     save(){this.saved++;return true;}
     async stop(){this.stopping=true;await cleanup('manager',stopGate);}
   }
@@ -69,7 +72,7 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
       featureApp=injected;
       // The updater uses app.quit(), not the window's close operation.
       register('installUpdate',()=>{setImmediate(()=>injected.quit());return {phase:'ready'};});
-      return {snapshot:()=>({}),observe(){},configure(){},cancelInstall(){calls.push('cancelInstall');},beforeQuit:async options=>{featureOptions.push(options);await cleanup('features',featureGate);}};
+      return {snapshot:()=>({}),observe(){},configure(changes){configured.push(changes);},cancelInstall(){calls.push('cancelInstall');},beforeQuit:async options=>{featureOptions.push(options);await cleanup('features',featureGate);}};
     }},
     './browser-integration.cjs':{createBrowserIntegration:()=>({snapshot:()=>({}),beforeQuit:()=>cleanup('browser')})},
     './media-integration.cjs':{createMediaIntegration:()=>({snapshot:()=>({}),beforeQuit:()=>cleanup('media')})},
@@ -88,7 +91,7 @@ async function mainFixture(t,{behavior='ask',fail=[],blockStop=false,blockFeatur
     assert.equal(app.exits,1,'the fixture must finish cleanup rather than leave a live lifecycle');
   };
   t.after(closeDown);
-  return {app,win,manager,trays,dialogs,prompts,calls,errors,quitEvents,featureOptions,call,context,featureApp,releaseStop:()=>releaseStop?.(),releaseFeatures:()=>releaseFeatures?.(),closeDown};
+  return {app,win,manager,trays,dialogs,prompts,calls,errors,quitEvents,featureOptions,configured,call,context,featureApp,releaseStop:()=>releaseStop?.(),releaseFeatures:()=>releaseFeatures?.(),closeDown};
 }
 
 test('main prevents repeated quit attempts until its single ordered cleanup finishes',async t=>{
@@ -190,4 +193,14 @@ test('the close prompt restores a minimized window before it opens',async t=>{
 test('confirmed Windows session end bypasses the close prompt',async t=>{
   const f=await mainFixture(t);f.win.emit('session-end',event());
   assert.equal(f.win.close().prevented,false);await turn();assert.equal(f.dialogs.length,0);assert.equal(f.trays.length,0);
+});
+
+test('in a read-only session clipboard watching can still be turned off until restart, but not turned on',async t=>{
+  const f=await mainFixture(t);f.manager.stateCanSave=false;f.manager.settings.clipboardWatchEnabled=true;
+  await assert.rejects(f.call('saveSettings',{clipboardWatchEnabled:false}),{message:SESSION_ONLY});
+  assert.equal(f.manager.settings.clipboardWatchEnabled,false);assert.deepEqual(f.configured,[{clipboardWatchEnabled:false}],'the watcher is stopped now');assert.equal(f.manager.saved,0);
+  await assert.rejects(f.call('saveSettings',{clipboardWatchEnabled:true}),{message:SETTINGS_READ_ONLY});
+  assert.equal(f.manager.settings.clipboardWatchEnabled,false);assert.equal(f.configured.length,1,'nothing was started');
+  // A list that can be saved keeps the choice as before.
+  f.manager.stateCanSave=true;await f.call('saveSettings',{clipboardWatchEnabled:false});assert.equal(f.manager.saved,1);assert.equal(f.configured.length,2);
 });

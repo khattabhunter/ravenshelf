@@ -240,3 +240,19 @@ test('periodic-save encryption failure and recovery notify immediately even when
     assert.ok(!JSON.stringify(event.value).includes('fixture-sealed-headers'));
   }
 });
+
+test('a periodic save of a list too large to read back keeps the old file and tells the window once', async t => {
+  const f = fixture(t), controlled = managerWithControlledTimers();
+  const manager = f.open({ vault: { seal: () => 'fixture-sealed-headers' } }, controlled.Manager);
+  manager.downloads.push({ id: 'active', status: 'downloading', name: 'active.rar', folder: f.downloadDir, headers: {}, received: 1, total: 3, speed: 1, activeConnections: 1 });
+  manager.running.set('active', new AbortController()); manager.save();
+  const original = fs.readFileSync(f.stateFile), events = record(manager), saveTimer = controlled.timers.find(timer => timer.milliseconds === 2000);
+  manager.maxStateBytes = 100;
+  assert.doesNotThrow(() => saveTimer.callback());
+  assert.equal(events.length, 1); assert.match(events[0].value.stateRecoveryWarning, /too large to save/);
+  assert.deepEqual(fs.readFileSync(f.stateFile), original, 'the old file is kept');
+  saveTimer.callback(); assert.equal(events.length, 1, 'the same warning is not resent at every save');
+  manager.maxStateBytes = 128 * 1024 * 1024; saveTimer.callback();
+  assert.equal(events.length, 2); assert.equal(events[1].value.stateRecoveryWarning, '');
+  manager.running.clear();
+});

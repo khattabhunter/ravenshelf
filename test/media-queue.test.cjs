@@ -58,11 +58,11 @@ test('a YouTube video joins the queue in Ravenshelf’s YouTube folder, once per
 test('too many waiting YouTube videos are refused',async t=>{
   const f=await fixture(t);
   f.manager.settings.concurrency=1;f.manager.settings.downloadSchedule={...f.manager.settings.downloadSchedule};
-  f.manager.stopping=true; // keep everything queued
+  const pump=f.manager.pump;f.manager.pump=()=>{}; // keep everything queued
   const ids=Array.from({length:MAX_MEDIA_JOBS},(_,i)=>`${String(i).padStart(2,'0')}aaaaaaaaa`.slice(0,11));
   for(const id of ids)f.manager.addMedia({videoId:id,quality:'480'});
   assert.throws(()=>f.manager.addMedia({videoId:OTHER,quality:'480'}),/Too many YouTube downloads are waiting/);
-  f.manager.stopping=false;
+  f.manager.pump=pump;
 });
 
 test('a finished video gets its title as file name, keeps the internet mark and is scanned',async t=>{

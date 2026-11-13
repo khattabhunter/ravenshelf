@@ -152,7 +152,7 @@ test('finished browser link hashes preserve exact deduplication after restart wi
   manager.add({links:[entry],gameTitle:'Browser'});const deadline=Date.now()+3000;while(manager.running.size){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,5));}
   assert.equal(manager.downloads[0].status,'completed');assert.equal(manager.add({links:[entry],gameTitle:'Browser'}).added,0);await manager.stop();
   const saved=fs.readFileSync(w.file,'utf8');assert.doesNotMatch(saved,/finished-secret|get\?id=one/);assert.match(JSON.parse(saved).downloads[0].sourceIdentity,/^[a-f0-9]{64}$/);
-  const reopened=w.open();reopened.stopping=true;assert.equal(reopened.add({links:[entry],gameTitle:'Browser'}).added,0);
+  const reopened=w.open();reopened.pump=()=>{};assert.equal(reopened.add({links:[entry],gameTitle:'Browser'}).added,0);
   assert.equal(reopened.add({links:[{...entry,sourceUrl:'https://portal.example.com/get?id=two'}],gameTitle:'Browser'}).added,1,'a different query can identify a different file');
 });
 
@@ -291,8 +291,10 @@ test('a full list refuses new downloads instead of growing past what Ravenshelf 
   assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/a.zip',filename:'a.zip'}],gameTitle:'Game'}),{message:LIST_FULL});
   assert.throws(()=>manager.addMedia({videoId:'abcdefghijk',quality:Object.keys(require('../src/youtube.cjs').QUALITIES)[0]}),{message:LIST_FULL});
   assert.equal(manager.downloads.length,MAX_DOWNLOADS);assert.equal(publicErrorMessage(new Error(LIST_FULL)),LIST_FULL);
-  manager.downloads.length=MAX_DOWNLOADS-1;manager.stopping=true;
+  manager.downloads.length=MAX_DOWNLOADS-1;
   assert.doesNotThrow(()=>manager.assertWritable(1));assert.throws(()=>manager.assertWritable(2),{message:LIST_FULL});
+  // While closing, nothing new is accepted at all.
+  manager.stopping=true;assert.throws(()=>manager.assertWritable(1),{message:'Ravenshelf is closing. Wait for cleanup to finish.'});
 });
 
 test('game folders are local folders that are not a whole drive',()=>{
@@ -328,9 +330,36 @@ test('a recovery-copy symlink is rejected even when Windows opens its regular ta
   assert.equal(fs.readFileSync(result.recoveryFile,'utf8'),bytes);assert.equal(fs.readFileSync(elsewhere,'utf8'),bytes);assert.equal(fs.readFileSync(planted,'utf8'),'link fixture');
 });
 
+// The same two checks with real symbolic links, where this system lets a test
+// create them (Windows needs a privilege for file links: skipped there only).
+function realSymlink(t,target,link){
+  try{fs.symlinkSync(target,link);return true;}
+  catch(error){if(error?.code!=='EPERM')throw error;t.skip('This system does not allow creating file symlinks here.');return false;}
+}
+
+test('a real symlink named like the copy of the same bytes is never taken as that copy',t=>{
+  const crypto=require('node:crypto'),bytes='{"downloads":[null]}',name='library.json.recovery-'+crypto.createHash('sha256').update(bytes).digest('hex').slice(0,32)+'.json';
+  const w=fixture(t),elsewhere=path.join(w.root,'elsewhere.json'),planted=path.join(w.root,name);
+  fs.writeFileSync(elsewhere,bytes);if(!realSymlink(t,elsewhere,planted))return;fs.writeFileSync(w.file,bytes);
+  const result=loadLibrary(w.file);assert.equal(result.warning,RECOVERED);assert.equal(result.canSave,true);assert.notEqual(path.basename(result.recoveryFile),name);
+  assert.equal(fs.readFileSync(result.recoveryFile,'utf8'),bytes);assert.equal(fs.lstatSync(result.recoveryFile).isSymbolicLink(),false);
+  assert.ok(fs.lstatSync(planted).isSymbolicLink(),'the link is left alone');assert.equal(fs.readFileSync(elsewhere,'utf8'),bytes);
+});
+
+test('a real symlink named like a recovery copy is never pruned, and its target is untouched',t=>{
+  const w=fixture(t),past=Math.floor(Date.now()/1000)-1000,target=path.join(w.root,'link-target.json'),linked=path.join(w.root,'library.json.recovery-'+'f'.repeat(32)+'.json');
+  const copies=()=>fs.readdirSync(w.root).filter(name=>name.startsWith('library.json.recovery-')&&!fs.lstatSync(path.join(w.root,name)).isSymbolicLink());
+  fs.writeFileSync(target,'link target');if(!realSymlink(t,target,linked))return;
+  // Dated between the copies: if it were counted as one, it would be removed.
+  fs.lutimesSync(linked,past+3,past+3);
+  for(let i=0;i<8;i++){fs.writeFileSync(w.file,`{"downloads":[null],"n":${i}}`);const result=loadLibrary(w.file);assert.equal(result.canSave,true);fs.utimesSync(result.recoveryFile,past+i,past+i);}
+  assert.ok(fs.lstatSync(linked).isSymbolicLink(),'the link is not removed');assert.equal(fs.readFileSync(target,'utf8'),'link target');
+  assert.equal(copies().length,MAX_RECOVERY_COPIES);
+});
+
 test('at a full list, links already in it and videos already in it are no error',async t=>{
   const w=fixture(t),manager=w.open(),link={status:'ready',url:'https://files.example.com/a.zip',filename:'a.zip'};
-  manager.stopping=true;manager.add({links:[link],gameTitle:'Game'});const quality=Object.keys(require('../src/youtube.cjs').QUALITIES)[0];manager.addMedia({videoId:'abcdefghijk',quality});
+  manager.pump=()=>{};manager.add({links:[link],gameTitle:'Game'});const quality=Object.keys(require('../src/youtube.cjs').QUALITIES)[0];manager.addMedia({videoId:'abcdefghijk',quality});
   for(let i=manager.downloads.length;i<MAX_DOWNLOADS;i++)manager.downloads.push({id:'x'+i,status:'completed',name:'x'+i+'.bin',folder:w.folder,url:'https://files.example.com/x'+i});
   assert.equal(manager.add({links:[link],gameTitle:'Game'}).added,0);assert.equal(manager.addMedia({videoId:'abcdefghijk',quality}).added,0);
   assert.throws(()=>manager.add({links:[link,{status:'ready',url:'https://files.example.com/b.zip',filename:'b.zip'}],gameTitle:'Game'}),{message:LIST_FULL});

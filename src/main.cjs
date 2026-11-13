@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
 const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
-const {gameFolder}=require('./library-state.cjs');
+const {gameFolder,SESSION_ONLY}=require('./library-state.cjs');
 const {safeURL}=require('./net.cjs');
 const {imageResponse}=require('./image-loader.cjs');
 const {createHeaderVault}=require('./header-vault.cjs');
@@ -325,6 +325,13 @@ app.whenReady().then(async()=>{
     if(Array.isArray(patch?.favorites))changes.favorites=compactGames(patch.favorites);
     if(Array.isArray(patch?.collections)){
       const seen=new Set();changes.collections=patch.collections.slice(0,100).filter(c=>c&&typeof c.id==='string'&&/^[\w-]{1,100}$/.test(c.id)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,name:String(c.name||'My collection').replace(/[\0\r\n]+/g,' ').trim().slice(0,80)||'My collection',games:compactGames(c.games,500)}));
+    }
+    // Turning features off works even when settings can't be saved: running
+    // ones (such as clipboard watching) stop, and the change lasts until restart.
+    if(Object.keys(changes).length&&Object.values(changes).every(value=>value===false)){
+      const saved=manager.turnOff(changes);features.configure(changes);
+      if(!saved)throw new Error(SESSION_ONLY);
+      return appState();
     }
     manager.updateSettings(changes);features.configure(changes);return appState();
   });

@@ -4,7 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {EventEmitter}=require('node:events');
 const {safeFetch,safeURL}=require('./net.cjs');
-const {loadLibrary,SCHEMA_VERSION,MAX_DOWNLOADS,READ_ONLY,SETTINGS_READ_ONLY,LIST_FULL}=require('./library-state.cjs');
+const {loadLibrary,SCHEMA_VERSION,MAX_BYTES,MAX_DOWNLOADS,READ_ONLY,SETTINGS_READ_ONLY,LIST_FULL,LIST_TOO_LARGE}=require('./library-state.cjs');
 const {cleanHeaders}=require('./header-vault.cjs');
 const {sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
@@ -28,6 +28,7 @@ const MAX_MEDIA_JOBS=50;
 const MEDIA_SETUP='Set up YouTube downloads in Settings first, then retry.';
 const MEDIA_INVALID='Only YouTube video addresses can be downloaded this way.';
 const MEDIA_FULL='Too many YouTube downloads are waiting. Let some finish first.';
+const CLOSING='Ravenshelf is closing. Wait for cleanup to finish.';
 // Torrents waiting or running at once, and the folder for torrents from the browser.
 const MAX_TORRENT_JOBS=50,TORRENTS_FOLDER='Torrents',MAX_TORRENT_PATH=250;
 const {TORRENT_SETUP,MESSAGES:TORRENT}=require('./torrent-messages.cjs');
@@ -100,19 +101,22 @@ function dropFinishedBrowserLink(d){if(d.origin==='browser'&&!d.kind&&d.status==
   dropModLink(d);delete d.headersNeedRefresh;
 }}
 const HEADER_STORAGE_WARNING='Some download sign-in details could not be saved securely. They stay in memory for this session; affected links will be checked again after restarting.';
-function atomicJSON(file,data) {
+function atomicJSON(file,data) {atomicText(file,JSON.stringify(data,null,2));}
+function atomicText(file,text) {
   fs.mkdirSync(path.dirname(file),{recursive:true});
   const temporary=file+'.'+crypto.randomUUID()+'.tmp';
   const fd=fs.openSync(temporary,'wx',0o600);
-  try{fs.writeFileSync(fd,JSON.stringify(data,null,2));fs.fsyncSync(fd);}
+  try{fs.writeFileSync(fd,text);fs.fsyncSync(fd);}
   catch(error){fs.closeSync(fd);fs.unlinkSync(temporary);throw error;}
   fs.closeSync(fd);
   try{fs.renameSync(temporary,file);}catch(error){fs.unlinkSync(temporary);throw error;}
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null,media=null,torrent=null}) {
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null,media=null,torrent=null,maxStateBytes=MAX_BYTES}) {
     super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted; this.media=media; this.torrent=torrent;
+    // A list is saved only when it can be read back: loading refuses larger files.
+    this.maxStateBytes=maxStateBytes; this.stateTooLarge=false;
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
     const loaded=loadLibrary(stateFile),stored=loaded.data;
@@ -152,16 +156,17 @@ class DownloadManager extends EventEmitter {
     // Remove legacy plaintext even when encryption is unavailable. Working
     // credentials remain in memory, but only sealed credentials go to disk.
     // A repaired library is saved at once, so the next start finds it repaired
-    // instead of making another recovery copy of the same damage.
-    if(plainHeaders||tidied||loaded.recoveryFile||this.downloads.some(d=>d.headersNeedRefresh&&!isModFile(d))){try{this.save();}catch{}}
+    // instead of making another recovery copy of the same damage. So is a list
+    // whose old finished history was trimmed.
+    if(plainHeaders||tidied||loaded.recoveryFile||loaded.trimmed||this.downloads.some(d=>d.headersNeedRefresh&&!isModFile(d))){try{this.save();}catch{}}
     // Scans interrupted by closing the app run again on the next start.
     for(const d of this.downloads)if(d.status==='completed'&&['queued','scanning'].includes(d.scan?.status)){d.scan={status:'queued'};this.scanQueue.push(d.id);}
     if(this.stateCanSave&&this.scanQueue.length&&this.scanFile)setImmediate(()=>this.pumpScans());
     this.timer=setInterval(()=>{
       if(this.running.size){
-        const warning=this.headerStorageWarning;this.save();
+        const warning=this.headerStorageWarning,tooLarge=this.stateTooLarge;this.save();
         // Storage failures/recovery must reach the UI even without a lifecycle change.
-        if(warning!==this.headerStorageWarning)this.changed();
+        if(warning!==this.headerStorageWarning||tooLarge!==this.stateTooLarge)this.changed();
       }
     },2000); this.timer.unref();
     // One cadence for the whole queue. File I/O and durable checkpoints do not
@@ -170,7 +175,7 @@ class DownloadManager extends EventEmitter {
     this.scheduleTimer=setInterval(()=>{this.checkSchedule();this.pump();},1000);this.scheduleTimer.unref();
     Promise.resolve().then(()=>{if(!this.stopping){this.checkSchedule();this.pump();}});
   }
-  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>d.kind==='torrent'?{...d,torrent:torrentSummary(d.torrent)}:{...d}),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,stateRecoveryWarning:this.stateRecoveryWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
+  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>d.kind==='torrent'?{...d,torrent:torrentSummary(d.torrent)}:{...d}),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,stateRecoveryWarning:this.stateTooLarge?LIST_TOO_LARGE:this.stateRecoveryWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
   persisted(d){
     const {headers:rawHeaders,sealedHeaders,headersNeedRefresh,...rest}=d;
     const headers=downloadHeaders(rawHeaders,undefined,d);
@@ -184,7 +189,12 @@ class DownloadManager extends EventEmitter {
     if(!this.stateCanSave)return false;
     const downloads=this.downloads.map(d=>this.persisted(d));
     this.headerStorageWarning=downloads.some(d=>d.headersNeedRefresh&&!isModFile(d))?HEADER_STORAGE_WARNING:'';
-    atomicJSON(this.stateFile,{schemaVersion:SCHEMA_VERSION,settings:this.settings,downloads});
+    // A list larger than loading accepts would be refused at the next start:
+    // the previous file is kept and the window says what to do instead.
+    const text=JSON.stringify({schemaVersion:SCHEMA_VERSION,settings:this.settings,downloads},null,2);
+    this.stateTooLarge=Buffer.byteLength(text,'utf8')>this.maxStateBytes;
+    if(this.stateTooLarge)return false;
+    atomicText(this.stateFile,text);
     return true;
   }
   changed(){this.emit('state',this.state());}
@@ -202,7 +212,7 @@ class DownloadManager extends EventEmitter {
     if(downloads.length)this.emit('progress',downloads);
   }
   updateSettings(patch){
-    if(this.stopping)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
+    if(this.stopping)throw new Error(CLOSING);
     if(this.stateCanSave===false)throw new Error(SETTINGS_READ_ONLY);
     const next={...this.settings,...patch};
     next.maxDownloadBytesPerSecond=normalizeBandwidthLimit(next.maxDownloadBytesPerSecond);
@@ -212,9 +222,18 @@ class DownloadManager extends EventEmitter {
     // Remembered close choices and other preferences take effect only after
     // their durable write succeeds. Failed writes leave the old behavior and
     // running transfers untouched; the caller receives the save failure.
-    try{if(this.save()===false)throw new Error(SETTINGS_READ_ONLY);}
+    try{if(this.save()===false)throw new Error(this.stateTooLarge?LIST_TOO_LARGE:SETTINGS_READ_ONLY);}
     catch(error){this.settings=previous;throw error;}
     this.bandwidthLimiter.setRate(next.maxDownloadBytesPerSecond);this.checkSchedule();this.changed();this.pump();return this.state();
+  }
+  // Turning a feature off must work even when settings can't be saved (a
+  // read-only or too large list): it then applies until restart, and false
+  // tells the caller to say so. Other failures change nothing, as above.
+  turnOff(patch){
+    if(this.stopping)throw new Error(CLOSING);
+    try{this.updateSettings(patch);return true;}
+    catch(error){if(![SETTINGS_READ_ONLY,LIST_TOO_LARGE].includes(error?.message))throw error;}
+    this.settings={...this.settings,...patch};this.changed();return false;
   }
   checkSchedule(date=new Date(this.now())){
     const snapshot=scheduleSnapshot(this.settings.downloadSchedule,date);let changed=false;
@@ -273,9 +292,20 @@ class DownloadManager extends EventEmitter {
     return held?held.gameTitle:modFolder(mod);
   }
   // `group` puts the folder one level down, such as Mods\<game> for mod files.
-  // Nothing new is added while the saved list is read-only. Legacy lists over
-  // the limit keep their existing resumable jobs, but cannot grow further.
-  assertWritable(adding=1){if(!this.stateCanSave)throw new Error(READ_ONLY);if(adding&&this.downloads.length+adding>MAX_DOWNLOADS)throw new Error(LIST_FULL);}
+  // Nothing new is added while closing, while the saved list is read-only or
+  // too large to save. Legacy lists over the limit keep their existing
+  // resumable jobs, but cannot grow further.
+  assertWritable(adding=1){
+    if(this.stopping)throw new Error(CLOSING);if(!this.stateCanSave)throw new Error(READ_ONLY);if(this.stateTooLarge)throw new Error(LIST_TOO_LARGE);
+    if(adding&&this.downloads.length+adding>MAX_DOWNLOADS)throw new Error(LIST_FULL);
+  }
+  // Saves the list after new entries were added. Entries that would make it
+  // too large to read back are taken out again and refused.
+  saveAdded(ids){
+    if(this.save()!==false||!this.stateTooLarge)return;
+    const fresh=new Set(ids);this.downloads=this.downloads.filter(d=>!fresh.has(d.id));
+    this.save();this.changed();throw new Error(LIST_TOO_LARGE);
+  }
   add({links,gameTitle,group}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
     this.assertWritable(0);
@@ -286,8 +316,10 @@ class DownloadManager extends EventEmitter {
     const earlierName=safeName(gameTitle,'Imported files').slice(0,100),earlier=path.join(this.settings.downloadDir,earlierName);
     const keepsEarlier=!group&&(this.downloads.some(d=>d.folder.toLowerCase()===earlier.toLowerCase())||fs.existsSync(earlier));
     const folderName=keepsEarlier?earlierName:safeFolderName(gameTitle);
-    const folder=group?path.join(this.settings.downloadDir,safeFolderName(group),folderName):path.join(this.settings.downloadDir,folderName); fs.mkdirSync(folder,{recursive:true});
-    const added=[];let full=false;
+    const folder=group?path.join(this.settings.downloadDir,safeFolderName(group),folderName):path.join(this.settings.downloadDir,folderName);
+    // A full list takes no new entries, so it needs no new folder either.
+    if(this.downloads.length<MAX_DOWNLOADS)fs.mkdirSync(folder,{recursive:true});
+    const added=[],fresh=[];let full=false;
     for(const link of links){
       if(link.status!=='ready')continue;
       safeURL(link.url);
@@ -317,9 +349,9 @@ class DownloadManager extends EventEmitter {
       if(link.origin==='browser'){d.origin='browser';d.markOfTheWeb=link.markOfTheWeb===true;}
       // The game and mod of a file downloaded on Nexus Mods, checked by the browser bridge.
       if(isModFile(link))d.mod={...link.mod};
-      this.downloads.push(d);added.push(d.id);
+      this.downloads.push(d);added.push(d.id);fresh.push(d.id);
     }
-    this.save();this.changed();this.pump();
+    this.saveAdded(fresh);this.changed();this.pump();
     if(full)throw new Error(LIST_FULL);
     return {added:added.length,ids:added};
   }
@@ -344,7 +376,7 @@ class DownloadManager extends EventEmitter {
     const url=canonicalUrl(videoId),name=this.availableName(folder,`YouTube video ${videoId}.${QUALITIES[quality].ext}`);
     const d={id:crypto.randomUUID(),kind:'media',url,sourceUrl:url,name,gameTitle:MEDIA_FOLDER,folder,status:'queued',received:0,total:0,speed:0,error:'',etag:null,lastModified:null,headers:{},connectionMode:'media',activeConnections:0,connectionNote:'',createdAt:new Date().toISOString(),
       origin:'browser',markOfTheWeb:true,media:{videoId,quality}};
-    this.downloads.push(d);this.save();this.changed();this.pump();
+    this.downloads.push(d);this.saveAdded([d.id]);this.changed();this.pump();
     return {added:1,ids:[d.id]};
   }
   // A torrent whose file list was checked and shown. `files` is the whole list,
@@ -375,7 +407,7 @@ class DownloadManager extends EventEmitter {
     const longest=list.reduce((max,file)=>Math.max(max,file.path.length),0);
     if(torrentWorkspace(d).length+1+longest>MAX_TORRENT_PATH)throw new Error(MAGNET.tooLong);
     fs.mkdirSync(folder,{recursive:true});
-    this.downloads.push(d);this.save();this.changed();this.pump();
+    this.downloads.push(d);this.saveAdded([d.id]);this.changed();this.pump();
     return {added:1,ids:[d.id]};
   }
   action(id,action){

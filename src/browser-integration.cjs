@@ -10,6 +10,7 @@ const {BrowserBridge}=require('./browser-bridge.cjs');
 const browserSetup=require('./browser-setup.cjs');
 const {safeURL}=require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
+const {SESSION_ONLY}=require('./library-state.cjs');
 const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
 const {MODS_FOLDER}=require('./mods.cjs');
 
@@ -106,9 +107,11 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
     if(typeof enabled!=='boolean')throw new Error('Choose on or off for this preference.');
     assertOpen();
     await serial(async()=>{
-      if(!enabled){manager.updateSettings({browserIntegrationEnabled:false});await stop();return;}
+      // Disconnecting works even when settings can't be saved; it then lasts until restart.
+      if(!enabled){const saved=manager.turnOff({browserIntegrationEnabled:false});await stop();if(!saved)throw new Error(SESSION_ONLY);return;}
       manager.updateSettings({browserIntegrationEnabled:true});
-      try{await start();}catch(error){manager.updateSettings({browserIntegrationEnabled:false});throw error;}
+      // A failed rollback must not hide why connecting failed.
+      try{await start();}catch(error){try{manager.updateSettings({browserIntegrationEnabled:false});}catch{}throw error;}
     });
     return snapshot();
   });

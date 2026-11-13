@@ -15,6 +15,7 @@ const {createTorrentIntegration,TOOLS,normalizeSettings,UPLOAD_LIMITS}=require('
 const {TOOL_MESSAGES,MESSAGES:TORRENT}=require('../src/torrent-messages.cjs');
 const {publicErrorMessage}=require('../src/public-errors.cjs');
 const {validateRequest}=require('../src/browser-protocol.cjs');
+const {SETTINGS_READ_ONLY,SESSION_ONLY}=require('../src/library-state.cjs');
 
 const tick=(ms=5)=>new Promise(resolve=>setTimeout(resolve,ms));
 const cleanups=new Map();
@@ -743,6 +744,33 @@ test('torrents are off until the user accepts what they share, and cannot be tur
   assert.throws(()=>off.call('saveTorrentSettings',{enabled:true,accepted:true}),{message:TOOL_MESSAGES.unsupported});
 });
 
+test('in a read-only session torrents can still be turned off until restart, but not turned on again',async t=>{
+  const on={enabled:true,accepted:true,uploadLimit:102400,shareMinutes:0},link='magnet:?xt=urn:btih:'+'a'.repeat(40);
+  const s=integrationFor(t,{ready:false,settings:on,before:(root,manager)=>{manager.stateCanSave=false;}});
+  s.integration.receive({magnet:link});assert.equal(s.integration.snapshot().waiting,1);
+  assert.throws(()=>s.call('saveTorrentSettings',{enabled:false}),{message:SESSION_ONLY});
+  assert.equal(s.integration.snapshot().enabled,false);assert.equal(s.integration.snapshot().waiting,0,'waiting links are dropped');
+  assert.equal(s.manager.settings.torrents.enabled,false);assert.equal(s.manager.settings.torrents.accepted,true);
+  assert.equal(fs.existsSync(path.join(s.root,'library.json')),false,'nothing was written');
+  assert.throws(()=>s.call('saveTorrentSettings',{enabled:true}),{message:SETTINGS_READ_ONLY});
+  assert.equal(s.integration.snapshot().enabled,false);assert.deepEqual(s.integration.receive({magnet:link}),{action:'off'});
+  // Other torrent preferences are not "turning off": they are refused, and nothing changes.
+  const both=integrationFor(t,{ready:false,settings:on,before:(root,manager)=>{manager.stateCanSave=false;}});
+  both.integration.receive({magnet:link});
+  assert.throws(()=>both.call('saveTorrentSettings',{enabled:false,shareMinutes:15}),{message:SETTINGS_READ_ONLY});
+  assert.equal(both.integration.snapshot().enabled,true);assert.equal(both.integration.snapshot().waiting,1);
+});
+
+test('a failed save when turning torrents off leaves them on and running state untouched',async t=>{
+  const on={enabled:true,accepted:true,uploadLimit:102400,shareMinutes:0};
+  const s=integrationFor(t,{ready:false,settings:on});
+  s.integration.receive({magnet:'magnet:?xt=urn:btih:'+'a'.repeat(40)});
+  const failure=Object.assign(new Error('fixture disk full'),{code:'ENOSPC'});s.manager.save=()=>{throw failure;};
+  try{assert.throws(()=>s.call('saveTorrentSettings',{enabled:false}),error=>error===failure);}finally{delete s.manager.save;}
+  assert.equal(s.integration.snapshot().enabled,true);assert.equal(s.manager.settings.torrents.enabled,true);assert.equal(s.integration.snapshot().waiting,1,'nothing was stopped');
+  assert.equal(s.call('saveTorrentSettings',{enabled:false}).enabled,false);assert.equal(s.integration.snapshot().waiting,0);
+});
+
 test('a magnet link is read, its files are shown, and only the chosen ones are queued',async t=>{
   const {buffer,infoHash}=torrentFile(multi());
   const fake=fakeAria2({torrents:{[infoHash]:buffer}}),s=integrationFor(t,{fake,settings:{enabled:true,accepted:true,uploadLimit:102400,shareMinutes:0}});
@@ -1143,6 +1171,17 @@ test('an abandoned running DNS lookup keeps its slot but a later caller gets a f
   const answer=[{address:'93.184.216.34',family:4}];pending.shift()(answer);
   assert.deepEqual(await fresh,answer);assert.equal(lookup.busy(),0);
   assert.equal(getEventListeners(controller.signal,'abort').length,0);
+});
+
+test('tracker lookups refused as too many or misconfigured use internal errors, not the stopped-downloader message',async()=>{
+  const shown=Object.values(engineModule.MESSAGES);
+  assert.throws(()=>engineModule.createSystemLookup({slots:3}),error=>error instanceof RangeError&&!shown.includes(error.message));
+  const pending=[],lookup=engineModule.createSystemLookup({lookupImpl:()=>new Promise(resolve=>pending.push(resolve))});
+  const waits=Array.from({length:513},(_,i)=>lookup('host'+i+'.example').then(()=>null,error=>error));
+  const refused=await waits[512];
+  assert.equal(refused.code,'LOOKUP_BUSY');assert.ok(!shown.includes(refused.message));assert.notEqual(publicErrorMessage(refused,'torrent'),engineModule.MESSAGES.stopped);
+  for(let i=0;i<512;i++){while(!pending.length)await tick(1);pending.shift()([]);}
+  assert.ok((await Promise.all(waits.slice(0,512))).every(value=>value===null));assert.equal(lookup.busy(),0);
 });
 
 test('pending DNS waits are bounded and cancelled queued jobs leave no listeners or future lookups',async()=>{
