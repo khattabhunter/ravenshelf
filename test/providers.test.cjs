@@ -44,3 +44,15 @@ test('PrivateBin authenticated decrypt and tamper detection',async()=>{
 test('page reader rejects unexpectedly large responses',async()=>{
  await assert.rejects(t.limitedText(new Response('0123456789'),5),/size limit/);
 });
+
+test('catalogue cards get the source thumbnails, with an imageban.ru cover last, and at most three pictures',()=>{
+  const post=cover=>`<article><h1 class="entry-title"><a href="https://fitgirl-repacks.site/pictures/">Pictures</a></h1><div class="entry-content"><h3>#7 Pictures</h3><p><img class="alignleft" src="${cover}"><br>Repack Size: <strong>1 GB</strong></p>`+
+    [1,2,3].map(n=>`<a href="https://riotpixels.net/data/x/${n}.jpg"><img src="https://riotpixels.net/data/x/${n}.jpg.240p.jpg"></a>`).join('')+`</div></article>`;
+  const imageban=t.parseListing(post('https://i2.imageban.ru/out/2026/x.jpg')).games[0];
+  assert.deepEqual(imageban.cardImages,['https://riotpixels.net/data/x/1.jpg.240p.jpg','https://riotpixels.net/data/x/2.jpg.240p.jpg','https://i2.imageban.ru/out/2026/x.jpg']);
+  assert.equal(imageban.image,'https://riotpixels.net/data/x/1.jpg','the game page still starts with the full-size picture');
+  const working=t.parseListing(post('https://covers.example/x.jpg')).games[0];
+  assert.deepEqual(working.cardImages,['https://covers.example/x.jpg','https://riotpixels.net/data/x/1.jpg.240p.jpg','https://riotpixels.net/data/x/2.jpg.240p.jpg']);
+  const none=t.parseListing(post('').replace(/<a href="https:\/\/riotpixels[^]*?<\/a>/g,'')).games[0];
+  assert.deepEqual(none.cardImages,[]);
+});

@@ -8,6 +8,10 @@ The publication review on 6 November 2026 checked the published 0.2.3 source, bo
 
 The public Windows release is built on GitHub-hosted Windows machines from the tagged source. Paths in those build logs belong to the hosted runner. Network addresses and credentials in tests are fixtures, not a record of the developer's network or accounts. This is a scoped review, not proof that every future change or dependency is free of privacy defects.
 
+## Picture loading (0.10.4)
+
+From 0.10.4, pictures already loaded are kept in memory for up to 30 minutes (at most 40 MB of downloaded picture data). They are never written to disk and are gone when Ravenshelf closes. To cancel pictures of pages you left, the window gives each picture request a number, and reports the numbers of pictures that left the page to Ravenshelf's own main process; the numbers are counters, not addresses, and never leave your PC. **Settings → Picture loading** counts this session's picture requests by site and result. It holds only site names (at most 30, then "Other sites") and counts: no picture addresses, game names or browsing history. It is not saved, not sent anywhere, and resets when Ravenshelf closes. Picture requests keep the checks described in [Image-request hardening](#image-request-hardening-in-024); image hosts still see the IP address used to connect.
+
 ## Background mode (0.10.3)
 
 From 0.10.3, the background choice hides the window while leaving the app running. Previously enabled downloads, catalogue refresh, update checks, browser connector and protection-list refreshes continue; optional clipboard recognition and torrent work also continue when enabled. Torrent uploads remain subject to the existing sharing settings. Hiding the window does not hide your IP address or stop these network requests. It does not turn on disabled features, add Windows autostart or keep a sleeping computer awake. Use **Exit Ravenshelf** to stop the running app; hiding it does not install a staged update.

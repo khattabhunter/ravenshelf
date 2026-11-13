@@ -47,7 +47,7 @@ async function fixture({resourceError,startupError,loadError,imageError,queueErr
       if(name==='./downloads.cjs')return {DownloadManager:Manager,safeName:value=>value,atomicJSON:(file,value)=>stored.set(file,value),loadJSON:(file,fallback)=>stored.get(file)??fallback};
       if(name==='./completion-action.cjs')return {CompletionAction:Completion};
       if(name==='./catalog-refresh.cjs')return {CatalogRefresh:Refresher};
-      if(name==='./image-loader.cjs')return {imageResponse:async()=>{if(imageError)throw imageError;return new Response('image fixture',{headers:{'content-type':'image/png'}});}};
+      if(name==='./image-loader.cjs')return {createImageService:()=>({respond:async()=>{if(imageError)throw imageError;return new Response('image fixture',{headers:{'content-type':'image/png'}});},snapshot:()=>({})})};
       if(name==='./providers.cjs')return {getGame:async()=>{if(providerError)throw providerError;return {};},resolveLink:resolveLink||async function(){if(providerError)throw providerError;return {status:'manual',message:'Fixture'};}};
       if(name==='./catalog.cjs'||name==='./installed-games.cjs')return {};
       return name.startsWith('./')?require(path.join(__dirname,'../src',name)):require(name);

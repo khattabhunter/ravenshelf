@@ -126,7 +126,7 @@ test('image redirects are validated before a second connection, without forwardi
 test('renderer maps remote images to the checked protocol and refuses credentialed or non-HTTPS values',()=>{
   const source=fs.readFileSync(path.join(__dirname,'../src/renderer/app.js'),'utf8');
   const fn=source.slice(source.indexOf('function safeImageUrl('),source.indexOf('function gameTitle('));
-  const context=vm.createContext({URL,encodeURIComponent});vm.runInContext(fn,context);
+  const context=vm.createContext({URL,encodeURIComponent,later:text=>text});vm.runInContext(fn,context);
   const original='https://images.example.org/a.png?token=fictional';
   const mapped=context.safeImageUrl(original);
   assert.equal(new URL(mapped).origin,'null');assert.equal(new URL(mapped).host,'app');assert.equal(new URL(mapped).pathname,'/image');
@@ -157,7 +157,7 @@ test('main protocol routes images through the loader and keeps application resou
       if(name==='./downloads.cjs')return {DownloadManager:Manager,safeName:value=>value,atomicJSON(){},loadJSON:(_file,fallback)=>fallback};
       if(name==='./completion-action.cjs')return {CompletionAction:Completion};
       if(name==='./catalog-refresh.cjs')return {CatalogRefresh:Refresher};
-      if(name==='./image-loader.cjs')return {imageResponse:async request=>{routed.push(request.url);return remote();}};
+      if(name==='./image-loader.cjs')return {createImageService:()=>({respond:async request=>{routed.push(request.url);return remote();},snapshot:()=>({})})};
       if(name==='./providers.cjs'||name==='./catalog.cjs'||name==='./installed-games.cjs')return {};
       return name.startsWith('./')?require(path.join(__dirname,'../src',name)):require(name);
     }
