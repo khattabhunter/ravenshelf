@@ -255,6 +255,7 @@ test('the main process translates its own fixed texts', () => {
   for (const text of ['Choose download folder', 'Choose an installed game or game library folder', 'Export download links', 'Ravenshelf links', 'Link list',
     'Could not queue file', 'Ravenshelf could not start', 'Choose an SFV, MD5 or SHA-256 checksum file', 'Checksum manifests', 'Choose the extracted game folder to verify',
     'Review a download in Ravenshelf', 'Ravenshelf blocked a download', 'Check this download before opening it', 'Ravenshelf update available', 'Ravenshelf update ready',
+    'Ravenshelf update not installed', 'Ravenshelf could not finish shutting down, so the update was not installed. Open Ravenshelf and check for updates to try again.',
     'A download has finished.', 'Downloads have finished.', 'Set up YouTube downloads', 'It failed Ravenshelf\u2019s safety checks.', 'a downloaded file'])
     assert.equal(typeof AR[text], 'string', text);
   // Notifications, dialogs and the error box go through the translation.

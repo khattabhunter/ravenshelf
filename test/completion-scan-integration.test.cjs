@@ -71,8 +71,24 @@ test('manual stop stays responsive and persists active and queued scans for rest
   finally{clearTimeout(timeout);}
   const saved=JSON.parse(fs.readFileSync(f.stateFile,'utf8'));
   assert.deepEqual(saved.downloads.map(d=>d.scan.status).sort(),['queued','scanning']);
-  // The active process may finish, but stopping must not launch another scan.
+  const checkpoint=fs.readFileSync(f.stateFile,'utf8'),pending=manager.downloads.map(d=>structuredClone(d.scan));let lateWrites=0,lateStates=0;
+  const save=manager.save;manager.save=function(){lateWrites++;return save.call(this);};manager.on('state',()=>{lateStates++;});
+  // The active process may finish, but it must not alter the final checkpoint,
+  // publish stale state, or start another scan after stop() has returned.
   f.resolvers[0]({status:'clean',message:'Fixture scan finished.'});await flush();await flush();assert.equal(f.resolvers.length,1);
-  const restarted=f.open({scanFile:async()=>({status:'clean',message:'Fixture restarted scan.'})});
+  assert.equal(lateWrites,0);assert.equal(lateStates,0);assert.equal(manager.scanTasks.size,0);assert.deepEqual(manager.downloads.map(d=>d.scan),pending);assert.equal(fs.readFileSync(f.stateFile,'utf8'),checkpoint);
+  assert.equal(manager.setReputation(manager.downloads[0].id,{virusTotal:{status:'ok'}}),false);assert.equal(manager.downloads[0].reputation,undefined);assert.equal(lateWrites,0);assert.equal(lateStates,0);
+  let restartedScans=0;const restarted=f.open({scanFile:async()=>{restartedScans++;return {status:'clean',message:'Fixture restarted scan.'};}});
   await until(()=>restarted.downloads.every(d=>d.scan.status==='clean'));
+  assert.equal(restartedScans,2,'both pending scans restart from the final checkpoint');
+});
+
+test('a scanner rejection after stop cannot rewrite or publish the stopped profile',async t=>{
+  const f=fixture(t);let rejectScan;
+  const manager=f.open({scanFile:()=>new Promise((resolve,reject)=>{rejectScan=reject;f.resolvers.push(resolve);})});
+  manager.add({gameTitle:'Synthetic queue',links});await until(()=>manager.downloads.every(d=>d.status==='completed')&&typeof rejectScan==='function');
+  await manager.stop();const checkpoint=fs.readFileSync(f.stateFile,'utf8'),pending=manager.downloads.map(d=>structuredClone(d.scan));let writes=0,states=0;
+  const save=manager.save;manager.save=function(){writes++;return save.call(this);};manager.on('state',()=>{states++;});
+  rejectScan(new Error('Fixture late failure'));await flush();await flush();
+  assert.equal(writes,0);assert.equal(states,0);assert.equal(f.resolvers.length,1);assert.equal(manager.scanTasks.size,0);assert.deepEqual(manager.downloads.map(d=>d.scan),pending);assert.equal(fs.readFileSync(f.stateFile,'utf8'),checkpoint);
 });

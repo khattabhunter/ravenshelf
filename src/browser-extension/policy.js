@@ -60,6 +60,13 @@
       host.includes(':') || /^[\d.]+$/.test(host) || /(?:^|\.)(?:localhost|local|localdomain|internal|lan)$/.test(host) || host === 'home.arpa' || host.endsWith('.home.arpa')) return undefined;
     return url.origin + '/';
   }
+  function publicDownloadAddress(value) {
+    if (typeof value !== 'string' || !value || value.length > MAX_URL || /[\x00-\x1f\x7f]/.test(value)) return false;
+    // URL parsing encodes ordinary spaces in names. Keep the same credential,
+    // scheme and local-address exclusions as page context without rejecting a
+    // legitimate filename containing spaces.
+    try { return Boolean(contextOrigin(new URL(value).href)); } catch (error) { return false; }
+  }
 
   // What to do with a download the browser is starting, before asking the app.
   // `context` holds what open Nexus Mods pages reported ({ pages, now }), so a
@@ -81,6 +88,9 @@
       return { kind: 'ignore' };
     }
     if (!['http:', 'https:'].includes(schemeOf(url)) || url.length > MAX_URL || (finalUrl && (finalUrl.length > MAX_URL || !['http:', 'https:'].includes(scheme)))) return { kind: 'ignore' };
+    // Private/local addresses and URL credentials never leave the browser.
+    // The app still validates DNS and every redirect before fetching a file.
+    if (!publicDownloadAddress(url) || finalUrl && !publicDownloadAddress(finalUrl)) return { kind: 'ignore' };
     const size = Number.isSafeInteger(item.totalBytes) && item.totalBytes > 0 ? item.totalBytes : Number.isSafeInteger(item.fileSize) && item.fileSize > 0 ? item.fileSize : undefined;
     const referrer = typeof item.referrer === 'string' && ['http:', 'https:'].includes(schemeOf(item.referrer)) && item.referrer.length <= MAX_URL ? item.referrer : undefined;
     const message = { type: 'capture', url, incognito: false };
@@ -314,7 +324,7 @@
     if (/forbidden/i.test(text)) return 'not-allowed';
     return 'unavailable';
   }
-  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, contextOrigin, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusFile, nexusMatch };
+  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, contextOrigin, publicDownloadAddress, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusFile, nexusMatch };
   if (typeof module === 'object' && module.exports) module.exports = policy;
   else root.RavenshelfPolicy = Object.freeze(policy);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -30,7 +30,7 @@ const MESSAGES=Object.freeze({
   missing:'This torrent’s saved file list is missing. Add it again from its magnet link.'
 });
 const ENV_KEEP=['systemroot','windir'];
-const DROP_MS=5000,STOP_RESERVE_MS=2500,PREFLIGHT_MS=3000,LOOKUP_SLOTS=2,MAX_LAUNCHES=3,START_TIMEOUT_MS=15000,RPC_TIMEOUT_MS=15000,MAX_ANSWER=8*1024*1024,METADATA_TIMEOUT_MS=10*60*1000,IDLE_MS=60*1000,POLL_MS=1000;
+const DROP_MS=5000,STOP_RESERVE_MS=2500,PREFLIGHT_MS=3000,LOOKUP_SLOTS=2,MAX_LOOKUP_WAITERS=512,MAX_LAUNCHES=3,START_TIMEOUT_MS=15000,RPC_TIMEOUT_MS=15000,MAX_ANSWER=8*1024*1024,METADATA_TIMEOUT_MS=10*60*1000,IDLE_MS=60*1000,POLL_MS=1000;
 const STATUS_KEYS=['status','totalLength','completedLength','downloadSpeed','uploadSpeed','uploadLength','connections','numSeeders','errorCode','seeder'];
 // aria2's exit and error numbers that mean the disk, or the files on it.
 const SPACE_CODES=new Set(['9']),WRITE_CODES=new Set(['13','15','16','17','18']);
@@ -116,32 +116,59 @@ async function killEngine(child){if(child&&child.exitCode===null&&child.signalCo
 // without IPv6. (aria2 then makes its own lookups.) Those lookups use the small thread pool that file
 // reads and writes share, so at most two run at a time, across all checks, and
 // a place is given back only when its lookup has really ended.
+// These refusals are internal: a tracker whose name is not looked up is
+// skipped, and the user never sees why.
+const LOOKUP_SLOTS_INVALID='Tracker lookups need one or two places.',LOOKUP_BUSY='Too many tracker lookups are waiting.';
 function createSystemLookup({lookupImpl=dns.promises.lookup,slots=LOOKUP_SLOTS}={}){
-  let free=slots;const queue=[],inflight=new Map();
-  const take=()=>free>0?(free--,Promise.resolve()):new Promise(resolve=>queue.push(resolve));
-  const give=()=>{const next=queue.shift();if(next)next();else free++;};
+  if(!Number.isInteger(slots)||slots<1||slots>LOOKUP_SLOTS)throw new RangeError(LOOKUP_SLOTS_INVALID);
+  let running=0,waiting=0;const queue=new Set(),inflight=new Map();
+  const forget=job=>{if(inflight.get(job.host)===job)inflight.delete(job.host);};
+  const settle=(job,waiter,ok,value)=>{
+    if(!job.waiters.delete(waiter))return;
+    waiting--;waiter.signal?.removeEventListener('abort',waiter.abort);
+    if(ok)waiter.resolve(value);else waiter.reject(value);
+  };
+  const finish=(job,ok,value)=>{
+    forget(job);
+    for(const waiter of job.waiters)settle(job,waiter,ok,value);
+    running--;pump();
+  };
+  const pump=()=>{
+    while(running<slots&&queue.size){
+      const job=queue.values().next().value;queue.delete(job);
+      job.started=true;running++;
+      // A system lookup cannot be cancelled. Even if every caller leaves,
+      // its slot stays occupied until the actual lookup settles.
+      Promise.resolve().then(()=>job.waiters.size?lookupImpl(job.host,{all:true,family:4,verbatim:true}):[])
+        .then(value=>finish(job,true,value),error=>finish(job,false,error));
+    }
+  };
   const lookup=(host,{signal}={})=>{
     if(signal?.aborted)return Promise.reject(abortError(signal));
+    // Bound both distinct queued names and callers joining shared names.
+    // Normal preflights are also bounded by their own three-second deadline.
+    if(waiting>=MAX_LOOKUP_WAITERS)return Promise.reject(Object.assign(new Error(LOOKUP_BUSY),{code:'LOOKUP_BUSY'}));
     // A name already being looked up, or waiting for a place, for this or
-    // another check, is joined rather than asked again.
-    if(inflight.has(host))return inflight.get(host);
-    let started=false;
-    const job=(async()=>{
-      await take();started=true;
-      try{
-        if(signal?.aborted)throw abortError(signal);
-        return await lookupImpl(host,{all:true,family:4,verbatim:true});
-      }finally{give();}
-    })();
-    inflight.set(host,job);
-    const forget=()=>{if(inflight.get(host)===job)inflight.delete(host);};
-    job.then(forget,forget);
-    // A check that ends while still waiting for a place leaves the name free
-    // for the next check, instead of handing it this abandoned lookup.
-    signal?.addEventListener('abort',()=>{if(!started)forget();},{once:true});
-    return job;
+    // another check, is joined, but each caller owns only its own wait.
+    let job=inflight.get(host);
+    if(!job){job={host,started:false,waiters:new Set()};inflight.set(host,job);queue.add(job);}
+    const result=new Promise((resolve,reject)=>{
+      const waiter={resolve,reject,signal,abort:null};
+      waiter.abort=()=>{
+        settle(job,waiter,false,abortError(signal));
+        if(!job.waiters.size){
+          // Remove abandoned queued jobs immediately. If the system lookup
+          // already started, a later caller gets a fresh job without freeing
+          // the old lookup's slot or using its potentially stale answer.
+          forget(job);if(!job.started)queue.delete(job);
+        }
+      };
+      job.waiters.add(waiter);waiting++;
+      signal?.addEventListener('abort',waiter.abort,{once:true});
+    });
+    pump();return result;
   };
-  lookup.busy=()=>slots-free;
+  lookup.busy=()=>running;
   return lookup;
 }
 const systemLookup=createSystemLookup();

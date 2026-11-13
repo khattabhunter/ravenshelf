@@ -8,7 +8,8 @@ const {CLOSED_HOSTS}=require('./hosts.cjs');
 const {MESSAGES:MAGNET_MESSAGES}=require('./magnet.cjs');
 const {MESSAGES:ENGINE_MESSAGES}=require('./torrent-engine.cjs');
 const {TOOL_MESSAGES:TORRENT_TOOL_MESSAGES,MESSAGES:TORRENT_MESSAGES}=require('./torrent-messages.cjs');
-const {READ_ONLY,LIST_FULL}=require('./library-state.cjs');
+const {READ_ONLY,LIST_FULL,SETTINGS_READ_ONLY,LIST_TOO_LARGE,SESSION_ONLY}=require('./library-state.cjs');
+const {MESSAGES:LIFECYCLE_MESSAGES}=require('./app-lifecycle.cjs');
 
 // Only developer-authored messages cross the main-process error boundary.
 // Do not redact arbitrary exception text: paths, credentials and response data
@@ -176,7 +177,7 @@ const MESSAGES=new Map([
   'Only the first 20 PixelDrain lists were expanded.','Only the first 500 MultiUpload files were looked up.',
   // Fixed messages about magnet links, torrent files and the torrent engine.
   ...Object.values(MAGNET_MESSAGES),...Object.values(ENGINE_MESSAGES),...Object.values(TORRENT_TOOL_MESSAGES),...Object.values(TORRENT_MESSAGES),
-  READ_ONLY,LIST_FULL
+  READ_ONLY,LIST_FULL,SETTINGS_READ_ONLY,LIST_TOO_LARGE,SESSION_ONLY,...Object.values(LIFECYCLE_MESSAGES)
 ].map(message=>[message,message]));
 // The connector check failing means this copy of the app was altered or damaged.
 const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';

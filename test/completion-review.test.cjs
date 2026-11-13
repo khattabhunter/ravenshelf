@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
+const {EventEmitter}=require('node:events');
 const {CompletionAction}=require('../src/completion-action.cjs');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
@@ -30,7 +31,8 @@ test('a new job cancelled before its first observation disarms the countdown',as
 });
 
 async function mainFixture({phase='idle',testMode=true,version='0.2.0',storedFiles=new Map(),catalogInterval}={}){
-  const f={handles:new Map(),windows:[],actions:[],powerCalls:[],saved:0,cacheClears:0,events:[],storedFiles,appEvents:new Map(),powerEvents:new Map(),catalogRequests:[],refreshChecks:[],sent:[]};
+  const f={handles:new Map(),windows:[],actions:[],powerCalls:[],saved:0,cacheClears:0,events:[],storedFiles,appEvents:new EventEmitter(),powerEvents:new Map(),catalogRequests:[],refreshChecks:[],sent:[]};
+  let didQuit;f.quitPromise=new Promise(resolve=>{didQuit=resolve;});
   class Manager {
     constructor(){this.settings={downloadDir:'C:\\Atlas-test',favorites:[],collections:[]};this.downloads=[{id:'cancelled-history',status:'cancelled',folder:'C:\\Atlas-test'}];f.manager=this;}
     state(){return {settings:this.settings,downloads:this.downloads};}
@@ -50,13 +52,13 @@ async function mainFixture({phase='idle',testMode=true,version='0.2.0',storedFil
     stop(){this.state.enabled=false;f.events.push('refresh:stop');}
     check(options){f.refreshChecks.push(options);return Promise.resolve(this.state);}
   }
-  class Window {
-    constructor(){this.events=new Map();this.webContents={mainFrame:{url:'atlas://app/index.html'},on(){},setWindowOpenHandler(){},send:(event,state)=>f.sent.push({event,state})};f.windows.push(this);}
-    once(){}on(event,handler){this.events.set(event,handler);}show(){}focus(){}isMinimized(){return false;}isDestroyed(){return false;}loadURL(){f.events.push('loadURL');return Promise.resolve();}
+  class Window extends EventEmitter {
+    constructor(){super();this.events=new Map();this.webContents={mainFrame:{url:'atlas://app/index.html'},on(){},setWindowOpenHandler(){},send:(event,state)=>f.sent.push({event,state})};f.windows.push(this);}
+    on(event,handler){this.events.set(event,handler);return super.on(event,handler);}show(){}focus(){}isMinimized(){return false;}isDestroyed(){return false;}loadURL(){f.events.push('loadURL');return Promise.resolve();}
   }
   const ses={setPermissionRequestHandler(){},setPermissionCheckHandler(){},async clearCache(){f.cacheClears++;f.events.push('clearCache');}};
   const electron={
-    app:{setPath(){},getPath:()=>path.join(__dirname,'.review-profile'),getVersion:()=>version,requestSingleInstanceLock:()=>true,on:(event,handler)=>f.appEvents.set(event,handler),setName(){},whenReady:()=>Promise.resolve(),quit(){f.quit=true;},exit(){throw new Error('Unexpected exit');}},
+    app:Object.assign(f.appEvents,{setPath(){},getPath:()=>path.join(__dirname,'.review-profile'),getVersion:()=>version,requestSingleInstanceLock:()=>true,setName(){},whenReady:()=>Promise.resolve(),quit(){f.quit=true;didQuit();},exit(){throw new Error('Unexpected exit');}}),
     powerMonitor:{on:(event,handler)=>f.powerEvents.set(event,handler)},
     BrowserWindow:Window,ipcMain:{handle:(name,fn)=>f.handles.set(name,fn)},
     protocol:{registerSchemesAsPrivileged(){},handle(){}},session:{defaultSession:ses,fromPartition(){throw new Error('Startup must not touch host or gameplay partitions');}},dialog:{},shell:{openPath:async()=>{}},clipboard:{}
@@ -103,11 +105,13 @@ test('main starts a five-minute newest-catalogue check before the window loads',
   assert.equal(f.actions.length,0);
 });
 
-test('wake, focus and restore request due checks; quitting stops refresh before downloads',async()=>{
+test('wake, focus and restore request due checks; quitting stops refresh before downloads',{timeout:3000},async()=>{
   const f=await mainFixture();
   f.powerEvents.get('resume')();f.windows[0].events.get('focus')();f.windows[0].events.get('restore')();
   await flush();assert.deepEqual(f.refreshChecks,[undefined,undefined,undefined]);
-  let prevented=false;f.appEvents.get('before-quit')({preventDefault(){prevented=true;}});await flush();
+  // Electron delivers before-quit to every subscriber. The lifecycle's own
+  // listener must not replace main's shutdown listener in this fixture.
+  let prevented=false;f.appEvents.emit('before-quit',{preventDefault(){prevented=true;}});await f.quitPromise;
   assert.equal(prevented,true);assert.equal(f.refresher.state.enabled,false);assert.equal(f.quit,true);
   assert.ok(f.events.indexOf('refresh:stop')<f.events.indexOf('manager:stop'));
 });

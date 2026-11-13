@@ -8,14 +8,17 @@ const net=require('node:net');
 const protocol=require('../src/browser-protocol.cjs');
 const {createBrowserIntegration}=require('../src/browser-integration.cjs');
 const {publicErrorMessage}=require('../src/public-errors.cjs');
+const {SETTINGS_READ_ONLY,SESSION_ONLY}=require('../src/library-state.cjs');
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
-function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={}}={}){
+function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=null,openPathError='',existingVersions={},exportError=null,bridge={},Notification=null}={}){
   const profile=fs.mkdtempSync(path.join(os.tmpdir(),'ravenshelf-integration-'));
   t.after(()=>fs.rmSync(profile,{recursive:true,force:true}));
   const events={registered:0,unregistered:0,exported:[],opened:[],published:0,added:[],queueChecks:0,external:[],placed:[],place:null};
   const manager={settings:{downloadDir:profile,notificationsEnabled:true,...(enabled?{browserIntegrationEnabled:true}:{})},downloads:[],
-    updateSettings(changes){Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){},
+    updateSettings(changes){if(this.readOnly)throw new Error(SETTINGS_READ_ONLY);Object.assign(this.settings,changes);},add(batch){events.added.push(batch);return {added:1,ids:['d1']};},setReputation(){},
+    // As DownloadManager: turning off still applies, until restart, when settings can't be saved.
+    turnOff(changes){if(!this.readOnly){this.updateSettings(changes);return true;}Object.assign(this.settings,changes);return false;},
     // The title the queue files a game's mods under: by default as for a game it has not seen yet.
     modTitle(mod){events.placed.push(mod);return events.place?events.place(mod):mod.gameName||mod.game;}};
   const versions={...existingVersions};
@@ -27,10 +30,11 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
   };
   const handles=new Map();
   const safeStorage={isEncryptionAvailable:()=>true,encryptString:text=>Buffer.from('sealed:'+text),decryptString:buffer=>buffer.toString().slice(7)};
+  const windowState={visible:true,shown:0,focused:0};
   const integration=createBrowserIntegration({
-    app:{getPath:()=>profile,getVersion:()=>'0.5.0'},win:{isDestroyed:()=>false,isMinimized:()=>false,restore(){},show(){},focus(){}},manager,
+    app:{getPath:()=>profile,getVersion:()=>'0.5.0'},win:{isDestroyed:()=>false,isVisible:()=>windowState.visible,isMinimized:()=>false,restore(){},show(){windowState.visible=true;windowState.shown++;},focus(){windowState.focused++;}},manager,
     shell:{openPath:async folder=>{events.opened.push(folder);return openPathError;},openExternal:async url=>{events.external.push(url);}},
-    safeStorage,Notification:null,register:(name,fn)=>handles.set(name,fn),publish:()=>{events.published++;},
+    safeStorage,Notification,register:(name,fn)=>handles.set(name,fn),publish:()=>{events.published++;},
     resolveProvider:null,assertQueueAvailable:()=>{events.queueChecks++;},isTest,platform,setup,
     bridgeOptions:{platform:process.platform,...bridge},
     listOptions:{fetcher:async()=>new Response('',{status:404})},
@@ -38,7 +42,7 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
   });
   t.after(()=>integration.beforeQuit());
   const call=(name,value)=>handles.get(name)(value);
-  return {profile,events,manager,integration,handles,call,endpoint:path.join(profile,'browser-host','endpoint.json')};
+  return {profile,events,manager,integration,handles,call,windowState,endpoint:path.join(profile,'browser-host','endpoint.json')};
 }
 
 test('everything stays off until the user connects the extension',async t=>{
@@ -91,6 +95,36 @@ test('a failed setup leaves the switch off and explains the problem',async t=>{
   await assert.rejects(other.call('setBrowserIntegration',true),/available on Windows only/);
   assert.equal(other.manager.settings.browserIntegrationEnabled,false);
   assert.equal(other.integration.snapshot().supported,false);
+});
+
+test('in a read-only session the connector can still be disconnected until restart, but not connected again',async t=>{
+  const f=fixture(t);
+  assert.equal((await f.call('setBrowserIntegration',true)).bridge.running,true);
+  f.manager.readOnly=true;
+  await assert.rejects(f.call('setBrowserIntegration',false),{message:SESSION_ONLY});
+  const state=f.integration.snapshot();
+  assert.equal(state.enabled,false);assert.equal(state.phase,'off');assert.equal(state.bridge.running,false);
+  assert.equal(f.events.unregistered,1);assert.equal(fs.existsSync(f.endpoint),false);assert.equal(f.manager.settings.browserIntegrationEnabled,false);
+  await assert.rejects(f.call('setBrowserIntegration',true),{message:SETTINGS_READ_ONLY});
+  assert.equal(f.integration.snapshot().bridge.running,false);assert.equal(f.events.registered,1,'nothing was started');
+  assert.equal(publicErrorMessage(new Error(SESSION_ONLY),'setBrowserIntegration'),SESSION_ONLY);
+});
+
+test('when connecting fails and the switch cannot be turned back off, the real reason is still reported',async t=>{
+  const failure=Object.assign(new Error('reg.exe failed'),{code:'EPERM'}),f=fixture(t,{registerError:failure}),update=f.manager.updateSettings;
+  f.manager.updateSettings=function(changes){if(changes.browserIntegrationEnabled===false)throw Object.assign(new Error('rollback write failed'),{code:'ENOSPC'});return update.call(this,changes);};
+  await assert.rejects(f.call('setBrowserIntegration',true),error=>error===failure);
+  const state=f.integration.snapshot();
+  assert.equal(state.phase,'error');assert.equal(state.problem,publicErrorMessage({code:'EPERM'},'setBrowserIntegration'));assert.equal(state.bridge.running,false);
+  assert.equal(f.manager.settings.browserIntegrationEnabled,false,'the switch is off for this session');assert.equal(state.enabled,false);
+});
+
+test('a connection that fails because Ravenshelf is closing leaves the saved choice alone',async t=>{
+  const failure=new Error('Ravenshelf is closing. Wait for cleanup to finish.'),f=fixture(t,{registerError:failure});
+  f.manager.turnOff=function(){throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');};
+  const update=f.manager.updateSettings;f.manager.updateSettings=function(changes){const result=update.call(this,changes);if(changes.browserIntegrationEnabled)this.stopping=true;return result;};
+  await assert.rejects(f.call('setBrowserIntegration',true),error=>error===failure);
+  assert.equal(f.manager.settings.browserIntegrationEnabled,true,'the final save keeps what the user chose');
 });
 
 test('an enabled connection starts with Ravenshelf, and quitting keeps it registered',async t=>{
@@ -168,6 +202,52 @@ async function fromExtension(f,message){
     socket.write(Buffer.concat([{v:1,token:endpoint.token,origin:`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`},{v:1,...message}].map(frame=>protocol.encodeFrame(frame))));
   });
 }
+
+test('quit immediately returns native browser fallback while the download checkpoint is still pending',async t=>{
+  const {shutdownServices}=require('../src/app-lifecycle.cjs');
+  const f=fixture(t,{bridge:{inspect:async()=>{throw new Error('No new inspection during shutdown');}}});
+  await f.call('setBrowserIntegration',true);
+  let release;const checkpoint=new Promise(resolve=>{release=resolve;});let prepared=false;
+  const pending=shutdownServices({manager:{stop:()=>checkpoint},browserIntegration:f.integration,features:{beforeQuit:()=>{prepared=true;}}});
+  try{
+    assert.equal(fs.existsSync(f.endpoint),true,'disposal still waits for the checkpoint');
+    for(const type of ['capture','send'])assert.deepEqual(await fromExtension(f,{type,...(type==='send'?{kind:'link'}:{}),url:'https://cdn.example/photo.png'}),{ok:false,error:'not-running'});
+    assert.equal(f.integration.snapshot().bridge.pending,0);assert.equal(f.events.added.length,0);assert.equal(prepared,false);
+  }finally{release();await pending;}
+  assert.equal(prepared,true);assert.equal(f.events.unregistered,0);assert.equal(fs.existsSync(f.endpoint),false);
+});
+
+// A system notification that can be shown, as on Windows with notifications on.
+const shownNotices=()=>{const shown=[];return {shown,Notification:class{static isSupported(){return true;}constructor(options){this.options=options;}on(){}show(){shown.push(this.options);}}};};
+test('automatic saves keep a background window hidden while explicit media menus reveal the pending review',async t=>{
+  const notices=[];
+  const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:'photo.png',size:100,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'png'});
+  const f=fixture(t,{bridge:{inspect,notify:note=>notices.push(note)},Notification:shownNotices().Notification});
+  await f.call('setBrowserIntegration',true);f.windowState.visible=false;
+  const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
+  assert.equal(capture.action,'take');assert.equal(f.windowState.visible,false);assert.equal(f.windowState.shown,0);assert.equal(f.windowState.focused,0);
+  assert.equal(notices.length,1);assert.match(notices[0].body,/Nothing downloads until you choose/);assert.equal(f.events.added.length,0);
+  const sent=await fromExtension(f,{type:'send',kind:'link',url:'https://cdn.example/video.mp4'});
+  assert.equal(sent.action,'take');assert.equal(f.windowState.visible,true);assert.equal(f.windowState.shown,1);assert.equal(f.windowState.focused,1);assert.equal(f.events.added.length,0);
+});
+test('with notifications off or unsupported, an automatic save shows the hidden window so the download never seems to vanish',async t=>{
+  const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:'photo.png',size:100,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'png'});
+  for(const [label,Notification,enabled] of [['notifications turned off',shownNotices().Notification,false],['notifications unsupported',class{static isSupported(){return false;}},true],['no notification support',null,true]]){
+    const notices=shownNotices();
+    const f=fixture(t,{bridge:{inspect},Notification:Notification===null?null:Notification});
+    f.manager.settings.notificationsEnabled=enabled;
+    await f.call('setBrowserIntegration',true);f.windowState.visible=false;
+    const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
+    assert.equal(capture.action,'take',label);assert.equal(f.windowState.visible,true,label);assert.equal(f.windowState.shown,1,label);assert.equal(f.events.added.length,0,label);
+    assert.equal(notices.shown.length,0,label);
+  }
+  // With notifications on, the notice is shown and the window stays in the background.
+  const notices=shownNotices();
+  const f=fixture(t,{bridge:{inspect},Notification:notices.Notification});
+  await f.call('setBrowserIntegration',true);f.windowState.visible=false;
+  const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
+  assert.equal(capture.action,'take');assert.equal(f.windowState.visible,false);assert.equal(notices.shown.length,1);assert.match(notices.shown[0].body,/Nothing downloads until you choose/);
+});
 test('a file downloaded on Nexus Mods is queued into Mods under its game; other browser downloads go to Browser downloads',async t=>{
   const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:decodeURIComponent(new URL(url).pathname.split('/').pop()),size:3072,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'7z'});
   const f=fixture(t,{bridge:{inspect}});

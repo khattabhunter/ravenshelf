@@ -105,16 +105,21 @@ function report(reply, url) {
 }
 
 // ---- downloads ----
+async function downloadState(id) {
+  try { const [found] = await api.downloads.search({ id }); return found ? found.state : ''; } catch (error) { return ''; }
+}
+// A blocked download is cancelled, or its file deleted if it already
+// finished, including when it finishes while being cancelled.
 async function removeDownload(id) {
-  let state = '';
-  try { const [found] = await api.downloads.search({ id }); state = found ? found.state : ''; } catch (error) {}
-  if (state === 'complete') await quiet(() => api.downloads.removeFile(id));
-  else await quiet(() => api.downloads.cancel(id));
+  if (await downloadState(id) !== 'complete') {
+    try { await api.downloads.cancel(id); } catch (error) {}
+  }
+  if (await downloadState(id) === 'complete') await quiet(() => api.downloads.removeFile(id));
   await quiet(() => api.downloads.erase({ id }));
 }
 // 'stop' when Ravenshelf took or blocked the download; 'continue' leaves it to
 // the browser (Ravenshelf closed, no answer, or it said the browser keeps it).
-async function decide(item, plan) {
+async function decide(item, plan, canTake = async () => true) {
   if (plan.kind === 'block') {
     await removeDownload(item.id);
     notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', plan.template || plan.reason, 4000, plan.params);
@@ -128,9 +133,16 @@ async function decide(item, plan) {
     const { mod, ...plain } = plan.message;
     reply = await ask(plain, 6000);
   }
-  if (reply.ok && (reply.action === 'take' || reply.action === 'block')) {
+  if (reply.ok && reply.action === 'block') {
     await removeDownload(item.id);
-    if (reply.action === 'block') notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', reply.reason || 'It failed Ravenshelf’s safety checks.');
+    notify(`blocked-download-${item.id}`, 'Ravenshelf blocked a download', reply.reason || 'It failed Ravenshelf’s safety checks.');
+    return 'stop';
+  }
+  if (reply.ok && reply.action === 'take' && await canTake()) {
+    // A successful capture means accepted for review, not downloaded. Never
+    // remove an already saved file to replace it with an unconfirmed capture.
+    try { await api.downloads.cancel(item.id); } catch (error) { return 'continue'; }
+    await quiet(() => api.downloads.erase({ id: item.id }));
     return 'stop';
   }
   return 'continue';
@@ -149,26 +161,175 @@ async function planFor(item) {
   const now = Date.now();
   return P.downloadPlan(item, current, { pages: modNotes(now), now });
 }
-if (api.downloads.onDeterminingFilename) {
-  // Chrome holds the download here, before a file name is chosen.
-  api.downloads.onDeterminingFilename.addListener((item, suggest) => {
-    let released = false;
-    const release = () => { if (!released) { released = true; try { suggest(); } catch (error) {} } };
-    planFor(item)
-      .then(plan => plan.kind === 'ignore' ? 'continue' : decide(item, plan))
-      .then(result => { if (result === 'continue') release(); }, release);
-    return true;
-  });
-} else {
-  // Firefox has no file-name hook: pause the new download while Ravenshelf decides.
-  api.downloads.onCreated.addListener(item => {
-    planFor(item).then(async plan => {
-      if (plan.kind === 'ignore') return;
-      await quiet(() => api.downloads.pause(item.id));
-      if (await decide(item, plan) === 'continue') await quiet(() => api.downloads.resume(item.id));
-    }).catch(() => {});
+// Save image/video/audio and ordinary file downloads can reach either event.
+// One decision per download ID handles both event orders without double capture.
+// Finished decisions keep only their ID and time, to ignore late second events.
+const downloadDecisions = new Map(), finishedDownloads = new Map();
+const DOWNLOAD_DECISION_MS = 60000;
+const MAX_DOWNLOAD_DECISIONS = 256, MAX_FINISHED_DOWNLOADS = 4096;
+// A clock that never jumps with the system time.
+const monotonic = () => typeof performance === 'object' && performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+// Firefox throws away what was downloaded when it pauses a download from a
+// server that can't resume. Downloads from such a site are not paused again
+// for a while (they are still checked while they run), so starting one again
+// works. The sites are kept in session storage, which outlives the background
+// page being unloaded, by origin only, since file hosts sign each address.
+const UNPAUSABLE_MS = 10 * 60000, MAX_UNPAUSABLE = 100;
+function webOrigin(url) {
+  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : ''; } catch (error) { return ''; }
+}
+function liveUntil(until, now) { return typeof until === 'number' && until > now && until - now <= UNPAUSABLE_MS; }
+async function unpausableSites() {
+  try { const saved = await withTimeout(api.storage.session.get('unpausable'), 1000); const sites = saved && saved.unpausable; return sites && typeof sites === 'object' && !Array.isArray(sites) ? sites : {}; } catch (error) { return {}; }
+}
+async function rememberUnpausable(url) {
+  const origin = webOrigin(url);
+  if (!origin) return;
+  const now = Date.now(), kept = {};
+  for (const [site, until] of Object.entries(await unpausableSites())) if (site !== origin && liveUntil(until, now)) kept[site] = until;
+  kept[origin] = now + UNPAUSABLE_MS;
+  const sites = Object.keys(kept);
+  while (sites.length > MAX_UNPAUSABLE) delete kept[sites.shift()];
+  await quiet(() => api.storage.session.set({ unpausable: kept }));
+}
+async function isUnpausable(url) {
+  const origin = webOrigin(url);
+  return Boolean(origin) && liveUntil((await unpausableSites())[origin], Date.now());
+}
+// Chrome reports a new download before it knows the file's name; the name
+// arrives with the filename event, which also holds the download. Wait this
+// long for it before falling back to pausing the download.
+const FILENAME_WAIT_MS = 1000;
+async function currentDownload(id) {
+  try { const [item] = await api.downloads.search({ id }); return item || null; } catch (error) { return null; }
+}
+// Later events fill in what earlier ones lacked, but never blank a known file
+// name, and a private-window flag can only be turned on.
+function mergeItem(target, item) {
+  for (const [key, value] of Object.entries(item || {})) {
+    if (key === 'incognito') continue;
+    if (key === 'filename' && (typeof value !== 'string' || !value)) continue;
+    target[key] = value;
+  }
+  target.incognito = Boolean(target.incognito || (item && item.incognito));
+}
+function waitForFilename(record) {
+  if (!api.downloads.onDeterminingFilename || record.releases.length) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); record.filenameArrived = null; resolve(); };
+    const timer = setTimeout(done, FILENAME_WAIT_MS);
+    record.filenameArrived = done;
   });
 }
+// A download the extension paused is held while it is paused and not finished.
+// Firefox reports a pause as state 'interrupted' with paused true.
+function heldByPause(latest) { return Boolean(latest && latest.paused === true && latest.state !== 'complete'); }
+async function handleDownload(record) {
+  await waitForFilename(record);
+  if (!record.releases.length) {
+    // No filename event (Firefox, or a Chromium save without one): use the
+    // browser's latest record, which may know the name by now.
+    const latest = await currentDownload(record.id);
+    if (latest) mergeItem(record.item, { filename: latest.filename, incognito: latest.incognito });
+  }
+  const plan = await withTimeout(planFor(record.item), 2500);
+  if (plan.kind === 'ignore') return 'continue';
+  if (plan.kind === 'block') return decide(record.item, plan);
+  const current = await currentDownload(record.id);
+  if (!current || current.state !== 'in_progress' || current.paused || current.incognito || record.item.incognito || record.userChanged) return 'continue';
+  if (!record.releases.length && !await isUnpausable(record.item.url)) {
+    // Firefox, and Chromium saves without a filename event: only intercept if
+    // the browser really paused. A small file may already have finished.
+    record.pausing = true;
+    try { await api.downloads.pause(record.id); record.ownsPause = true; } catch (error) { record.pausing = false; return 'continue'; }
+    const after = await currentDownload(record.id);
+    // Firefox's pause of a download from a server that can't resume cancels
+    // it and throws its data away. That was not the user: Ravenshelf is still
+    // asked, and if it leaves the download to the browser, the user is told.
+    if (!api.downloads.onDeterminingFilename && after && after.state === 'interrupted' && after.paused !== true) { record.discarded = true; record.userChanged = false; }
+    record.pausing = false;
+  }
+  const canTake = async () => {
+    const latest = await currentDownload(record.id);
+    if (!latest || latest.incognito || record.userChanged || latest.state === 'complete') return false;
+    if (record.discarded) return latest.state === 'interrupted' && latest.paused !== true;
+    return record.ownsPause ? heldByPause(latest) : latest.state === 'in_progress' && !latest.paused;
+  };
+  if (!await canTake()) return 'continue';
+  return decide(record.item, plan, canTake);
+}
+function captureDownload(item, release) {
+  if (!item || !Number.isSafeInteger(item.id) || item.id < 0) { if (release) release(); return; }
+  const now = monotonic();
+  for (const [id, doneAt] of finishedDownloads) { if (now - doneAt <= DOWNLOAD_DECISION_MS) break; finishedDownloads.delete(id); }
+  if (finishedDownloads.has(item.id)) { if (release) release(); return; }
+  let record = downloadDecisions.get(item.id);
+  if (record) {
+    mergeItem(record.item, item);
+    if (release) record.releases.push(release);
+    if (release && record.filenameArrived) record.filenameArrived();
+    return;
+  }
+  if (P.downloadPlan(item, { capture: true }).kind === 'ignore') { if (release) release(); return; }
+  if (downloadDecisions.size >= MAX_DOWNLOAD_DECISIONS) {
+    // Too many open decisions fall back to the browser, but must not disable
+    // the local malicious-program rule. This path never starts a native request.
+    withTimeout(planFor(item), 2500).then(plan => plan.kind === 'block' ? decide(item, plan) : 'continue')
+      .catch(() => {}).finally(() => { if (release) release(); });
+    return;
+  }
+  record = { id: item.id, item: {}, releases: release ? [release] : [], ownsPause: false, pausing: false, discarded: false, userChanged: false, filenameArrived: null };
+  mergeItem(record.item, item);
+  downloadDecisions.set(item.id, record);
+  handleDownload(record).catch(() => 'continue').then(async result => {
+    if (result === 'continue' && record.discarded && !record.userChanged) {
+      // Firefox lost this download while it was held. It can start it again
+      // with Retry, and the site's downloads are not paused next time.
+      const current = await currentDownload(record.id);
+      if (current && current.state === 'interrupted' && current.paused !== true) {
+        await rememberUnpausable(record.item.url);
+        notify(`retry-download-${record.id}`, 'Start this download again', 'Your browser could not keep this download while Ravenshelf checked it. Choose Retry in your browser’s downloads list, or start it again.');
+      }
+    } else if (result === 'continue' && record.ownsPause && !record.userChanged) {
+      const current = await currentDownload(record.id);
+      if (heldByPause(current) && current.canResume !== false) await quiet(() => api.downloads.resume(record.id));
+    }
+  }).finally(() => {
+    // Chrome requires exactly one suggest call even after cancellation. Do not
+    // supply a filename: the browser keeps the name/location the user chose.
+    for (const done of record.releases.splice(0)) done();
+    record.item = null;
+    downloadDecisions.delete(record.id);
+    finishedDownloads.delete(record.id);
+    finishedDownloads.set(record.id, monotonic());
+    if (finishedDownloads.size > MAX_FINISHED_DOWNLOADS) finishedDownloads.delete(finishedDownloads.keys().next().value);
+  });
+}
+api.downloads.onCreated.addListener(item => captureDownload(item));
+if (api.downloads.onDeterminingFilename) api.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  let released = false;
+  captureDownload(item, () => { if (!released) { released = true; try { suggest(); } catch (error) {} } });
+  return true;
+});
+if (api.downloads.onChanged) api.downloads.onChanged.addListener(delta => {
+  const record = downloadDecisions.get(delta.id);
+  if (!record) return;
+  // A user cancelling, pausing, resuming or finishing an intercepted download
+  // wins over a late reply. The extension's own pause is not a user change:
+  // Firefox reports it as 'interrupted' with paused true (or, for a server
+  // that can't resume, 'interrupted' alone, which handleDownload sorts out).
+  const state = delta.state && delta.state.current, paused = delta.paused && delta.paused.current;
+  if (record.pausing && state === 'interrupted') return;
+  if (record.discarded) {
+    // Only the user can start a download the browser already dropped.
+    if (state === 'in_progress' || state === 'complete') record.userChanged = true;
+    return;
+  }
+  const ownPause = (record.ownsPause || record.pausing) && paused === true;
+  if (state === 'complete' || (state && state !== 'in_progress' && !ownPause)) record.userChanged = true;
+  else if ((record.ownsPause || record.pausing) && paused === false) record.userChanged = true;
+  else if (!record.ownsPause && !record.pausing && paused === true) record.userChanged = true;
+});
 
 // ---- right-click menu ----
 // The menu is made again whenever the language changes; one rebuild runs at a
@@ -185,13 +346,15 @@ async function buildMenus() {
   const done = () => { void api.runtime.lastError; };
   menus.create({ id: 'ravenshelf-link', title: t('Download with Ravenshelf'), contexts: ['link'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
   menus.create({ id: 'ravenshelf-image', title: t('Download this image with Ravenshelf'), contexts: ['image'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
+  menus.create({ id: 'ravenshelf-video', title: t('Download this video file with Ravenshelf'), contexts: ['video'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
+  menus.create({ id: 'ravenshelf-audio', title: t('Download this audio with Ravenshelf'), contexts: ['audio'], targetUrlPatterns: ['https://*/*', 'http://*/*'] }, done);
   menus.create({ id: 'ravenshelf-page', title: t('Download this file with Ravenshelf'), contexts: ['page'], documentUrlPatterns: P.SEND_PAGE_PATTERNS.slice() }, done);
   // On YouTube the video area opens YouTube's own menu first; right-click again for this one.
   menus.create({ id: 'ravenshelf-youtube', title: t('Download this video with Ravenshelf'), contexts: ['page', 'video'], documentUrlPatterns: P.YOUTUBE_PAGE_PATTERNS.slice() }, done);
 }
 async function sendToApp(kind, url, pageUrl, incognito) {
   if (incognito) { notify('private', 'Private window', 'Ravenshelf does not take downloads from private windows.'); return { ok: false, error: 'private' }; }
-  if (!isWeb(url) || url.length > 8192 || (kind === 'page' && !P.canSendPage(url))) return { ok: false, error: 'invalid' };
+  if (!P.publicDownloadAddress(url) || (kind === 'page' && !P.canSendPage(url))) return { ok: false, error: 'invalid' };
   const message = { type: 'send', kind, url };
   const context = P.contextOrigin(pageUrl);
   if (kind === 'link' && context) message.pageUrl = context;
@@ -213,7 +376,7 @@ async function sendMedia(url, quality, incognito, announce) {
 }
 if (menus) menus.onClicked.addListener((info, tab) => {
   const incognito = Boolean(tab && tab.incognito);
-  if (info.menuItemId === 'ravenshelf-image') { sendToApp('link', info.srcUrl, info.pageUrl, incognito).catch(() => {}); return; }
+  if (['ravenshelf-image', 'ravenshelf-video', 'ravenshelf-audio'].includes(info.menuItemId)) { sendToApp('link', info.srcUrl, info.pageUrl, incognito).catch(() => {}); return; }
   if (info.menuItemId === 'ravenshelf-youtube') { sendMedia(info.pageUrl, 'default', incognito, true).catch(() => {}); return; }
   const link = info.menuItemId === 'ravenshelf-link';
   if (!link && info.menuItemId !== 'ravenshelf-page') return;

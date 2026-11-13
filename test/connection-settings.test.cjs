@@ -11,7 +11,7 @@ async function mainFixture(){
   class Manager {
     constructor(){this.settings={downloadDir:'C:\\Atlas-fixture',concurrency:2,connectionsPerFile:4,favorites:[],collections:[]};this.downloads=[];manager=this;}
     state(){return {settings:{...this.settings},downloads:this.downloads};}
-    on(){} updateSettings(changes){Object.assign(this.settings,changes);}
+    on(){} updateSettings(changes){Object.assign(this.settings,changes);} turnOff(changes){this.updateSettings(changes);return true;}
   }
   class Completion {snapshot(){return {mode:'none',phase:'idle'};}}
   class Refresher {snapshot(){return {enabled:true};}start(){}}

@@ -10,6 +10,7 @@ const {BrowserBridge}=require('./browser-bridge.cjs');
 const browserSetup=require('./browser-setup.cjs');
 const {safeURL}=require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
+const {SESSION_ONLY}=require('./library-state.cjs');
 const {BROWSER_FOLDER}=require('./download-cleanup.cjs');
 const {MODS_FOLDER}=require('./mods.cjs');
 
@@ -23,10 +24,23 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   const supported=platform==='win32';
   // Isolated test profiles never write to the Windows registry.
   const registers=supported&&!isTest;
-  const reveal=()=>{if(win&&!win.isDestroyed()){if(win.isMinimized())win.restore();win.show();win.focus();}};
+  // Whether a notification can be shown at all (Windows may still hide it).
+  const canNotify=()=>{
+    if(manager.settings.notificationsEnabled===false||isTest)return false;
+    try{return typeof Notification==='function'&&Notification.isSupported();}catch{return false;}
+  };
+  const reveal=({source}={})=>{
+    if(!win||win.isDestroyed())return;
+    // A normal Save should not undo the user's choice to keep the app in the
+    // background. Its notification can reveal the pending review when clicked.
+    // Without notifications the window is shown, so a download the browser
+    // handed over never seems to vanish.
+    if(source==='download'&&typeof win.isVisible==='function'&&!win.isVisible()&&canNotify())return;
+    if(win.isMinimized())win.restore();win.show();win.focus();
+  };
   const notify=({title,body})=>{
-    if(manager.settings.notificationsEnabled===false||isTest)return;
-    try{if(typeof Notification==='function'&&Notification.isSupported()){const alert=new Notification({title,body});alert.on('click',reveal);alert.show();}}catch{}
+    if(!canNotify())return;
+    try{const alert=new Notification({title,body});alert.on('click',reveal);alert.show();}catch{}
   };
   const threatLists=new ThreatLists({dir:path.join(profile,'threat-lists'),onChange:()=>publish(),...listOptions});
   const virusTotal=new VirusTotal({file:path.join(profile,'virustotal.json'),storage:safeStorage,...virusTotalOptions});
@@ -45,6 +59,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});
   bridge.on('change',()=>publish());
   let phase='off',problem='',closing=false,work=Promise.resolve();
+  const beginQuit=()=>{closing=true;bridge.beginQuit();};
   const folderVersions={};
   const readFolders=()=>{for(const browser of EXTENSION_BROWSERS)folderVersions[browser]=setup.exportedVersion(extensionRoot,browser);};
   readFolders();
@@ -92,9 +107,17 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
     if(typeof enabled!=='boolean')throw new Error('Choose on or off for this preference.');
     assertOpen();
     await serial(async()=>{
-      if(!enabled){manager.updateSettings({browserIntegrationEnabled:false});await stop();return;}
+      // Disconnecting works even when settings can't be saved; it then lasts until restart.
+      if(!enabled){const saved=manager.turnOff({browserIntegrationEnabled:false});await stop();if(!saved)throw new Error(SESSION_ONLY);return;}
       manager.updateSettings({browserIntegrationEnabled:true});
-      try{await start();}catch(error){manager.updateSettings({browserIntegrationEnabled:false});throw error;}
+      // A failed rollback must not hide why connecting failed, and the switch
+      // is off for this session even when that can't be saved. While closing,
+      // nothing is changed, so the final save keeps the user's choice.
+      try{await start();}catch(error){
+        try{manager.turnOff({browserIntegrationEnabled:false});}
+        catch{if(!manager.stopping){manager.settings={...manager.settings,browserIntegrationEnabled:false};manager.changed?.();}}
+        throw error;
+      }
     });
     return snapshot();
   });
@@ -122,7 +145,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
   });
   if(manager.settings.browserIntegrationEnabled===true)serial(start).catch(()=>{});
   return {
-    snapshot,
+    snapshot,beginQuit,
     // VirusTotal file check for a finished download that came from the browser.
     afterDownload(download){
       // A YouTube video's fingerprint says nothing VirusTotal could judge, so it is not sent.
@@ -130,7 +153,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
       bridge.afterDownload(download,path.join(download.folder,download.name)).catch(()=>{});
     },
     async beforeQuit(){
-      closing=true;
+      beginQuit();
       await work;
       // The connector stays registered, so the browser can tell that Ravenshelf is closed.
       if(bridge.server)await bridge.stop().catch(()=>{});

@@ -16,7 +16,10 @@ const SCHEMA_VERSION=1,MAX_BYTES=128*1024*1024,MAX_DOWNLOADS=10000,MAX_RECOVERY_
 const RECOVERED='Some saved settings or downloads were damaged. Valid items were kept, and the original library was preserved in a local recovery file.';
 const BLOCKED='Saved data could not be read safely. The original library is unchanged; changes in this session cannot be saved. Close Ravenshelf and recover the library before continuing.';
 const READ_ONLY='Ravenshelf can’t add downloads now because its saved list is read-only. See the message at the top of the window.';
+const SETTINGS_READ_ONLY='Settings can’t be saved while the saved list is read-only. See the message at the top of the window.';
 const LIST_FULL='Your downloads list is full (10,000 downloads). Remove finished downloads before adding more.';
+const LIST_TOO_LARGE='Ravenshelf’s download list is too large to save. Remove finished downloads to continue.';
+const SESSION_ONLY='Turned off for now. Ravenshelf can’t save settings, so this lasts until restart.';
 const FUTURE='This library was saved by a newer Ravenshelf version. The original library is unchanged; use that version to keep your settings and downloads.';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&[Object.prototype,null].includes(Object.getPrototypeOf(value));
 const text=(value,max=2000)=>typeof value==='string'&&value.length<=max&&!/[\0\r\n]/.test(value);
@@ -54,13 +57,29 @@ function gameFolder(value){
   if(value.split(/[\\/]/).some(part=>/[. ]$/.test(part)))return false;
   const resolved=path.win32.resolve(value);return resolved!==path.win32.parse(resolved).root;
 }
-function listItems(key,list){
-  if(key==='favorites')return list.filter(game);
-  // Installed games are scanned only in local folders (see installed-games.cjs).
-  // A folder the scan can't use (such as a whole drive) is kept and skipped there with a note.
-  if(key==='gameFolders')return list.filter(folder=>localPath(folder));
-  return list.filter(collection=>object(collection)&&text(collection.id,100)&&text(collection.name,80)&&Array.isArray(collection.games))
-    .map(collection=>({...collection,games:collection.games.filter(game).slice(0,500)}));
+function listItems(key,list,max,depth=1){
+  if(!Array.isArray(list))throw new Error('Invalid saved list.');
+  const items=[];let changed=false;
+  // Copy and validate each item independently. A bad nested value must not
+  // discard its valid neighbours. Work remains bounded for oversized lists.
+  for(let i=0;i<Math.min(list.length,10000)&&items.length<max;i++){
+    try{
+      const raw=list[i];let entry;
+      if(key==='collections'){
+        if(!object(raw)||!text(raw.id,100)||!text(raw.name,80)||!Array.isArray(raw.games))throw new Error('Invalid saved shelf.');
+        // The shelf's metadata and its games have separate recovery boundaries.
+        entry=copyJSON(Object.fromEntries(Object.entries(raw).filter(([name])=>name!=='games')),depth);
+        const games=listItems('favorites',raw.games,500,depth+2);entry.games=games.items;changed||=games.changed;
+      }else{
+        entry=copyJSON(raw,depth);
+        // A local whole drive saved by an older version is kept; the installed
+        // game scan skips it with a note instead of dropping the preference.
+        if(key==='favorites'?!game(entry):!localPath(entry))throw new Error('Invalid saved item.');
+      }
+      items.push(entry);
+    }catch{changed=true;}
+  }
+  return {items,changed:changed||items.length!==list.length};
 }
 const BOOLEAN_SETTINGS=['defenderScan','autoUpdateEnabled','clipboardWatchEnabled','notificationsEnabled','adaptiveThemeEnabled','browserIntegrationEnabled'];
 function settingsFrom(value){
@@ -70,6 +89,10 @@ function settingsFrom(value){
   for(const [key,raw]of Object.entries(value)){
     try{
       if(['__proto__','prototype','constructor'].includes(key))throw new Error();
+      if(key==='favorites'||key==='collections'||key==='gameFolders'){
+        const max={favorites:1000,collections:100,gameFolders:20}[key],kept=listItems(key,raw,max);
+        settings[key]=kept.items;changed||=kept.changed;continue;
+      }
       const entry=copyJSON(raw);
       if(key==='downloadDir'&&!localPath(entry,{network:true}))throw new Error();
       if(BOOLEAN_SETTINGS.includes(key)&&typeof entry!=='boolean')throw new Error();
@@ -77,14 +100,7 @@ function settingsFrom(value){
       if(key==='connectionsPerFile'&&![1,2,4].includes(entry))throw new Error();
       if(key==='maxDownloadBytesPerSecond')normalizeBandwidthLimit(entry);
       if(key==='downloadSchedule')normalizeSchedule(entry);
-      // One damaged item drops only that item, never the whole list.
-      if(key==='favorites'||key==='collections'||key==='gameFolders'){
-        const max={favorites:1000,collections:100,gameFolders:20}[key];
-        if(!Array.isArray(entry))throw new Error();
-        const kept=listItems(key,entry).slice(0,max);
-        if(kept.length!==entry.length||JSON.stringify(kept)!==JSON.stringify(entry))changed=true;
-        settings[key]=kept;continue;
-      }
+      if(key==='closeBehavior'&&!['ask','background','quit'].includes(entry))throw new Error();
       if(key==='language'&&!['en','ar','system'].includes(entry))throw new Error();
       if(key==='digits'&&!['latn','arab','auto'].includes(entry))throw new Error();
       if(key==='youtubeQuality'&&!Object.hasOwn(QUALITIES,entry))throw new Error();
@@ -134,22 +150,29 @@ function downloadFrom(value){
   if(d.sourceIdentity!==undefined&&(typeof d.sourceIdentity!=='string'||!/^[a-f0-9]{64}$/.test(d.sourceIdentity)))delete d.sourceIdentity;
   return d;
 }
+// `changed`: the saved file needs rewriting. `repaired`: damage was found, so
+// the original is preserved first. Trimming old history alone is maintenance.
 function validateLibrary(value){
-  if(!object(value)||value.schemaVersion!==undefined&&value.schemaVersion!==SCHEMA_VERSION)return {data:{settings:{},downloads:[]},changed:true,future:object(value)&&Number.isSafeInteger(value.schemaVersion)&&value.schemaVersion>SCHEMA_VERSION};
+  if(!object(value)||value.schemaVersion!==undefined&&value.schemaVersion!==SCHEMA_VERSION)return {data:{settings:{},downloads:[]},changed:true,repaired:true,future:object(value)&&Number.isSafeInteger(value.schemaVersion)&&value.schemaVersion>SCHEMA_VERSION};
   const {settings,changed:settingsChanged}=settingsFrom(value.settings);
   let changed=settingsChanged||value.downloads!==undefined&&!Array.isArray(value.downloads);
   const downloads=[],ids=new Set();
   if(Array.isArray(value.downloads)){
     for(const raw of value.downloads){const entry=downloadFrom(raw);if(!entry||ids.has(entry.id)){changed=true;continue;}ids.add(entry.id);downloads.push(entry);if(JSON.stringify(entry)!==JSON.stringify(raw))changed=true;}
   }
-  // A very long list keeps every unfinished download and the newest finished
-  // ones (the original stays in the recovery copy), instead of refusing it all.
+  // Trim old finished history, never unfinished jobs. Legacy queues can be
+  // larger than today's admission limit; existing jobs can still resume while
+  // DownloadManager refuses new additions until the queue is below that limit.
+  // The oldest finished files go first, then cancelled jobs (which can still
+  // be retried). A finished file whose Defender scan is pending, or that
+  // Defender flagged or could not scan, is kept for the user to see.
   if(downloads.length>MAX_DOWNLOADS){
     let over=downloads.length-MAX_DOWNLOADS;const drop=new Set();
-    for(const done of [true,false])for(const d of downloads){if(!over)break;if(!drop.has(d)&&['completed','cancelled'].includes(d.status)===done){drop.add(d);over--;}}
-    return {data:{settings,downloads:downloads.filter(d=>!drop.has(d))},changed:true};
+    const passes=[d=>d.status==='completed'&&!['queued','scanning','threat','review','error'].includes(d.scan?.status),d=>d.status==='cancelled'];
+    for(const pass of passes)for(const d of downloads){if(!over)break;if(!drop.has(d)&&pass(d)){drop.add(d);over--;}}
+    return {data:{settings,downloads:downloads.filter(d=>!drop.has(d))},changed:changed||drop.size>0,repaired:changed,trimmed:drop.size>0};
   }
-  return {data:{settings,downloads},changed};
+  return {data:{settings,downloads},changed,repaired:changed};
 }
 // The profile folder can be reached through a junction or link (for example
 // AppData moved to another drive). Resolve it once; the real folders are then
@@ -214,29 +237,40 @@ function readStateFile(file,io=fs,verification={},options={}){
   }finally{if(fd!==undefined)io.closeSync(fd);}
 }
 function safeMissingLibrary(file,io){
-  file=canonical(path.resolve(file),io);
+  // `file` is the one canonical target already selected for the failed open.
+  // Resolving the original alias again could silently select a different file.
   if(!localPath(file,{network:true}))return false;
   try{io.lstatSync(file);return false;}catch(error){if(error.code!=='ENOENT')return false;}
+  const parents=[];
   for(let parent=path.dirname(file);;parent=path.dirname(parent)){
     const atRoot=parent===path.parse(parent).root;
-    try{const stat=io.lstatSync(parent,{bigint:true});if(!stat.isDirectory()||stat.isSymbolicLink()||stat.ino===0n)return false;}
-    catch(error){if(error.code!=='ENOENT'||atRoot)return false;}
-    if(atRoot)return true;
+    try{const stat=io.lstatSync(parent,{bigint:true});if(!stat.isDirectory()||stat.isSymbolicLink()||stat.ino===0n)return false;parents.push([parent,stat]);}
+    catch(error){if(error.code!=='ENOENT'||atRoot)return false;parents.push([parent,null]);}
+    if(atRoot)break;
   }
+  // Reject a target or parent changed while the missing-file check was running.
+  for(const [parent,before]of parents){
+    try{const current=io.lstatSync(parent,{bigint:true});if(!before||!current.isDirectory()||current.isSymbolicLink()||current.ino!==before.ino||current.dev!==before.dev||current.birthtimeNs!==before.birthtimeNs)return false;}
+    catch(error){if(before||error.code!=='ENOENT')return false;}
+  }
+  try{io.lstatSync(file);return false;}catch(error){return error.code==='ENOENT';}
 }
 function loadLibrary(file,{io=fs,wait}={}){
   let bytes;const verification={};
   try{bytes=readStateFile(file,io,verification,{wait});}catch(error){
     // Only a missing library is a new profile. A vanished parent or raced
     // replacement of an existing file must not enable overwriting it.
-    const missing=!verification.existed&&error?.code==='ENOENT'&&safeMissingLibrary(file,io);
-    return {data:{settings:{},downloads:[]},canSave:missing,warning:missing?'':BLOCKED,file:canonical(path.resolve(file),io)};
+    const target=verification.file;
+    const missing=typeof target==='string'&&!verification.existed&&error?.code==='ENOENT'&&safeMissingLibrary(target,io);
+    return {data:{settings:{},downloads:[]},canSave:missing,warning:missing?'':BLOCKED,file:target||path.resolve(file)};
   }
   // From here on the real path that was checked and read is the one written.
   file=verification.file;
-  let parsed;try{parsed=validateLibrary(JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')));}catch{parsed={data:{settings:{},downloads:[]},changed:true};}
+  let parsed;try{parsed=validateLibrary(JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')));}catch{parsed={data:{settings:{},downloads:[]},changed:true,repaired:true};}
   if(parsed.future)return {data:parsed.data,canSave:false,warning:FUTURE,file};
-  if(!parsed.changed)return {data:parsed.data,canSave:true,warning:'',file};
+  // Old finished history trimmed from an intact list: no warning and no copy;
+  // the caller saves the shorter list.
+  if(!parsed.repaired)return {data:parsed.data,canSave:true,warning:'',file,...(parsed.trimmed?{trimmed:true}:{})};
   // EXCL creates a new sibling, never replaces any recovery file. The original
   // remains in place until a later successful atomic save; failed backup means
   // saving is disabled, not permission to discard the only copy. A copy is
@@ -273,13 +307,16 @@ function sameCopy(copy,bytes,io){
   try{
     fd=io.openSync(copy,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
     const stat=io.fstatSync(fd,{bigint:true});
-    if(!stat.isFile()||stat.nlink!==1n||stat.ino===0n||stat.size!==BigInt(bytes.length))return false;
+    const regular=value=>value.isFile()&&!value.isSymbolicLink()&&value.nlink===1n&&value.ino!==0n&&value.size===BigInt(bytes.length);
+    const unchanged=value=>regular(value)&&value.ino===stat.ino&&value.dev===stat.dev&&value.birthtimeNs===stat.birthtimeNs&&value.mtimeNs===stat.mtimeNs&&value.ctimeNs===stat.ctimeNs;
+    if(!regular(stat))return false;
     // Windows opens through a link without O_NOFOLLOW: the name must be the file itself.
-    const named=io.lstatSync(copy,{bigint:true});
-    if(named.isSymbolicLink()||named.ino!==stat.ino||named.dev!==stat.dev)return false;
+    if(!unchanged(io.lstatSync(copy,{bigint:true})))return false;
     const read=Buffer.alloc(bytes.length);let position=0;
     while(position<read.length){const count=io.readSync(fd,read,position,read.length-position,position);if(!count)return false;position+=count;}
-    return read.equals(bytes);
+    // Matching buffered bytes are insufficient if the named copy changed or
+    // vanished while they were read. Such a copy cannot authorize a repair.
+    return read.equals(bytes)&&unchanged(io.fstatSync(fd,{bigint:true}))&&unchanged(io.lstatSync(copy,{bigint:true}));
   }catch{return false;}
   finally{if(fd!==undefined)try{io.closeSync(fd);}catch{}}
 }
@@ -302,4 +339,4 @@ function pruneRecoveryCopies(file,keep,io){
     for(const {copy,name}of copies){if(kept.size<MAX_RECOVERY_COPIES||kept.has(name)){kept.add(name);continue;}try{io.unlinkSync(copy);}catch{}}
   }catch{}
 }
-module.exports={loadLibrary,validateLibrary,downloadFrom,settingsFrom,readStateFile,localPath,filename,gameFolder,SCHEMA_VERSION,MAX_BYTES,MAX_DOWNLOADS,MAX_RECOVERY_COPIES,RECOVERED,BLOCKED,FUTURE,READ_ONLY,LIST_FULL};
+module.exports={loadLibrary,validateLibrary,downloadFrom,settingsFrom,readStateFile,localPath,filename,gameFolder,SCHEMA_VERSION,MAX_BYTES,MAX_DOWNLOADS,MAX_RECOVERY_COPIES,RECOVERED,BLOCKED,FUTURE,READ_ONLY,SETTINGS_READ_ONLY,LIST_FULL,LIST_TOO_LARGE,SESSION_ONLY};

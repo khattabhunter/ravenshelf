@@ -1,10 +1,10 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification,Menu}=require('electron');
+const {app,BrowserWindow,ipcMain,protocol,session,dialog,shell,clipboard,powerMonitor,safeStorage,Notification,Menu,Tray,nativeImage}=require('electron');
 const fs=require('node:fs');
 const path=require('node:path');
 const {execFile}=require('node:child_process');
 const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
-const {gameFolder}=require('./library-state.cjs');
+const {gameFolder,SESSION_ONLY}=require('./library-state.cjs');
 const {safeURL}=require('./net.cjs');
 const {imageResponse}=require('./image-loader.cjs');
 const {createHeaderVault}=require('./header-vault.cjs');
@@ -25,8 +25,10 @@ const {markFromInternet}=require('./motw.cjs');
 const {createHardwareService}=require('./hardware.cjs');
 const i18n=require('./i18n.cjs');
 const {modContext,MODS_FOLDER}=require('./mods.cjs');
+const {AppLifecycle,shutdownServices,TRAY_ICON}=require('./app-lifecycle.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
-let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media,torrents;
+let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media,torrents,lifecycle;
+let exiting=false,exitReady=false,exitTask=null;
 // The app's language outside the window: notifications, file dialogs, window
 // titles and the menu. Every part of the app writes English; it is translated
 // here, as it is shown. If anything about the language fails, English is used.
@@ -71,7 +73,7 @@ if(isTest)app.setPath('userData',path.resolve(isTest));
 // Keep the profile folder used since Atlas Library so the rename keeps every user's library and queue.
 else app.setPath('userData',path.join(app.getPath('appData'),'atlas-repack-library'));
 if(!app.requestSingleInstanceLock())app.exit(0);
-app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
+app.on('second-instance',()=>{if(!exiting&&win&&!win.isDestroyed()){if(win.isMinimized())win.restore();win.show();win.focus();}});
 // New installs save to Downloads\Ravenshelf; existing users keep Downloads\Atlas if it is there.
 function defaultDownloadDir(){
   const legacy=path.join(app.getPath('downloads'),'Atlas');
@@ -88,6 +90,7 @@ function validateLinks(urls){
 }
 function handle(name,fn){ipcMain.handle('atlas:'+name,async(event,value)=>{
   if(!win || event.sender!==win.webContents || event.senderFrame!==win.webContents.mainFrame || event.senderFrame.url!=='atlas://app/index.html')throw publicError(new Error('Invalid app request.'));
+  if(exiting)throw publicError(new Error('Ravenshelf is closing. Wait for cleanup to finish.'));
   try{return await fn(value);}catch(error){throw publicError(error,name);}
 });}
 let updateSequence=0;
@@ -105,11 +108,12 @@ function compactGame(value){
 function compactGames(games,limit=1000){
   const seen=new Set();return (Array.isArray(games)?games:[]).slice(0,limit).map(compactGame).filter(g=>{if(!g||seen.has(g.url))return false;seen.add(g.url);return true;});
 }
-function assertQueueAvailable(){if(completion?.snapshot().phase==='executing')throw new Error('The completion action has started. Wait before adding another download.');}
+function assertQueueAvailable(){if(exiting)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');if(completion?.snapshot().phase==='executing')throw new Error('The completion action has started. Wait before adding another download.');}
 async function performInstalledScan(){
   if(scanPromise)return scanPromise;
   scanPromise=(async()=>{
     const result=await scanInstalledGames({extraFolders:Array.isArray(manager.settings.gameFolders)?manager.settings.gameFolders:[]});
+    if(exiting)return result;
     installedCache=result;atomicJSON(path.join(app.getPath('userData'),'installed-games.json'),result);return result;
   })();
   try{return await scanPromise;}finally{scanPromise=null;}
@@ -222,6 +226,18 @@ app.whenReady().then(async()=>{
   media=createMediaIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
   torrents=createTorrentIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
   browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),receiveMagnet:request=>torrents.receive(request),isTest:Boolean(isTest)});
+  lifecycle=new AppLifecycle({app,win,Tray,Menu,dialog,nativeImage,icon:path.join(__dirname,TRAY_ICON),
+    getSettings:()=>manager.settings,saveSettings:patch=>manager.updateSettings(patch),translate:text=>local().t(text),
+    onError:error=>localDialog.showErrorBox('Ravenshelf',publicErrorMessage(error))});
+  // A shutdown query can be cancelled by another application: checkpoint,
+  // but keep the tray usable unless Windows commits to ending the session.
+  win.on('query-session-end',()=>{try{manager.save();}catch{}});
+  win.on('session-end',()=>lifecycle.beginQuit());
+  handle('windowAction',action=>{
+    if(action==='background')return {action:lifecycle.background()?'background':'visible'};
+    if(action==='quit'){setImmediate(()=>lifecycle.quit());return {action:'quit'};}
+    throw new Error('Invalid app request.');
+  });
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
@@ -240,6 +256,7 @@ app.whenReady().then(async()=>{
   handle('setLanguage',options=>{
     manager.updateSettings(i18n.languageChoice(options));
     setAppMenu();
+    lifecycle?.refreshMenu();
     setImmediate(()=>{if(win&&!win.isDestroyed())win.webContents.reload();});
     return appState();
   });
@@ -309,6 +326,15 @@ app.whenReady().then(async()=>{
     if(Array.isArray(patch?.collections)){
       const seen=new Set();changes.collections=patch.collections.slice(0,100).filter(c=>c&&typeof c.id==='string'&&/^[\w-]{1,100}$/.test(c.id)&&!seen.has(c.id)&&seen.add(c.id)).map(c=>({id:c.id,name:String(c.name||'My collection').replace(/[\0\r\n]+/g,' ').trim().slice(0,80)||'My collection',games:compactGames(c.games,500)}));
     }
+    // Turning off a running feature works even when settings can't be saved:
+    // it stops, and the change lasts until restart. Other settings, including
+    // Defender scanning, still need a saved list.
+    const sessionOff=['clipboardWatchEnabled','autoUpdateEnabled','notificationsEnabled'];
+    if(Object.keys(changes).length&&Object.entries(changes).every(([key,value])=>sessionOff.includes(key)&&value===false)){
+      const saved=manager.turnOff(changes);features.configure(changes);
+      if(!saved)throw new Error(SESSION_ONLY);
+      return appState();
+    }
     manager.updateSettings(changes);features.configure(changes);return appState();
   });
   handle('openExternal',url=>shell.openExternal(safeURL(url).href));
@@ -345,13 +371,20 @@ app.whenReady().then(async()=>{
   await win.loadURL('atlas://app/index.html');
 }).catch(()=>{console.error('Ravenshelf startup failed.');localDialog.showErrorBox('Ravenshelf could not start','Ravenshelf could not start. Close it and try again. If the problem continues, replace the app with a fresh copy of the latest release.');app.quit();});
 app.on('window-all-closed',()=>app.quit());
-let exiting=false;
 app.on('before-quit',event=>{
-  if(exiting||!manager)return;
-  event.preventDefault();exiting=true;
+  if(exitReady||!manager)return;
+  event.preventDefault();exiting=true;lifecycle?.beginQuit();
+  // Repeated tray/menu/update quit requests must not bypass in-flight writes.
+  if(exitTask)return;
   completion?.dispose();
   catalogRefresh?.stop();
   for(const browser of hostWindows)browser.destroy();
   for(const browser of mediaWindows)browser.destroy();
-  manager.stop().then(()=>browserIntegration?.beforeQuit()).then(()=>media?.beforeQuit()).then(()=>torrents?.beforeQuit()).then(()=>features?.beforeQuit()).catch(()=>console.error('Ravenshelf could not finish the pending update. The current app was kept.')).finally(()=>app.quit());
+  // A cleanup that fails or passes its time limit still exits, and never
+  // installs an update. Isolated validation profiles may shorten the limit,
+  // and show no notifications, so they need no pause for one.
+  const testLimit=Number(process.env.ATLAS_SHUTDOWN_TIMEOUT_MS);
+  exitTask=shutdownServices({manager,browserIntegration,media,torrents,features},isTest?{noticeMs:0,...(testLimit>0?{timeoutMs:testLimit}:{})}:undefined)
+    .catch(()=>console.error('Ravenshelf could not finish cleanup. The current app was kept.'))
+    .finally(()=>{exitReady=true;lifecycle?.dispose();app.quit();});
 });

@@ -110,7 +110,7 @@ test('library.json stores sealed headers and a fresh session sends the original 
     return new Response('abc', { headers: { 'content-type': 'application/octet-stream', 'content-length': '3', etag: '"one"' } });
   };
   const first = w.open({ fetcher, vault: createHeaderVault(storage) });
-  first.stopping = true; // Persist the queued job without starting a file request.
+  first.pump = () => {}; // Persist the queued job without starting a file request.
   first.add({ gameTitle: 'Game', links: [{ status: 'ready', url: 'https://files.example.com/one', sourceUrl: 'https://host.example.com/one', filename: 'part01.rar', headers: HEADERS }] });
   await first.stop();
   const text = fs.readFileSync(w.stateFile, 'utf8'), saved = JSON.parse(text);
@@ -176,7 +176,7 @@ for (const [label, makeVault] of [
 
 test('new credentials never reach disk if sealing throws', t => {
   const w = workspace(t), manager = w.open({ vault: { seal() { throw new Error('No key'); } } });
-  manager.stopping = true;
+  manager.pump = () => {}; // Keep the job queued without starting a file request.
   manager.add({ gameTitle: 'Game', links: [{ status: 'ready', url: 'https://files.example.com/one', sourceUrl: 'https://host.example.com/one', filename: 'part01.rar', headers: HEADERS }] });
   const text = fs.readFileSync(w.stateFile, 'utf8'), saved = JSON.parse(text).downloads[0];
   assertNoSecrets(text);

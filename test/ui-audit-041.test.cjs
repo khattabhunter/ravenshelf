@@ -59,6 +59,12 @@ test('a failed focused toggle restores the actual saved preference',async()=>{
   await f.run('saveFeatureSetting({clipboardWatchEnabled:true},control)');assert.equal(control.checked,false);assert.equal(control.disabled,false);assert.equal(f.run('state.settings.clipboardWatchEnabled'),false);
 });
 
+test('a failed close preference save restores the saved value even while its select is focused',async()=>{
+  const f=fixture({saveSettings:async()=>{throw new Error('Save failed.');}});f.run('state.settings.closeBehavior="ask"');
+  const control=f.get('#close-behavior');control.value='quit';f.document.activeElement=control;f.context.control=control;
+  await f.run('saveFeatureSetting({closeBehavior:"quit"},control)');assert.equal(control.value,'ask');assert.equal(control.disabled,false);
+});
+
 test('an old dialog close event cannot invalidate a newly opened removal preview or lightbox',async()=>{
   let serial=0,batch;const f=fixture({previewDownloadRemoval:async({ids})=>({items:ids.map(id=>({id,name:id+'.rar',bytes:1})),totalBytes:1,warnings:[],token:'token-'+(++serial)}),removeDownloads:async value=>{batch=value;return {removedIds:value.ids,errors:[]};},getState:async()=>({})});
   f.run('wireFeatureEvents();applyState=()=>{};refreshStorage=()=>{};');await f.run("openDownloadRemoval(['first'])");f.get('#removal-dialog').open=false;await f.run("openDownloadRemoval(['second'])");await f.get('#removal-dialog').emit('close');await f.run('confirmDownloadRemoval()');assert.equal(batch.token,'token-2');assert.deepEqual(Array.from(batch.ids),['second']);

@@ -92,7 +92,7 @@ test('verification completion highlights mismatched and missing files instead of
 test('update restart waits for an idle queue and completed verification',()=>{
   const f=fixture({checkForUpdates(){},installUpdate(){}});f.run("state.updater={phase:'ready',availableVersion:'0.4.1'};state.downloads=[{id:'x',status:'downloading'}];renderUpdater()");assert.equal(f.get('#install-app-update').disabled,true);
   f.run("state.downloads=[];verificationState={phase:'verifying'};renderUpdater()");assert.equal(f.get('#install-app-update').disabled,true);
-  f.run("verificationState={phase:'completed'};renderUpdater()");assert.equal(f.get('#install-app-update').disabled,false);assert.match(f.get('#update-status').textContent,/installs when you close/);
+  f.run("verificationState={phase:'completed'};renderUpdater()");assert.equal(f.get('#install-app-update').disabled,false);assert.match(f.get('#update-status').textContent,/installs when Ravenshelf fully exits/);
 });
 
 test('a found update offers Download and install, and release notes only for the exact release page',()=>{

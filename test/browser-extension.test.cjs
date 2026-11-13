@@ -12,6 +12,8 @@ const {RULE_BASES,NEVER_BLOCK,neverBlock,validEntry}=require('../src/threat-list
 const DIR=path.join(__dirname,'..','src','browser-extension');
 const read=name=>fs.readFileSync(path.join(DIR,name),'utf8');
 const tick=(ms=15)=>new Promise(resolve=>setTimeout(resolve,ms));
+// How long Chrome's onCreated waits for the filename event (background.js FILENAME_WAIT_MS).
+const FILENAME_WAIT=1000;
 
 test('download plans keep local paths and private windows out, and match what the app accepts',()=>{
   const on={capture:true};
@@ -122,6 +124,9 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
   const event=()=>{const listeners=[];return {listeners,addListener:fn=>listeners.push(fn),emit:(...args)=>listeners.map(fn=>fn(...args))};};
   const calls=[],store={local:{},session:{}},dynamic=new Map(),hang={session:false};
   const onChanged=event();
+  const items=new Map(),itemOf=id=>{if(!items.has(id))items.set(id,{id,state:'in_progress',paused:false,canResume:false});return items.get(id);};
+  // Emitted before the browser call returns, as browsers may do.
+  const change=(id,next)=>{const item=itemOf(id),delta={id};for(const [key,value] of Object.entries(next))if(item[key]!==value){delta[key]={previous:item[key],current:value};item[key]=value;}if(Object.keys(delta).length>1)api.downloads.onChanged.emit(delta);};
   const area=name=>({
     // With `hang` set, the browser never answers a read of that store.
     get:async keys=>{if(hang[name])await new Promise(()=>{});const out={};for(const key of [].concat(keys))if(key in store[name])out[key]=structuredClone(store[name][key]);return out;},
@@ -133,9 +138,13 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
     runtime:{id:'self',getManifest:()=>({version:'0.5.0'}),getURL:file=>origin+file,onMessage:event(),onInstalled:event(),onStartup:event(),
       sendNativeMessage:async(host,message)=>{assert.equal(host,P.HOST_NAME);message=own(message);calls.push(['native',message]);const reply=await native(message);if(reply instanceof Error)throw reply;return reply;}},
     storage:{local:area('local'),session:area('session'),onChanged},
-    downloads:{onDeterminingFilename:firefox?undefined:event(),onCreated:event(),
-      search:async({id})=>[{id,state:'in_progress'}],cancel:async id=>{calls.push(['cancel',id]);},erase:async query=>{calls.push(['erase',query.id]);},
-      removeFile:async id=>{calls.push(['removeFile',id]);},pause:async id=>{calls.push(['pause',id]);},resume:async id=>{calls.push(['resume',id]);}},
+    downloads:{onDeterminingFilename:firefox?undefined:event(),onCreated:event(),onChanged:event(),
+      // Download records change the way each browser really reports them:
+      // Chrome pauses in place; Firefox's pause is 'interrupted' with paused true.
+      search:async({id})=>[{...itemOf(id)}],cancel:async id=>{calls.push(['cancel',id]);change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});},erase:async query=>{calls.push(['erase',query.id]);},
+      removeFile:async id=>{calls.push(['removeFile',id]);},
+      pause:async id=>{calls.push(['pause',id]);change(id,firefox?{state:'interrupted',paused:true,error:'USER_CANCELED',canResume:true}:{paused:true,canResume:true});},
+      resume:async id=>{calls.push(['resume',id]);change(id,{state:'in_progress',paused:false,error:undefined,canResume:false});}},
     declarativeNetRequest:{DYNAMIC_RULESET_ID:'_dynamic',updateDynamicRules:async options=>{options=own(options);calls.push(['rules',options]);for(const id of options.removeRuleIds||[])dynamic.delete(id);for(const rule of options.addRules||[])dynamic.set(rule.id,rule);},
       getDynamicRules:async(filter)=>[...dynamic.values()].filter(rule=>!filter||!filter.ruleIds||filter.ruleIds.includes(rule.id)),
       getMatchedRules:async()=>({rulesMatchedInfo:matched}),setExtensionActionOptions:async()=>{}},
@@ -150,18 +159,18 @@ function fakeBrowser({firefox=false,native=()=>({ok:false,error:'not-running'}),
   vm.runInContext(read('text.js'),context,{filename:'text.js'});
   vm.runInContext(read('background.js'),context,{filename:'background.js'});
   const message=async(msg,url=origin+'popup.html',tab)=>new Promise(resolve=>{const handled=api.runtime.onMessage.emit(msg,{id:'self',url,tab},value=>resolve(own(value)))[0];if(handled!==true)resolve(undefined);});
-  return {api,calls,store,dynamic,hang,message,of:kind=>calls.filter(call=>call[0]===kind)};
+  return {api,calls,store,dynamic,hang,message,items,itemOf,change,of:kind=>calls.filter(call=>call[0]===kind)};
 }
 
 test('Chrome: Ravenshelf takes, blocks or leaves each download, and an unanswered one stays in the browser',async()=>{
   let answer={ok:true,action:'take',id:'c1'};
   const b=fakeBrowser({native:message=>message.type==='capture'?answer:{ok:false,error:'invalid'}});
   const run=async(item)=>{const suggested=[];const kept=b.api.downloads.onDeterminingFilename.emit(item,()=>suggested.push(true))[0];assert.equal(kept,true);await tick();return suggested.length;};
-  assert.equal(await run({id:1,url:'https://cdn.example/game.zip',filename:'game.zip'}),0,'a taken download is not handed back');
+  assert.equal(await run({id:1,url:'https://cdn.example/game.zip',filename:'game.zip'}),1,'the filename hook is released after cancellation');
   assert.deepEqual(b.of('cancel').concat(b.of('erase')),[['cancel',1],['erase',1]]);
   assert.equal(b.of('native')[0][1].type,'capture');assert.equal(b.of('native')[0][1].v,1);
   answer={ok:true,action:'block',reason:'bad.example is on Ravenshelf’s list of malware sites.'};
-  assert.equal(await run({id:2,url:'https://bad.example/x.zip'}),0);
+  assert.equal(await run({id:2,url:'https://bad.example/x.zip'}),1);
   assert.ok(b.of('notify').some(call=>/blocked a download/.test(call[1])&&/malware/.test(call[2])));
   answer={ok:true,action:'browser'};
   assert.equal(await run({id:3,url:'http://plain.example/x.zip'}),1,'the browser keeps what Ravenshelf leaves');
@@ -170,7 +179,7 @@ test('Chrome: Ravenshelf takes, blocks or leaves each download, and an unanswere
   answer={ok:true,action:'take'};
   assert.equal(await run({id:5,url:'https://cdn.example/z.zip',incognito:true}),1);
   assert.equal(b.of('native').length,4,'private-window downloads are not even sent to the app');
-  assert.equal(await run({id:6,url:'blob:https://x.example/1',filename:'setup.exe'}),0);
+  assert.equal(await run({id:6,url:'blob:https://x.example/1',filename:'setup.exe'}),1);
   assert.ok(b.of('cancel').some(call=>call[1]===6));
   await b.api.storage.local.set({capture:false});
   assert.equal(await run({id:7,url:'https://cdn.example/w.zip'}),1);
@@ -190,6 +199,313 @@ test('Firefox: new downloads are paused while Ravenshelf decides, then removed o
   assert.equal(b.calls.filter(call=>call[1]===3).length,0,'private-window downloads are left alone');
 });
 
+test('Save image, video, audio and file events are captured in both browsers without a filename hook',async()=>{
+  for(const firefox of [false,true]){
+    const b=fakeBrowser({firefox,native:()=>({ok:true,action:'take',id:'accepted'})});
+    for(const [index,[filename,mime]] of [['photo.webp','image/webp'],['clip.mp4','video/mp4'],['song.mp3','audio/mpeg'],['document.pdf','application/pdf']].entries()){
+      const id=index+1;
+      b.api.downloads.onCreated.emit({id,url:`https://cdn.example/${filename}?signature=needed`,filename:`C:\\Users\\Private\\Pictures\\${filename}`,mime,referrer:'https://page.example/account?private=secret',incognito:false});
+      // Chrome first waits for its filename event, then pauses without one.
+      await tick(firefox?15:FILENAME_WAIT+60);
+      const capture=b.of('native').at(-1)[1];
+      assert.equal(capture.filename,filename);assert.equal(capture.mime,mime);assert.equal(capture.referrer,'https://page.example/');
+      assert.equal(capture.url,`https://cdn.example/${filename}?signature=needed`);
+      const order=b.calls.filter(call=>call[1]===id&&['pause','cancel','erase','resume','removeFile'].includes(call[0])).map(call=>call[0]);
+      assert.deepEqual(order,['pause','cancel','erase']);
+      assert.doesNotThrow(()=>protocol.validateRequest(capture));
+    }
+  }
+});
+
+test('Chrome shares one handoff across created and filename events in either order, releasing each hook after cancel',async()=>{
+  for(const createdFirst of [true,false]){
+    let finish;const answer=new Promise(resolve=>{finish=resolve;});
+    const b=fakeBrowser({native:()=>answer}),item={id:23,url:'https://cdn.example/photo.png',filename:'my-photo.png'};
+    let suggested=0;
+    const filename=()=>b.api.downloads.onDeterminingFilename.emit(item,()=>{suggested++;b.calls.push(['suggest',23]);});
+    const created=()=>b.api.downloads.onCreated.emit(item);
+    (createdFirst?created:filename)();await tick();
+    (createdFirst?filename:created)();await tick();
+    assert.equal(b.of('native').length,1);assert.equal(suggested,0);assert.equal(b.of('cancel').length,0,'nothing is cancelled before acceptance');
+    assert.equal(b.of('pause').length,0,'the filename event holds the download, so it is not paused');
+    finish({ok:true,action:'take',id:'accepted'});await tick();
+    assert.equal(suggested,1);assert.equal(b.of('cancel').length,1);assert.equal(b.of('removeFile').length,0);
+    assert.ok(b.calls.findIndex(c=>c[0]==='cancel')<b.calls.findIndex(c=>c[0]==='suggest'));
+    filename();created();await tick();
+    assert.equal(suggested,2,'every invocation gets exactly one suggest');assert.equal(b.of('native').length,1,'late second events do not resend');
+  }
+});
+
+test('automatic capture resumes the original browser download after unavailable, rejected or unsupported replies',async()=>{
+  for(const firefox of [false,true])for(const reply of [{ok:false,error:'not-running'},{ok:false,error:'invalid'},{ok:false,error:'busy'},{ok:true,action:'browser'},new Error('native unavailable')]){
+    const b=fakeBrowser({firefox,native:()=>reply}),item={id:1,url:'https://cdn.example/photo.jpg',filename:'photo.jpg'};
+    b.api.downloads.onCreated.emit(item);await tick(firefox?15:FILENAME_WAIT+60);
+    assert.ok(b.of('native').length>=1,'Ravenshelf was asked');
+    assert.deepEqual(b.calls.filter(c=>['pause','resume','cancel','erase','removeFile'].includes(c[0])),[['pause',1],['resume',1]]);
+    assert.equal(b.itemOf(1).paused,false,'the download runs again');assert.equal(b.itemOf(1).state,'in_progress');
+    if(!firefox){let released=0;b.api.downloads.onDeterminingFilename.emit(item,()=>released++);await tick();assert.equal(released,1);assert.equal(b.of('native').length,1);}
+  }
+});
+
+test('an unpausable or already completed save is never handed off or deleted',async()=>{
+  for(const firefox of [false,true])for(const state of ['complete','interrupted','paused','pause-rejected']){
+    const b=fakeBrowser({firefox,native:()=>({ok:true,action:'take'})});
+    b.api.downloads.search=async()=>[{id:1,state:state==='paused'||state==='pause-rejected'?'in_progress':state,paused:state==='paused'}];
+    b.api.downloads.pause=async()=>{b.calls.push(['pause',1]);throw new Error('already finished');};
+    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/small.png',filename:'small.png'});await tick(firefox?15:FILENAME_WAIT+60);
+    if(state==='pause-rejected')assert.equal(b.of('pause').length,1,'the pause was really tried');
+    assert.equal(b.of('native').length,0,state);assert.equal(b.of('removeFile').length,0);assert.equal(b.of('cancel').length,0);assert.equal(b.of('erase').length,0);assert.equal(b.of('resume').length,0);
+  }
+});
+
+test('a late acceptance cannot undo a user cancellation, completed save or manual resume',async()=>{
+  for(const firefox of [true,false])for(const change of [{state:{current:'interrupted'}},{state:{current:'complete'}},{paused:{current:false}}]){
+    let finish;const answer=new Promise(resolve=>{finish=resolve;});
+    const b=fakeBrowser({firefox,native:()=>answer});
+    // Both browsers pause it here: Firefox always, Chrome without a filename event.
+    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/photo.jpg',filename:'photo.jpg'});await tick(firefox?15:FILENAME_WAIT+60);
+    assert.equal(b.of('native').length,1);assert.equal(b.of('pause').length,1);
+    b.api.downloads.onChanged.emit({id:1,...change});
+    finish({ok:true,action:'take',id:'accepted'});await tick();
+    for(const kind of ['cancel','erase','removeFile','resume'])assert.equal(b.of(kind).length,0,kind);
+  }
+});
+test('failed cancellation releases Chrome filename hooks and resumes only the pause owned by the extension',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})}),item={id:1,url:'https://cdn.example/photo.jpg'};
+  b.api.downloads.cancel=async()=>{b.calls.push(['cancel',1]);throw new Error('cannot cancel');};
+  b.api.downloads.onCreated.emit(item);await tick(FILENAME_WAIT+60);
+  let released=0;b.api.downloads.onDeterminingFilename.emit(item,()=>released++);await tick();
+  assert.equal(released,1);assert.deepEqual(b.of('resume'),[['resume',1]]);assert.equal(b.of('erase').length,0);assert.equal(b.of('removeFile').length,0);
+});
+
+test('capture excludes private, extension-created, local, credential and browser-created media downloads',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
+  const ignored=[{url:'https://cdn.example/a.png',incognito:true},{url:'https://cdn.example/a.png',byExtensionId:'other'},{url:'blob:https://site.example/photo',filename:'photo.png'},{url:'data:video/mp4;base64,AAAA',filename:'video.mp4'},{url:'http://localhost/private.png'},{url:'http://192.168.1.2/private.png'},{url:'https://user:password@cdn.example/private.png'},{url:'https://cdn.example/a.png',finalUrl:'http://device.lan/a.png'}];
+  for(const [id,item] of ignored.entries()){b.api.downloads.onCreated.emit({id,...item});let released=0;b.api.downloads.onDeterminingFilename.emit({id,...item},()=>released++);assert.equal(released,1);}
+  await tick();assert.equal(b.of('native').length,0);assert.equal(b.of('pause').length,0);assert.equal(b.of('cancel').length,0);
+});
+
+test('public download names may contain spaces while local addresses, credentials and controls remain excluded',()=>{
+  for(const url of ['https://cdn.example/My photo.png?signature=needed','https://cdn.example/My%20photo.png?signature=needed']){
+    assert.equal(P.publicDownloadAddress(url),true);
+    const plan=P.downloadPlan({url,filename:'My photo.png'},{capture:true});assert.equal(plan.kind,'ask');
+    assert.equal(protocol.validateRequest({v:1,...plan.message}).url,'https://cdn.example/My%20photo.png?signature=needed');
+  }
+  for(const url of ['http://localhost/private file','http://127.0.0.1/private file','http://192.168.0.1/private file','http://device.lan/private file','https://user:password@cdn.example/private file','https://cdn.example/line\nbreak','file:///C:/private file','blob:https://cdn.example/file','javascript:alert(1)'])assert.equal(P.publicDownloadAddress(url),false,url);
+  assert.equal(P.contextOrigin('https://page.example/private page?token=secret'),undefined,'page context remains strict and never leaks the path');
+});
+
+test('a saturated handoff queue still blocks browser-created programs and releases other saves',async()=>{
+  let finish;const answer=new Promise(resolve=>{finish=resolve;}),b=fakeBrowser({native:()=>answer});
+  try{
+    for(let id=0;id<256;id++)b.api.downloads.onCreated.emit({id,url:`https://cdn.example/${id}.zip`});
+    await tick(FILENAME_WAIT+100);assert.equal(b.of('native').length,256);
+    let released=0;
+    b.api.downloads.onDeterminingFilename.emit({id:999,url:'blob:https://bad.example/program',filename:'setup.exe'},()=>released++);
+    b.api.downloads.onDeterminingFilename.emit({id:1000,url:'https://cdn.example/photo.png'},()=>released++);
+    await tick();assert.equal(released,2);assert.ok(b.of('cancel').some(c=>c[1]===999));assert.ok(!b.of('cancel').some(c=>c[1]===1000));assert.equal(b.of('native').length,256);
+  }finally{finish({ok:false,error:'not-running'});await tick();}
+});
+
+test('the filename wait in the tests matches the extension',()=>{
+  assert.match(read('background.js'),new RegExp(`const FILENAME_WAIT_MS = ${FILENAME_WAIT};`));
+});
+
+test('Firefox: its own pause (reported as interrupted and paused) is not taken for the user, and the download runs again when left to it',async()=>{
+  for(const reply of [{ok:true,action:'take',id:'accepted'},{ok:true,action:'browser'},{ok:false,error:'not-running'}]){
+    const b=fakeBrowser({firefox:true,native:()=>reply});
+    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/game.zip',filename:'/home/p/Downloads/game.zip',incognito:false});await tick();
+    assert.equal(b.of('native').length,1,'the download reaches Ravenshelf');
+    const steps=b.calls.filter(c=>['pause','resume','cancel','erase','removeFile'].includes(c[0])).map(c=>c[0]);
+    if(reply.action==='take'){assert.deepEqual(steps,['pause','cancel','erase']);}
+    else{assert.deepEqual(steps,['pause','resume']);assert.equal(b.itemOf(1).state,'in_progress');assert.equal(b.itemOf(1).paused,false,'not left paused');}
+  }
+});
+
+
+test('Firefox: a pause that throws the data away is not taken for the user; Ravenshelf is still asked, and otherwise the user is told',async()=>{
+  for(const [reply,late] of [[{ok:true,action:'take',id:'accepted'},false],[{ok:true,action:'block',reason:'Listed.'},false],[{ok:true,action:'browser'},false],[{ok:false,error:'not-running'},true],[{ok:true,action:'browser'},true]]){
+    // With a late change event, Ravenshelf answers later still, so the event
+    // reaches a decision that is still open.
+    const b=fakeBrowser({firefox:true,native:()=>late?new Promise(resolve=>setTimeout(()=>resolve(reply),20)):reply});
+    // A server that can't resume: the pause cancels and keeps nothing. The
+    // change event may come during the pause or only afterwards.
+    b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);const next={state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false};
+      if(late){Object.assign(b.itemOf(id),next);setTimeout(()=>b.api.downloads.onChanged.emit({id,state:{previous:'in_progress',current:'interrupted'},error:{current:'USER_CANCELED'}}),5);}else b.change(id,next);};
+    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(60);
+    assert.equal(b.of('native').length,1,'Ravenshelf is still asked');
+    const steps=b.calls.filter(c=>['pause','resume','cancel','erase','removeFile'].includes(c[0])).map(c=>c[0]);
+    const retry=b.of('notify').filter(c=>c[1]==='Start this download again');
+    if(reply.action==='take'){assert.deepEqual(steps,['pause','cancel','erase']);assert.equal(retry.length,0);}
+    else if(reply.action==='block'){assert.deepEqual(steps,['pause','cancel','erase']);assert.ok(b.of('notify').some(c=>/blocked a download/.test(c[1])));assert.equal(retry.length,0);}
+    else{
+      assert.deepEqual(steps,['pause'],'nothing to resume, and the entry stays for Retry');assert.equal(retry.length,1,'the user is told');
+      // Starting it again: the same site is not paused this time.
+      b.api.downloads.onCreated.emit({id:2,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(60);
+      assert.equal(b.of('pause').length,1);assert.equal(b.of('native').length,2);assert.equal(b.calls.filter(c=>c[1]===2&&['cancel','erase','resume'].includes(c[0])).length,0);
+    }
+  }
+});
+
+test('Firefox: a site whose download was dropped is remembered across background restarts, by site, for ten minutes',async()=>{
+  const dropping=b=>{b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};};
+  const first=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});dropping(first);
+  first.api.downloads.onCreated.emit({id:1,url:'https://host.example/dl/one?token=a',filename:'one.zip'});await tick(40);
+  assert.equal(first.of('notify').filter(c=>c[1]==='Start this download again').length,1);
+  const saved=structuredClone(first.store.session.unpausable);
+  assert.deepEqual(Object.keys(saved),['https://host.example'],'only the site is kept, not the signed address');
+  // The background page was unloaded: a new one reads the same session storage.
+  const woken=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});dropping(woken);woken.store.session.unpausable=structuredClone(saved);
+  woken.api.downloads.onCreated.emit({id:7,url:'https://host.example/dl/two?token=b',filename:'two.zip'});await tick(40);
+  assert.equal(woken.of('pause').length,0,'a new signed address on the same site is not paused');assert.equal(woken.of('native').length,1,'but it is still checked');
+  woken.api.downloads.onCreated.emit({id:8,url:'https://other.example/file.zip',filename:'file.zip'});await tick(40);
+  assert.deepEqual(woken.of('pause'),[['pause',8]],'other sites are paused as usual');
+  // After ten minutes (or with a stored time that can't be right) the site is paused again.
+  for(const until of [Date.now()-1,Date.now()+60*60000]){
+    const later=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});later.store.session.unpausable={'https://host.example':until};
+    later.api.downloads.onCreated.emit({id:9,url:'https://host.example/dl/three',filename:'three.zip'});await tick(40);
+    assert.equal(later.of('pause').length,1,String(until));
+  }
+});
+
+test('Firefox: no Retry notice for a dropped download the user already removed',async()=>{
+  const b=fakeBrowser({firefox:true,native:()=>new Promise(resolve=>setTimeout(()=>resolve({ok:true,action:'browser'}),20))});
+  b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};
+  b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick(5);
+  b.items.delete(1);b.api.downloads.search=async()=>[];
+  await tick(60);
+  assert.equal(b.of('notify').filter(c=>c[1]==='Start this download again').length,0);assert.equal(b.store.session.unpausable,undefined);
+});
+
+test('two downloads dropped at once each get their own Retry notice; Chrome interruptions never do',async()=>{
+  const b=fakeBrowser({firefox:true,native:()=>({ok:true,action:'browser'})});
+  b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};
+  b.api.downloads.onCreated.emit({id:1,url:'https://a.example/one.zip',filename:'one.zip'});
+  b.api.downloads.onCreated.emit({id:2,url:'https://b.example/two.zip',filename:'two.zip'});await tick(60);
+  assert.equal(b.of('notify').filter(c=>c[1]==='Start this download again').length,2);
+  // Chrome only drops a download on a real interruption, which is not a pause it made.
+  const c=fakeBrowser({native:()=>({ok:true,action:'browser'})});
+  c.api.downloads.pause=async id=>{c.calls.push(['pause',id]);c.change(id,{state:'interrupted',paused:false,error:'NETWORK_FAILED',canResume:true});};
+  c.api.downloads.onCreated.emit({id:3,url:'https://a.example/three.zip',filename:'three.zip'});await tick(FILENAME_WAIT+60);
+  assert.equal(c.of('notify').filter(n=>n[1]==='Start this download again').length,0);assert.equal(c.store.session.unpausable,undefined);
+  for(const kind of ['cancel','erase','removeFile'])assert.equal(c.of(kind).length,0,kind);
+});
+
+test('Firefox: Retry during the decision wins over a late answer about the dropped download',async()=>{
+  let finish;const answer=new Promise(resolve=>{finish=resolve;});
+  const b=fakeBrowser({firefox:true,native:()=>answer});
+  b.api.downloads.pause=async id=>{b.calls.push(['pause',id]);b.change(id,{state:'interrupted',paused:false,error:'USER_CANCELED',canResume:false});};
+  b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/stream.zip',filename:'stream.zip'});await tick();
+  b.change(1,{state:'in_progress',error:undefined});
+  finish({ok:true,action:'take',id:'late'});await tick();
+  for(const kind of ['cancel','erase','removeFile','resume'])assert.equal(b.of(kind).length,0,kind);
+  assert.equal(b.of('notify').filter(c=>c[1]==='Start this download again').length,0);
+});
+
+test('a blocked download that finishes while it is being cancelled is still deleted',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'block',reason:'Listed.'})});
+  let state='in_progress';b.api.downloads.search=async({id})=>[{id,state,paused:false}];
+  b.api.downloads.cancel=async id=>{b.calls.push(['cancel',id]);state='complete';throw new Error('Download is already complete');};
+  let released=0;b.api.downloads.onDeterminingFilename.emit({id:1,url:'https://cdn.example/a.zip',filename:'a.zip'},()=>released++);await tick();
+  assert.equal(released,1);assert.deepEqual(b.calls.filter(c=>['cancel','removeFile','erase'].includes(c[0])).map(c=>c[0]),['cancel','removeFile','erase']);
+});
+
+test('Chrome: the extension’s own pause is held, not taken for the user, and is resumed when left to the browser',async()=>{
+  for(const reply of [{ok:true,action:'take',id:'accepted'},{ok:true,action:'browser'}]){
+    const b=fakeBrowser({native:()=>reply});
+    b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/game.zip',filename:'game.zip'});await tick(FILENAME_WAIT+60);
+    const steps=b.calls.filter(c=>['pause','resume','cancel','erase','removeFile'].includes(c[0])).map(c=>c[0]);
+    assert.deepEqual(steps,reply.action==='take'?['pause','cancel','erase']:['pause','resume']);
+    if(reply.action!=='take'){assert.equal(b.itemOf(1).paused,false);assert.equal(b.itemOf(1).state,'in_progress');}
+  }
+});
+
+test('Chrome: a download first seen without a name waits for the filename event, so the server’s name is checked',async()=>{
+  const b=fakeBrowser({native:message=>message.type==='capture'?{ok:true,action:'block',reason:'It is not encrypted.'}:{ok:false,error:'invalid'}});
+  const item={id:5,url:'http://plain.example/get?id=1',filename:'',incognito:false};
+  b.api.downloads.onCreated.emit(item);await tick(300);
+  assert.equal(b.of('native').length,0,'nothing is decided before the name is known');
+  let released=0;b.api.downloads.onDeterminingFilename.emit({...item,filename:'setup.exe'},()=>released++);await tick();
+  assert.equal(b.of('native').length,1);assert.equal(b.of('native')[0][1].filename,'setup.exe');
+  assert.equal(released,1);assert.equal(b.of('pause').length,0);assert.ok(b.of('cancel').some(c=>c[1]===5));
+  // A late created event with an empty name never blanks the known one.
+  const b2=fakeBrowser({native:()=>({ok:true,action:'browser'})});
+  let released2=0;b2.api.downloads.onDeterminingFilename.emit({id:6,url:'https://cdn.example/a',filename:'kept.zip'},()=>released2++);
+  b2.api.downloads.onCreated.emit({id:6,url:'https://cdn.example/a',filename:''});await tick();
+  assert.equal(b2.of('native')[0][1].filename,'kept.zip');assert.equal(released2,1);
+});
+
+test('Chrome: without a filename event, the browser’s latest record supplies the name before pausing',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'browser'})});
+  b.itemOf(7).filename='C:\\Users\\Private\\Downloads\\tool.exe';
+  b.api.downloads.onCreated.emit({id:7,url:'http://plain.example/get',filename:''});await tick(FILENAME_WAIT+60);
+  assert.equal(b.of('native')[0][1].filename,'tool.exe');
+  assert.ok(!JSON.stringify(b.of('native')).includes('Private'),'the local folder is not sent');
+  assert.deepEqual(b.calls.filter(c=>['pause','resume'].includes(c[0])).map(c=>c[0]),['pause','resume']);
+});
+
+test('Chrome: a user pause or cancel during the filename hold wins over a late acceptance',async()=>{
+  for(const delta of [{paused:{previous:false,current:true}},{state:{previous:'in_progress',current:'interrupted'}}]){
+    let finish;const answer=new Promise(resolve=>{finish=resolve;});
+    const b=fakeBrowser({native:()=>answer});
+    let released=0;b.api.downloads.onDeterminingFilename.emit({id:1,url:'https://cdn.example/a.zip',filename:'a.zip'},()=>released++);await tick();
+    assert.equal(b.of('native').length,1);
+    b.api.downloads.onChanged.emit({id:1,...delta});
+    finish({ok:true,action:'take',id:'late'});await tick();
+    assert.equal(released,1);for(const kind of ['cancel','erase','removeFile','resume','pause'])assert.equal(b.of(kind).length,0,kind);
+  }
+});
+
+test('finished decisions do not fill the open-decision limit, and a late second event never reopens one',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'browser'})});
+  const releases=[];
+  // Three bursts of 200 within a minute: each burst finishes before the next.
+  for(let batch=0;batch<3;batch++){
+    for(let id=batch*200;id<batch*200+200;id++)b.api.downloads.onDeterminingFilename.emit({id,url:`https://cdn.example/${id}.zip`,filename:`${id}.zip`},()=>releases.push(id));
+    await tick(80);
+  }
+  assert.equal(releases.length,600);
+  assert.equal(b.of('native').length,600,'decisions that finished make room for new ones');
+  const sent=b.of('native').length;let released=0;
+  b.api.downloads.onDeterminingFilename.emit({id:999,url:'https://cdn.example/new.zip',filename:'new.zip'},()=>released++);
+  await tick();assert.equal(released,1);assert.equal(b.of('native').length,sent+1,'a new save is still checked');
+  b.api.downloads.onDeterminingFilename.emit({id:0,url:'https://cdn.example/0.zip',filename:'0.zip'},()=>released++);
+  b.api.downloads.onCreated.emit({id:0,url:'https://cdn.example/0.zip',filename:''});
+  await tick(FILENAME_WAIT+60);assert.equal(released,2);assert.equal(b.of('native').length,sent+1,'the decided download is not sent again');
+  for(const kind of ['cancel','erase','pause'])assert.equal(b.of(kind).length,0,kind);
+});
+
+test('a settings failure releases the filename hook and never pauses or cancels a save',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});b.api.storage.local.get=async()=>{throw new Error('storage failed');};
+  let released=0;b.api.downloads.onDeterminingFilename.emit({id:1,url:'https://cdn.example/photo.png'},()=>released++);await tick();
+  assert.equal(released,1);assert.equal(b.of('native').length,0);assert.equal(b.of('pause').length,0);assert.equal(b.of('cancel').length,0);
+});
+
+test('a hung settings read eventually releases Chrome without starting a handoff',async()=>{
+  const b=fakeBrowser({native:()=>({ok:true,action:'take'})});b.hang.local=true;
+  let released=0;b.api.downloads.onDeterminingFilename.emit({id:1,url:'https://cdn.example/photo.png'},()=>released++);
+  await tick(2650);assert.equal(released,1);assert.equal(b.of('native').length,0);assert.equal(b.of('pause').length,0);
+});
+
+test('a timed-out handoff resumes once and ignores a late acceptance',async()=>{
+  let finish;const answer=new Promise(resolve=>{finish=resolve;});
+  const b=fakeBrowser({native:()=>answer}),item={id:1,url:'https://cdn.example/video.mp4',filename:'video.mp4'};
+  b.api.downloads.onCreated.emit(item);await tick();
+  let released=0;b.api.downloads.onDeterminingFilename.emit(item,()=>released++);
+  await tick(6100);
+  assert.equal(released,1);assert.equal(b.of('pause').length,0);assert.equal(b.of('resume').length,0);assert.equal(b.of('cancel').length,0);
+  finish({ok:true,action:'take',id:'late'});await tick();
+  assert.equal(released,1);assert.equal(b.of('resume').length,0);assert.equal(b.of('cancel').length,0);assert.equal(b.of('erase').length,0);
+});
+
+test('a completion discovered after acceptance preserves the saved file even without an onChanged event',async()=>{
+  let finish;const answer=new Promise(resolve=>{finish=resolve;});let state='in_progress';
+  const b=fakeBrowser({firefox:true,native:()=>answer});b.api.downloads.search=async()=>[{id:1,state}];
+  b.api.downloads.onCreated.emit({id:1,url:'https://cdn.example/image.png',filename:'image.png'});await tick();
+  state='complete';finish({ok:true,action:'take',id:'accepted'});await tick();
+  for(const kind of ['cancel','erase','removeFile','resume'])assert.equal(b.of(kind).length,0,kind);
+});
+
 test('protection lists sync into browser rules, and a refused rule does not cost the others',async()=>{
   const native=message=>({
     hello:{ok:true,app:'Ravenshelf',version:'0.5.0',capture:true,protection:{version:'v1',total:3}},
@@ -204,7 +520,7 @@ test('protection lists sync into browser rules, and a refused rule does not cost
   assert.deepEqual(full.addRules[0].condition.requestDomains,['bad.example','worse.example']);
   assert.deepEqual(rules.at(-1),P.toggleRules({guard:true,protection:true,pausedUntil:0},Date.now()));
   assert.equal(b.store.local.listVersion,'v1');assert.equal(b.store.local.listTotal,3);assert.equal(b.store.local.status,'connected');
-  assert.deepEqual(b.of('menu').map(call=>call[1]),['ravenshelf-link','ravenshelf-image','ravenshelf-page','ravenshelf-youtube']);
+  assert.deepEqual(b.of('menu').map(call=>call[1]),['ravenshelf-link','ravenshelf-image','ravenshelf-video','ravenshelf-audio','ravenshelf-page','ravenshelf-youtube']);
   assert.ok(b.of('alarm').some(call=>call[0]==='alarm'&&call[1]==='ravenshelf-sync'));
   const before=b.of('native').length;
   b.api.alarms.onAlarm.emit({name:'ravenshelf-sync'});await tick(40);
@@ -365,6 +681,19 @@ test('image menus send the image itself, minimize page context and exclude priva
   }
 });
 
+test('direct video and audio menus send only the chosen media URL and public page origin',async()=>{
+  for(const firefox of [false,true])for(const kind of ['video','audio']){
+    const b=fakeBrowser({firefox,native:()=>({ok:true,action:'take',id:'media'})}),menu=firefox?b.api.menus:b.api.contextMenus;
+    const click=(url,incognito=false)=>menu.onClicked.emit({menuItemId:'ravenshelf-'+kind,srcUrl:url,linkUrl:'https://ads.example/fake-download',pageUrl:'https://page.example/member?token=private#hidden'},{id:3,incognito});
+    click(`https://cdn.example/${kind}?signature=needed`);await tick();
+    assert.deepEqual(b.of('native').map(c=>c[1]),[{v:1,type:'send',kind:'link',url:`https://cdn.example/${kind}?signature=needed`,pageUrl:'https://page.example/'}]);
+    click('https://cdn.example/private',true);
+    for(const url of ['blob:https://page.example/file','data:audio/mp3;base64,AA==','file:///C:/private.mp4','http://localhost/file','http://10.0.0.1/file','https://user:password@cdn.example/file',undefined])click(url);
+    await tick();assert.equal(b.of('native').length,1);assert.equal(b.of('navigate').length,0);
+    assert.doesNotThrow(()=>protocol.validateRequest(b.of('native')[0][1]));
+  }
+});
+
 test('captured page context is minimized before native messaging without losing Nexus matching',()=>{
   const url='https://files.example/a.zip?signature=needed';
   const plan=P.downloadPlan({url,referrer:'https://page.example/account?private=synthetic-secret#hidden',filename:'a.zip'},{capture:true});
@@ -440,7 +769,7 @@ test('a file downloaded on Nexus Mods is sent to Ravenshelf with its game and mo
   const b=fakeBrowser({native:message=>message.type==='capture'?{ok:true,action:'take',id:'c1'}:{ok:false,error:'invalid'}});
   assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE}),{ok:true});
   assert.equal(b.of('native').length,0,'reading a page sends nothing to the app');
-  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),0,'Ravenshelf takes the download');
+  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),1,'Ravenshelf takes the download');
   assert.deepEqual(captures(b),[{v:1,type:'capture',url:CDN_ITEM.url,incognito:false,referrer:'https://www.nexusmods.com/',filename:MOD_FILE,totalBytes:3072,mod:MOD_LABEL}]);
   assert.doesNotThrow(()=>protocol.validateRequest(captures(b)[0]),'the app accepts the label the extension sends');
   // The same file name from another site is not a Nexus Mods download, even when the mod's own page linked to it.
@@ -488,7 +817,7 @@ test('Firefox labels Nexus Mods downloads the same way',async()=>{
 test('an older Ravenshelf that does not know about mods still gets the download',async()=>{
   const b=fakeBrowser({native:message=>message.type!=='capture'?{ok:false,error:'invalid'}:message.mod?{ok:false,error:'invalid'}:{ok:true,action:'take',id:'c1'}});
   await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
-  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),0);
+  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),1);
   assert.deepEqual(captures(b).map(message=>Boolean(message.mod)),[true,false],'sent again once, without the label');
   assert.deepEqual(b.of('cancel'),[['cancel',1]]);
   // An app that refuses the plain download too is not asked a third time.
@@ -561,7 +890,7 @@ test('the Nexus Mods switch turns the labels off and forgets what pages said',as
   assert.equal(off.state.nexus,false);assert.equal(b.store.local.nexus,false);
   await tick(150);assert.deepEqual(b.store.session.modPages,{});
   assert.deepEqual(await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE}),{ok:false},'no notes while off');
-  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),0,'the download itself is still checked by Ravenshelf');
+  assert.equal(await startDownload(b,{id:1,...CDN_ITEM}),1,'the download itself is still checked by Ravenshelf');
   assert.equal(captures(b)[0].mod,undefined);
   await b.message({cmd:'set',key:'nexus',value:true});
   await fromNexus(b,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
@@ -668,15 +997,15 @@ test('a download never waits for the browser’s storage, except a Nexus Mods fi
   const b=fakeBrowser({native:()=>({ok:true,action:'take'})});
   // The browser does not answer the read of its session store, where the notes of Nexus Mods pages are kept.
   b.hang.session=true;
-  assert.equal(await startDownload(b,{id:1,url:'https://cdn.example/game.zip',filename:'game.zip'}),0,'an ordinary download is decided at once');
+  assert.equal(await startDownload(b,{id:1,url:'https://cdn.example/game.zip',filename:'game.zip'}),1,'an ordinary download is decided at once');
   assert.equal(captures(b).length,1);
-  assert.equal(await startDownload(b,{id:2,url:'https://mirror.example/x.7z',referrer:MOD_URL,filename:'x.7z'}),0,'also one that was started on a Nexus Mods page but is kept elsewhere');
+  assert.equal(await startDownload(b,{id:2,url:'https://mirror.example/x.7z',referrer:MOD_URL,filename:'x.7z'}),1,'also one that was started on a Nexus Mods page but is kept elsewhere');
   assert.equal(captures(b).length,2);
-  assert.equal(await startDownload(b,{id:3,url:'https://short.example/x',finalUrl:CDN_ITEM.url,filename:MOD_FILE}),0,'and one that only ended up on a file server');
+  assert.equal(await startDownload(b,{id:3,url:'https://short.example/x',finalUrl:CDN_ITEM.url,filename:MOD_FILE}),1,'and one that only ended up on a file server');
   assert.equal(captures(b).length,3);
   // With the switch off, a Nexus Mods file has no use for the notes either.
   await b.api.storage.local.set({nexus:false});
-  assert.equal(await startDownload(b,{id:4,...CDN_ITEM}),0);
+  assert.equal(await startDownload(b,{id:4,...CDN_ITEM}),1);
   assert.equal(captures(b).length,4);assert.equal(captures(b)[3].mod,undefined);
   await b.api.storage.local.set({nexus:true});
   // A Nexus Mods file waits for the notes, but not for long. It is then sent as it is, without a label.
@@ -692,7 +1021,7 @@ test('a download never waits for the browser’s storage, except a Nexus Mods fi
   const quick=fakeBrowser({native:()=>({ok:true,action:'take'})});
   await fromNexus(quick,{cmd:'nexus',url:MOD_URL,page:MOD_PAGE});
   const before=Date.now();
-  assert.equal(await startDownload(quick,{id:1,...CDN_ITEM}),0);
+  assert.equal(await startDownload(quick,{id:1,...CDN_ITEM}),1);
   assert.deepEqual(captures(quick)[0].mod,MOD_LABEL);assert.ok(Date.now()-before<500);
 });
 
@@ -801,7 +1130,7 @@ test('the extension learns the app language when it says hello, and its menu and
   await b.message({cmd:'status'});await tick(30);
   assert.equal(b.store.local.appLanguage,'ar');assert.equal(b.store.local.appDigits,'arab');
   const titles=b.of('menu').map(call=>call[2]);
-  assert.deepEqual(titles.slice(-4),[TEXT.AR['Download with Ravenshelf'],TEXT.AR['Download this image with Ravenshelf'],TEXT.AR['Download this file with Ravenshelf'],TEXT.AR['Download this video with Ravenshelf']]);
+  assert.deepEqual(titles.slice(-6),[TEXT.AR['Download with Ravenshelf'],TEXT.AR['Download this image with Ravenshelf'],TEXT.AR['Download this video file with Ravenshelf'],TEXT.AR['Download this audio with Ravenshelf'],TEXT.AR['Download this file with Ravenshelf'],TEXT.AR['Download this video with Ravenshelf']]);
   // A reason the app sends is already in its language and is shown as it is.
   b.api.contextMenus.onClicked.emit({menuItemId:'ravenshelf-link',linkUrl:'https://cdn.example/a.zip',pageUrl:'https://example.com/'},{incognito:false});await tick(30);
   assert.deepEqual(b.of('notify').at(-1),['notify',TEXT.AR['Ravenshelf blocked this link'],'\u0646\u0635 \u0645\u0646 \u0627\u0644\u062a\u0637\u0628\u064a\u0642']);
@@ -809,7 +1138,7 @@ test('the extension learns the app language when it says hello, and its menu and
   language='en';const before=b.of('menu').length;
   await b.message({cmd:'status'});await tick(30);
   assert.equal(b.store.local.appLanguage,'en');
-  assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this image with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
+  assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this image with Ravenshelf','Download this video file with Ravenshelf','Download this audio with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
   // An answer with an unknown language changes nothing.
   language='fr';await b.message({cmd:'status'});await tick(30);assert.equal(b.store.local.appLanguage,'en');
 });

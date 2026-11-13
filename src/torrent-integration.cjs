@@ -12,6 +12,7 @@ const {MediaTools}=require('./media-tools.cjs');
 const {TorrentEngine,readMetadataFile,MESSAGES:ENGINE}=require('./torrent-engine.cjs');
 const {parseMagnet,readTorrent,sanitizeTorrent,MESSAGES:MAGNET}=require('./magnet.cjs');
 const {TOOL_MESSAGES,MESSAGES}=require('./torrent-messages.cjs');
+const {SESSION_ONLY}=require('./library-state.cjs');
 
 // The pinned torrent engine. Its release publishes no checksums, so the
 // SHA-256 of the zip was compared with Scoop's and winget's records of the
@@ -168,9 +169,17 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
     if(!Array.isArray(selected)||selected.length>10000||selected.some(n=>!Number.isSafeInteger(n)))throw new Error(MESSAGES.choose);
     const chosen=new Set(selected);
     const files=request.read.files.map(file=>({...file,selected:chosen.has(file.index)&&!file.padding}));
+    const assertCurrent=()=>{
+      assertOn();assertQueueAvailable();manager.assertWritable?.(0);
+      if(request.controller.signal.aborted||requests.get(id)!==request)throw new Error(MESSAGES.request);
+    };
     // The checked file list is kept so a paused torrent resumes without asking other people again.
     await pruned;
+    assertCurrent();
     await writeAtomic(storeFile(request.parsed.infoHash),request.torrent);
+    // Quit, disabling torrents, or dismissing the review may happen during I/O.
+    // Recheck immediately before the synchronous queue mutation.
+    assertCurrent();
     const title=typeof gameTitle==='string'?gameTitle:request.gameTitle;
     const result=manager.addTorrent({infoHash:request.parsed.infoHash,magnet:request.parsed.magnet,name:request.read.name,files,gameTitle:request.source==='browser'&&!gameTitle?'':title});
     requests.delete(id);publish();
@@ -209,13 +218,21 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
         next.accepted=true;next.enabled=true;
       }else if(options.enabled===false){
         if(activeJobs())throw new Error(MESSAGES.stillActive);
-        next.enabled=false;waiting=[];
-        for(const id of [...requests.keys()])close(id);
-        engine.stop().catch(()=>{});
+        next.enabled=false;
       }
     }
-    manager.updateSettings({torrents:normalizeSettings(next)});
+    // The setting changes first, then what runs: a failed save leaves both as
+    // they were. Only turning torrents off also works when settings can't be
+    // saved; it then lasts until restart.
+    const off=options.enabled===false&&next.uploadLimit===current.uploadLimit&&next.shareMinutes===current.shareMinutes;
+    const saved=off?manager.turnOff({torrents:normalizeSettings(next)}):(manager.updateSettings({torrents:normalizeSettings(next)}),true);
+    if(options.enabled===false){
+      waiting=[];
+      for(const id of [...requests.keys()])close(id);
+      engine.stop().catch(()=>{});
+    }
     applyLimits();
+    if(!saved)throw new Error(SESSION_ONLY);
     return snapshot();
   });
   register('setUpTorrents',()=>{assertOn();tools.install();return snapshot();});

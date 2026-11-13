@@ -32,12 +32,16 @@ async function verifyPackage(directory=path.join(__dirname,'../dist/win-unpacked
     verifyNativeHelper(kind,{source,manifest,helper,buildScript:fs.readFileSync(path.join(__dirname,spec.script))});
     if(hash(helper)!==hash(local(spec.output)))throw new Error(`The packaged ${spec.label} is stale.`);
   }
+  // Windows shows an empty tray slot, not an error, when the tray icon is missing.
+  const {TRAY_ICON}=require('../src/app-lifecycle.cjs');
+  let trayIcon=null;try{trayIcon=read('src/'+TRAY_ICON);}catch{}
+  if(!trayIcon?.length||hash(trayIcon)!==hash(local(TRAY_ICON)))throw new Error('The packaged tray icon is missing or stale.');
   // The browser extension the app exports must be exactly the reviewed files.
   const {EXTENSION_FILES}=require('../src/browser-setup.cjs');
   for(const name of EXTENSION_FILES){
     if(hash(read('src/browser-extension/'+name))!==hash(local('browser-extension/'+name)))throw new Error('The packaged browser extension is stale.');
   }
-  console.log('Verified the packaged native helpers and browser extension against their build inputs and output hashes.');
+  console.log('Verified the packaged native helpers, tray icon and browser extension against their build inputs and output hashes.');
 }
 if(require.main===module)verifyPackage(process.argv[2]?path.resolve(process.argv[2]):undefined).catch(error=>{console.error(error.message);process.exitCode=1;});
 module.exports={verifyUpdater,verifyBrowserHost,verifyNativeHelper,verifyPackage,NATIVE_HELPERS};
