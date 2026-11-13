@@ -89,7 +89,7 @@ test('unsafe opened descriptors are closed without reading or trusting their pat
 test('a pathname replaced after opening cannot substitute content or become a new profile',t=>{
   const w=fixture(t),original=Buffer.from('{"downloads":[]}'),replacement=Buffer.from('{"settings":{"language":"ar"}}'),held=path.join(w.root,'opened.json');fs.writeFileSync(w.file,original);
   let reads=0,closes=0;
-  const io=delegate({openSync(file,...args){const fd=fs.openSync(file,...args);fs.renameSync(file,held);fs.writeFileSync(file,replacement);return fd;},readSync(...args){reads++;return fs.readSync(...args);},closeSync(...args){closes++;return fs.closeSync(...args);}});
+  const io=delegate({openSync(file,...args){const fd=fs.openSync(file,...args);fs.renameSync(file,held);fs.writeFileSync(file,replacement,{flag:'wx'});return fd;},readSync(...args){reads++;return fs.readSync(...args);},closeSync(...args){closes++;return fs.closeSync(...args);}});
   const result=loadLibrary(w.file,{io});assert.equal(result.canSave,false);assert.equal(result.warning,BLOCKED);assert.equal(reads,0);assert.equal(closes,1);assert.deepEqual(fs.readFileSync(w.file),replacement);assert.deepEqual(fs.readFileSync(held),original);
   fs.unlinkSync(w.file);fs.renameSync(held,w.file);
   const vanished=delegate({openSync(file,...args){const fd=fs.openSync(file,...args);fs.renameSync(file,held);return fd;}});
