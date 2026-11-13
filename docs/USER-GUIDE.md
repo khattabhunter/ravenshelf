@@ -1,18 +1,18 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.10.0 for Windows, a preview release. See the [0.10.0 release notes](RELEASE-0.10.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
+This guide follows the Ravenshelf 0.10.3 release candidate for Windows. **0.10.3 is not released yet**; its [candidate notes](RELEASE-0.10.3.md) record 1,178 passing local tests and successful Windows package inspection. Real Chrome/Firefox capture checks and verification of the future public release remain pending. The published preview remains [0.10.2](RELEASE-0.10.2.md). Features marked 0.10.3 below are not in that published download.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.10.0-Windows.exe` from the [v0.10.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.10.2-Windows.exe` from the [v0.10.2 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.2). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
-To move from an older version, close its window before opening the new executable. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
+To move from an older version, exit it fully before opening the new executable. In 0.10.3, use **Exit Ravenshelf** rather than hiding its window in the background. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
 ### Automatic app updates
 
 In the packaged Windows portable release, **Settings → Ravenshelf updates** checks this repository for newer published versions, including prereleases. **Check for updates automatically** is on by default: checks start shortly after launch and repeat every six hours while the app is open. A check only looks for a newer release. When one is found, the status shows its version, a desktop notice appears (if notifications are on), and **What’s new** opens its release page. Nothing is downloaded until you choose **Download and install**. Turning automatic checks off leaves **Check for updates** available. Development and unpacked builds do not replace themselves.
 
-After you choose **Download and install**, Ravenshelf first checks GitHub's checksum and the release's signed build record, then downloads the executable. When the status says the update is verified, it installs on the next normal close. Downloading does not restart or interrupt your queue. **Restart now** is available only while downloads, scans, file verification and completion actions are idle. Closing the app pauses unfinished downloads as usual; resume them after reopening.
+After you choose **Download and install**, Ravenshelf first checks GitHub's checksum and the release's signed build record, then downloads the executable. When the status says the update is verified, it can install on the next full exit. In 0.10.3, hiding the window in the background does not install it. Downloading does not restart or interrupt your queue. **Restart now** is available only while downloads, scans, file verification and completion actions are idle. A full exit pauses unfinished downloads; resume them after reopening. Installation is skipped if the preceding service cleanup fails. Do not use Windows shutdown as a substitute for the app's update restart.
 
 The signed build record is GitHub's Sigstore attestation for that exact file. Ravenshelf accepts it only when it was created by this repository's `publish-release.yml` workflow on the `main` branch, on a GitHub-hosted runner, and names the executable's exact SHA-256. To check it, Ravenshelf refreshes Sigstore's public signing keys from `tuf-repo-cdn.sigstore.dev`, or uses the copy bundled with the app when that service is unreachable. If the record is missing or does not match, the update stops and your current app is unchanged. The executable must also match its size and SHA-256 in GitHub's asset digest and `SHA256SUMS.txt`, and the staged file is checked again before installation. It backs up `library.json`, `installed-games.json`, `Local State`, `Preferences` and `renderer-cache.json` when present, under the profile's `updates/backups/` directory. This is a backup of critical profile files, not a complete backup of every browser partition or your downloaded files.
 
@@ -21,6 +21,20 @@ The native Windows helper applies the update after the app exits. It does not re
 After a successful update, the helper keeps the previous executable next to the app as a hidden-name `.ravenshelf-rollback-….exe` copy, and the downloaded copy stays in the profile's `updates/pending/` folder. From 0.4.2, Ravenshelf removes these shortly after it starts, but only when the update's own result shows success and the rollback copy exactly matches the executable that was replaced. After a failed update, the rollback copy is kept. Profile backups are kept.
 
 Updating from 0.4.1 to 0.4.2 still uses 0.4.1's behavior: it prepares the update automatically and installs it on close. The approval step applies to updates offered by 0.4.2 and later.
+
+### Closing the window and running in background (0.10.3 development)
+
+By default, closing the window asks what to do:
+
+- **Keep running in background** hides the window and adds a Ravenshelf icon to the Windows tray. Downloads and enabled browser capture continue while the PC is awake. Click the icon or choose **Open Ravenshelf** from its menu to return.
+- **Exit Ravenshelf** fully stops the app. Unfinished downloads are checkpointed and reopen paused; the browser keeps new downloads while Ravenshelf is unavailable.
+- **Cancel** leaves the window open.
+
+Tick **Remember my choice** only if you want future window closes to use that choice. Change it later in **Settings → When I close the window**: **Ask each time**, **Keep running in background**, or **Exit Ravenshelf**. Settings also has buttons for an immediate background action or full exit. The tray's **Exit Ravenshelf** always exits, even when your remembered close choice is background. If the tray cannot be created or the preference cannot be saved, the window remains visible.
+
+Background mode does not add Windows autostart or prevent sleep. It keeps this running session alive, including enabled catalogue refresh, update checks, clipboard recognition, browser protection services and torrent work. Closing or restarting Windows is separate from hiding the app. The extension does not automatically launch an exited Ravenshelf.
+
+Browser review cards are temporary and are discarded on a full exit. Review and queue files you want before exiting; those already in the saved download queue and their partial files remain. Hiding the window keeps pending reviews in this session until they expire. New browser handoffs are refused once shutdown begins.
 
 ## Language
 
@@ -44,7 +58,7 @@ Search within the selected section and use **Next page** to continue. Images, de
 
 ### Automatic refresh
 
-Ravenshelf checks for new uploads at startup and every five minutes while it remains open, including when minimized. It also checks after a wake or return to the window when a check is overdue. Closing Ravenshelf stops these checks; it does not install a Windows background service.
+Ravenshelf checks for new uploads at startup and every five minutes while it remains running, including when minimized or hidden in 0.10.3's background mode. It also checks after a wake or return to the window when a check is overdue. **Exit Ravenshelf** stops these checks; hiding the window keeps them running. This does not install a Windows background service or make Ravenshelf start with Windows.
 
 Your current search, genre and page are preserved. If a game dialog or another view is open, the new catalogue results wait until you return. Failed requests retain the last successful catalogue. **Refresh** requests an immediate check.
 
@@ -183,7 +197,7 @@ A match detects agreement with the chosen manifest, useful for finding corruptio
 
 ## Browser extension
 
-The Ravenshelf extension sends the downloads you start in Chrome, Edge, Brave or Firefox to Ravenshelf, which pauses each one for review. Firefox reports a download after it has started, so a few initial bytes or a temporary file can exist before the pause; Ravenshelf cannot promise interception before every byte. It also blocks dangerous sites and stops the pop-ups and redirects of file-host pages. It stays off until you connect it.
+The Ravenshelf extension sends eligible downloads you start in Chrome, Edge, Brave or Firefox to Ravenshelf for review. In 0.10.3 it handles browser Save image, video, audio and ordinary file downloads through both supported download-event paths. Where interception needs a pause, the pause must succeed before handoff. A few initial bytes or a temporary file can exist first, and a small file may already have finished; Ravenshelf cannot promise interception before every byte. It also blocks dangerous sites and stops the pop-ups and redirects of file-host pages. The connection stays off until you enable it.
 
 ### Set it up
 
@@ -197,7 +211,7 @@ Turning the switch off removes the connector registration, and the browser then 
 
 ### What happens when you download
 
-When you start a download, the browser hands it to Ravenshelf and keeps no copy. Ravenshelf opens **Downloads from your browser** and checks the link:
+With **Send downloads to Ravenshelf** on, an eligible download waits while Ravenshelf accepts its review. Only then is the original active browser download cancelled, except for a security block. In 0.10.3, a completed browser save is kept instead of being deleted; duplicate browser events do not create duplicate handoffs. Acceptance means a pending review, not a completed download or a safety verdict. Open **Downloads from your browser** to see its checks:
 
 - It follows redirects one hop at a time, and never contacts a site on its protection lists, your home network or an unencrypted address.
 - It reads only the first 4 KB of the file, without the page's scripts or your browser cookies, to compare the name with the file's real type.
@@ -206,9 +220,11 @@ When you start a download, the browser hands it to Ravenshelf and keeps no copy.
 
 Then you choose. **Download** adds the file to your queue, in the **Browser downloads** folder (files from Nexus Mods go to a **Mods** folder instead: see [Nexus Mods downloads](#nexus-mods-downloads)). **Download in browser instead** lets your browser download it once, for links Ravenshelf can't fetch, such as pages that need your sign-in. **Dismiss** forgets it. Programs, scripts and disk images ask you to confirm the warning first. Disguised programs (such as `invoice.pdf.exe`), programs over unencrypted HTTP and links through listed sites are blocked and can't be downloaded from the review.
 
-If Ravenshelf is closed or doesn't answer, the browser downloads as usual. Unencrypted (HTTP) downloads that are not programs also stay with the browser. Downloads in private windows are never sent to Ravenshelf. Reviews you don't act on expire after an hour.
+If Ravenshelf is exited, doesn't answer, refuses the handoff or has a full review list, the browser keeps the download. Failed pauses also leave the file with the browser. Unencrypted (HTTP) downloads that are not programs stay with the browser under the existing security policy. Downloads in private windows are never sent to Ravenshelf. Reviews you don't act on expire after an hour.
 
-Right-click a link and choose **Download with Ravenshelf** to send it directly. On a FuckingFast, FileKeeper or DataNodes page, the page's right-click menu and the toolbar button offer **Download this file with Ravenshelf**.
+Right-click a link and choose **Download with Ravenshelf** to send it directly. Images offer **Download this image with Ravenshelf**. In 0.10.3, direct video and audio files also offer **Download this video file with Ravenshelf** and **Download this audio with Ravenshelf**; the selected media address is sent, not a nearby ad or linked page. On a FuckingFast, FileKeeper or DataNodes page, the page's right-click menu and the toolbar button offer **Download this file with Ravenshelf**. YouTube keeps its separate video menu and quality choices.
+
+In 0.10.3, automatic captures leave a background window hidden. The app's review notification follows your notification setting; click it or use the tray icon to open the review. An explicit right-click handoff can bring Ravenshelf forward. Files still wait for your **Download** choice even when the app is hidden. Pending review cards are memory-only: queue the files you want before a full exit, which discards those cards.
 
 ### Blocking in the browser
 
@@ -224,7 +240,8 @@ Paste your own free VirusTotal API key under **Settings → Browser extension**.
 
 ### Limits
 
-- The extension handles files the browser downloads (including [mod files from Nexus Mods](#nexus-mods-downloads)), and [YouTube videos](#youtube-downloads) you send with its button or menu. It does not save videos from other sites.
+- The extension handles eligible file downloads (including images, direct video/audio files and [mod files from Nexus Mods](#nexus-mods-downloads)), plus [YouTube videos](#youtube-downloads) through their separate workflow. It cannot extract every video playing on a website or decrypt DRM-protected streams.
+- Ordinary browser-created `blob:` and `data:` media remains in the browser because Ravenshelf cannot fetch it independently. Page-created executable files retain the existing malware-protection block. A completed save is not replaced with a Ravenshelf review.
 - Checks and lists reduce risk; none of them proves a file or site is safe. Keep Windows protections and Microsoft Defender scans on.
 - Sites that need your browser sign-in can only be downloaded with **Download in browser instead**, because Ravenshelf never uses your browser cookies.
 - The extension is loaded in Developer mode (Chrome, Edge, Brave) or as a temporary add-on (Firefox) because it isn't published in the browser stores yet. Chrome may remind you about developer-mode extensions.
@@ -321,7 +338,7 @@ A torrent joins **Downloads** like any other download, with pause, resume, retry
 
 ### What aria2 is allowed to do
 
-aria2 runs only while torrents are being looked up or downloaded, and stops a minute after the last one, or when Ravenshelf closes (also if Ravenshelf crashes). Ravenshelf starts it with a fixed set of options: it reads no configuration file, keeps no log, listens for Ravenshelf only on this PC (127.0.0.1) with a new random secret each time, does not look for peers on your home network, uses IPv4 only, never follows web seeds or other links named in a torrent, and never overwrites or renames existing files. It finds people through the torrent's trackers (only `udp`, `http` and `https` trackers named in the magnet link, without passwords; trackers written as an address on this PC or your home network, or as a local name, are left out), the DHT network and peer exchange. aria2 gets a new random DHT identity every time it starts, so other computers can't recognise this PC from one session to the next by it. Like other torrent programs, it accepts connections from other people on a port between 6881 and 6999, so the first time Windows Firewall may ask whether to allow `aria2c.exe`; torrents still work, perhaps more slowly, if you don't allow it. aria2 does not ask your router to open ports. Text that aria2 sends back is never shown; only its error numbers are read.
+aria2 runs only while torrents are being looked up or downloaded, and stops a minute after the last one, or when Ravenshelf fully exits (also if Ravenshelf crashes). Hiding the window in 0.10.3 keeps torrent work running. Ravenshelf starts it with a fixed set of options: it reads no configuration file, keeps no log, listens for Ravenshelf only on this PC (127.0.0.1) with a new random secret each time, does not look for peers on your home network, uses IPv4 only, never follows web seeds or other links named in a torrent, and never overwrites or renames existing files. It finds people through the torrent's trackers (only `udp`, `http` and `https` trackers named in the magnet link, without passwords; trackers written as an address on this PC or your home network, or as a local name, are left out), the DHT network and peer exchange. aria2 gets a new random DHT identity every time it starts, so other computers can't recognise this PC from one session to the next by it. Like other torrent programs, it accepts connections from other people on a port between 6881 and 6999, so the first time Windows Firewall may ask whether to allow `aria2c.exe`; torrents still work, perhaps more slowly, if you don't allow it. aria2 does not ask your router to open ports. Text that aria2 sends back is never shown; only its error numbers are read.
 
 ### Limits
 
@@ -351,7 +368,7 @@ The scan is bounded and can miss installations. It does not run discovered progr
 
 ## See your PC's specs
 
-Choose **PC specs** to see what is inside this PC: the processor (cores, threads and clock speed), each graphics adapter, the memory, the drives with their free space, the display and the Windows version. Ravenshelf asks Windows the first time you open the page (or choose **Compare with this PC** in a game's details) after starting, which usually takes a few seconds; it gives up after 20 seconds. Until you close Ravenshelf, opening the page again shows that answer. **Check again** reads everything afresh.
+Choose **PC specs** to see what is inside this PC: the processor (cores, threads and clock speed), each graphics adapter, the memory, the drives with their free space, the display and the Windows version. Ravenshelf asks Windows the first time you open the page (or choose **Compare with this PC** in a game's details) after starting, which usually takes a few seconds; it gives up after 20 seconds. Until you fully exit Ravenshelf, opening the page again shows that answer. **Check again** reads everything afresh.
 
 - With more than one graphics adapter, **Main** marks the one games normally use: one that works before one with a problem, then a separate graphics card, then the one with the most memory of its own.
 - **Graphics memory** is memory of the adapter's own, read from what DirectX recorded or, if that is missing, from the graphics driver or Windows, so cards with more than 4 GB show their real size. Adapters recognised as built-in graphics show **Shares system memory** instead. When Windows gives no figure that can be trusted, the page says **Not reported by Windows** rather than guessing.
@@ -373,7 +390,7 @@ Guide buttons open labeled PCGamingWiki, YouTube walkthrough or Steam community 
 
 Under **Downloads → When this queue finishes**, choose **Keep Ravenshelf open**, **Close Ravenshelf** or **Turn off laptop**.
 
-The default is **Keep Ravenshelf open** each time the app launches. Shutdown requires confirmation. Both close and shutdown wait for successful transfers and any requested Defender scans, then show a 60-second countdown with **Cancel — keep working**. Queued or running scans keep the action waiting. A threat, uncertain result, failed scan, missing file or unavailable scanner blocks the action. Review the result and scan again after resolving it, or choose **Keep Ravenshelf open**. Turning off future automatic scans does not bypass a scan already recorded for a file. Files for which no scan was requested do not acquire a new scan just because a finish action is selected.
+The default is **Keep Ravenshelf open** each time the app launches. **Close Ravenshelf** fully exits after the completion checks, regardless of the remembered window-close preference; it does not switch to background mode. Shutdown requires confirmation. Both close and shutdown wait for successful transfers and any requested Defender scans, then show a 60-second countdown with **Cancel — keep working**. Queued or running scans keep the action waiting. A threat, uncertain result, failed scan, missing file or unavailable scanner blocks the action. Review the result and scan again after resolving it, or choose **Keep Ravenshelf open**. Turning off future automatic scans does not bypass a scan already recorded for a file. Files for which no scan was requested do not acquire a new scan just because a finish action is selected.
 
 Readiness is checked again before the final action, including scans started during the countdown. Save work in other apps before permitting shutdown.
 
@@ -385,7 +402,7 @@ The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the 
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
-From 0.10.1, Ravenshelf validates the saved library before opening the queue. If some data is damaged, valid entries remain available and the original bytes are preserved as `library.json.recovery-<ID>.json` in the same profile folder before any repair. From 0.10.2 the repaired list is saved at once, the same damaged bytes are copied only once, and at most 5 recovery copies are kept: the oldest, the newest, and any copy just reused (the others are deleted). One damaged favourite, shelf, game folder or mod label drops only that item. A saved list with more than 10,000 downloads keeps every unfinished download and the newest finished ones; a full list refuses new downloads until you remove finished ones. A profile folder reached through a junction (for example AppData moved to another drive) is followed to its real place, and a list held for a moment by antivirus or sync software is read after a short wait. The window displays a recovery warning. These copies can contain private paths and signed download links; keep them local. If the original file cannot be read safely, the recovery copy cannot be made, or the library belongs to a newer app version, Ravenshelf does not overwrite it, start downloads or add new ones (adding one shows why). Close the app and restore a known-good backup, or use the newer version named by the warning. Do not delete the original or recovery copy merely to dismiss the warning.
+From 0.10.1, Ravenshelf validates the saved library before opening the queue. If some data is damaged, valid entries remain available and the original bytes are preserved as `library.json.recovery-<ID>.json` in the same profile folder before any repair. From 0.10.2 the repaired list is saved at once, the same damaged bytes are copied only once, and at most 5 recovery copies are kept: the oldest, the newest, and any copy just reused (the others are deleted). In 0.10.3, malformed nested favourites or shelf games drop only the damaged item while preserving healthy neighbours. Unfinished queues above 10,000 entries retain every valid unfinished job; only finished history is trimmed, and new additions are refused until the list falls below the limit. Settings changes are also refused when the saved list is read-only; a failed settings write restores the previous preference. A profile folder reached through a junction (for example AppData moved to another drive) is followed to its real place, and a list held for a moment by antivirus or sync software is read after a short wait. The window displays a recovery warning. These copies can contain private paths and signed download links; keep them local. If the original file cannot be read safely, the recovery copy cannot be made, or the library belongs to a newer app version, Ravenshelf does not overwrite it, start downloads or add new ones (adding one shows why). Close the app and restore a known-good backup, or use the newer version named by the warning. Do not delete the original or recovery copy merely to dismiss the warning.
 
 If Windows cannot encrypt saved download headers, Ravenshelf displays a warning and keeps those headers in memory only. The queue and partial files remain saved. After restart, affected downloads refresh their source links before resuming and may need another protected-browser step. Nexus Mods files are never looked up again: they continue at their own link, without the page address. Version 0.3.1 removes plaintext headers from the current older queue file; it does not rewrite previous backups.
 

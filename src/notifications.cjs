@@ -19,6 +19,6 @@ class NotificationAlerts{
   // Announced once per version. Nothing is downloaded until the user chooses
   // Download and install in Settings.
   available(version){if(!this.enabled()||this.availableVersion===version)return;this.availableVersion=version;try{this.show({title:'Ravenshelf update available',body:`Version ${version} is available. Open Settings to review and install it.`});}catch{}}
-  update(version){if(!this.enabled()||this.updateVersion===version)return;this.updateVersion=version;try{this.show({title:'Ravenshelf update ready',body:'The verified update installs when you close Ravenshelf, or choose Restart now in Settings.'});}catch{}}
+  update(version){if(!this.enabled()||this.updateVersion===version)return;this.updateVersion=version;try{this.show({title:'Ravenshelf update ready',body:'The verified update installs when Ravenshelf fully exits, or you choose Restart now in Settings.'});}catch{}}
 }
 module.exports={NotificationAlerts};

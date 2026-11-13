@@ -4,7 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {EventEmitter}=require('node:events');
 const {safeFetch,safeURL}=require('./net.cjs');
-const {loadLibrary,SCHEMA_VERSION,MAX_DOWNLOADS,READ_ONLY,LIST_FULL}=require('./library-state.cjs');
+const {loadLibrary,SCHEMA_VERSION,MAX_DOWNLOADS,READ_ONLY,SETTINGS_READ_ONLY,LIST_FULL}=require('./library-state.cjs');
 const {cleanHeaders}=require('./header-vault.cjs');
 const {sanitizedReferrer,originReferrer}=require('./referrer-policy.cjs');
 const {RateMeter}=require('./rate-meter.cjs');
@@ -202,11 +202,19 @@ class DownloadManager extends EventEmitter {
     if(downloads.length)this.emit('progress',downloads);
   }
   updateSettings(patch){
+    if(this.stopping)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
+    if(this.stateCanSave===false)throw new Error(SETTINGS_READ_ONLY);
     const next={...this.settings,...patch};
     next.maxDownloadBytesPerSecond=normalizeBandwidthLimit(next.maxDownloadBytesPerSecond);
     next.downloadSchedule=normalizeSchedule(next.downloadSchedule);
-    this.settings=next;this.settings.defenderScan=this.settings.defenderScan!==false;this.settings.connectionsPerFile=normalizeConnections(this.settings.connectionsPerFile);this.settings.concurrency=Math.max(1,Math.min(4,Math.floor(Number(this.settings.concurrency)||2)));
-    this.bandwidthLimiter.setRate(next.maxDownloadBytesPerSecond);this.checkSchedule();this.save();this.changed();this.pump();return this.state();
+    next.defenderScan=next.defenderScan!==false;next.connectionsPerFile=normalizeConnections(next.connectionsPerFile);next.concurrency=Math.max(1,Math.min(4,Math.floor(Number(next.concurrency)||2)));
+    const previous=this.settings;this.settings=next;
+    // Remembered close choices and other preferences take effect only after
+    // their durable write succeeds. Failed writes leave the old behavior and
+    // running transfers untouched; the caller receives the save failure.
+    try{if(this.save()===false)throw new Error(SETTINGS_READ_ONLY);}
+    catch(error){this.settings=previous;throw error;}
+    this.bandwidthLimiter.setRate(next.maxDownloadBytesPerSecond);this.checkSchedule();this.changed();this.pump();return this.state();
   }
   checkSchedule(date=new Date(this.now())){
     const snapshot=scheduleSnapshot(this.settings.downloadSchedule,date);let changed=false;
@@ -265,7 +273,8 @@ class DownloadManager extends EventEmitter {
     return held?held.gameTitle:modFolder(mod);
   }
   // `group` puts the folder one level down, such as Mods\<game> for mod files.
-  // Nothing new is added while the saved list is read-only: it could not be saved.
+  // Nothing new is added while the saved list is read-only. Legacy lists over
+  // the limit keep their existing resumable jobs, but cannot grow further.
   assertWritable(adding=1){if(!this.stateCanSave)throw new Error(READ_ONLY);if(adding&&this.downloads.length+adding>MAX_DOWNLOADS)throw new Error(LIST_FULL);}
   add({links,gameTitle,group}) {
     if(!Array.isArray(links)||!links.length||links.length>500) throw new Error('Choose between 1 and 500 files.');
@@ -716,6 +725,7 @@ class DownloadManager extends EventEmitter {
   }
   // Stores a reputation lookup result shown on the download's card.
   setReputation(id,reputation){
+    if(this.stopping)return false;
     const d=this.downloads.find(x=>x.id===id);if(!d)return false;
     if(reputation===null)delete d.reputation;else d.reputation=reputation;
     this.save();this.changed();return true;
@@ -742,10 +752,16 @@ class DownloadManager extends EventEmitter {
       // A torrent with several files is published as one folder, scanned as a whole.
       const folder=d.kind==='torrent'&&Boolean(d.torrent?.files?.some(file=>file.path.includes('/')));
       const result=await this.scanFile(path.join(d.folder,d.name),{folder});
+      if(this.stopping)return;
       const status=['clean','threat','missing','unavailable','error','review'].includes(result?.status)?result.status:'error';
       d.scan={status,message:String(result?.message||'').slice(0,300),scannedAt:result?.scannedAt||new Date().toISOString()};
-    }catch{d.scan={status:'error',message:'Microsoft Defender could not finish this scan.',scannedAt:new Date().toISOString()};}
-    finally{this.scanning=null;this.scanTasks.delete(id);try{this.save();this.changed();}finally{scanFinished();}}
+    }catch{if(!this.stopping)d.scan={status:'error',message:'Microsoft Defender could not finish this scan.',scannedAt:new Date().toISOString()};}
+    finally{
+      this.scanning=null;this.scanTasks.delete(id);
+      // stop() has checkpointed the pending scan for the next launch. A late
+      // scanner result must not mutate that checkpoint or race update backup.
+      try{if(!this.stopping){this.save();this.changed();}}finally{scanFinished();}
+    }
     return this.pumpScans();
   }
   // Manual closing stays responsive. Queued/running scan states are persisted

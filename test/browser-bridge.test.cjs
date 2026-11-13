@@ -375,7 +375,11 @@ test('reviews expire, can be dismissed or rechecked, and the queue of reviews is
   const {bridge}=bridgeFixture(t,{inspect,now:()=>now});
   const ids=[];for(let i=0;i<MAX_PENDING;i++)ids.push(bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',url:`https://cdn.example/${i}.zip`})).id);
   const overflow=bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',url:'https://cdn.example/overflow.zip'}));
-  assert.equal(overflow.action,'block');assert.match(overflow.reason,/Too many downloads/);
+  assert.equal(overflow.action,'browser','a full review list leaves legitimate saves to the browser');
+  assert.equal(bridge.pendingCount(),MAX_PENDING);
+  const blocked=bridge.receive('chromium',protocol.validateRequest({v:1,type:'capture',url:'http://plain.example/setup.exe'}));
+  assert.equal(blocked.action,'block','real security blocks still apply when the list is full');
+  await bridge.action({id:blocked.id,action:'dismiss'});
   release();await until(()=>bridge.snapshot().captures.every(capture=>capture.status==='ready'),'inspections');
   await bridge.action({id:ids[0],action:'dismiss'});assert.equal(bridge.snapshot().captures.length,MAX_PENDING-1);
   await bridge.action({id:ids[1],action:'recheck'});await until(()=>bridge.snapshot().captures.find(capture=>capture.id===ids[1]).status==='ready','recheck');

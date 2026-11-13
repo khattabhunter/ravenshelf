@@ -1466,7 +1466,7 @@ async function confirmDownloadRemoval(){
 const RELEASE_PAGE=/^https:\/\/github\.com\/khattabhunter\/ravenshelf\/releases\/tag\/v\d+\.\d+\.\d+$/;
 function renderUpdater(){
   const update=state.updater||{},phase=update.phase||'idle';$('#update-version').textContent=`v${update.currentVersion||state.version}`;
-  const messages={idle:later('Check GitHub for a newer Ravenshelf release.'),checking:later('Checking for updates…'),current:later('You have the latest checked version.'),available:later('A new version is available. Nothing is downloaded until you choose Download and install.'),verifying:later('Checking GitHub’s checksum and signed build record…'),downloading:later('Downloading and verifying the update…'),ready:later('Ready — installs when you close Ravenshelf.'),error:later('The update could not be checked or verified. You can check again.'),unavailable:later('Automatic updates are not available in this build.')};
+  const messages={idle:later('Check GitHub for a newer Ravenshelf release.'),checking:later('Checking for updates…'),current:later('You have the latest checked version.'),available:later('A new version is available. Nothing is downloaded until you choose Download and install.'),verifying:later('Checking GitHub’s checksum and signed build record…'),downloading:later('Downloading and verifying the update…'),ready:later('Ready — installs when Ravenshelf fully exits.'),error:later('The update could not be checked or verified. You can check again.'),unavailable:later('Automatic updates are not available in this build.')};
   const status=String(update.message||messages[phase]||later('Update status unavailable.'));
   $('#update-status').textContent=update.availableVersion&&!status.includes(String(update.availableVersion))?localMessage(status)+' '+t('Version {version}.',{version:String(update.availableVersion)}):localMessage(status);
   const progress=$('#update-progress');progress.hidden=phase!=='downloading';const percent=Number(update.progress?.percent??Number(update.progress)*100);if(Number.isFinite(percent))progress.value=Math.max(0,Math.min(100,percent));else progress.removeAttribute('value');
@@ -1483,13 +1483,14 @@ function renderFeatureSettings(){
     if(featureFormEdits.schedule===featureFormSaved.schedule&&!$('#schedule-form').contains(focus)){ $('#schedule-enabled').checked=Boolean(schedule.enabled);$('#schedule-start').value=schedule.start||'00:00';$('#schedule-end').value=schedule.end||'00:00';$$('#schedule-form .schedule-days input').forEach(input=>{input.checked=(schedule.days||[]).includes(Number(input.value));});}
     for(const [id,key,defaultValue]of [['notifications-enabled','notificationsEnabled',true],['clipboard-watch-enabled','clipboardWatchEnabled',false],['adaptive-theme-enabled','adaptiveThemeEnabled',true],['auto-update-enabled','autoUpdateEnabled',true]]){const node=$('#'+id);if(focus!==node)node.checked=typeof state.settings[key]==='boolean'?state.settings[key]:defaultValue;}
   }
+  const close=$('#close-behavior');if(close&&!featureSettingsBusy&&document.activeElement!==close)close.value=['ask','background','quit'].includes(state.settings.closeBehavior)?state.settings.closeBehavior:'ask';
   renderUpdater();renderScheduleStatus();renderClipboardCount();
 }
 async function saveFeatureSetting(patch,control){
   const form='maxDownloadBytesPerSecond'in patch?'speed':'downloadSchedule'in patch?'schedule':null,revision=form?featureFormEdits[form]:0;
   featureSettingsBusy++;if(control)control.disabled=true;
   try{applyState(await api.saveSettings(patch));if(form)featureFormSaved[form]=revision;if('adaptiveThemeEnabled'in patch){if(!patch.adaptiveThemeEnabled)setAccent();else{const image=$('.detail-cover');if(image?.complete)applyCoverAccent(image);}}toast(t('Preference saved.'));}
-  catch(error){toast(errorText(error),true);}finally{featureSettingsBusy--;if(control){control.disabled=false;const key=Object.keys(patch)[0];if(typeof patch[key]==='boolean')control.checked=typeof state.settings[key]==='boolean'?state.settings[key]:key!=='clipboardWatchEnabled';}renderFeatureSettings();}
+  catch(error){toast(errorText(error),true);}finally{featureSettingsBusy--;if(control){control.disabled=false;const key=Object.keys(patch)[0];if(typeof patch[key]==='boolean')control.checked=typeof state.settings[key]==='boolean'?state.settings[key]:key!=='clipboardWatchEnabled';if(key==='closeBehavior')control.value=['ask','background','quit'].includes(state.settings.closeBehavior)?state.settings.closeBehavior:'ask';}renderFeatureSettings();}
 }
 function scheduleFromForm(){
   const start=$('#schedule-start').value,end=$('#schedule-end').value,days=$$('#schedule-form .schedule-days input').filter(input=>input.checked).map(input=>Number(input.value)),enabled=$('#schedule-enabled').checked;
@@ -1516,6 +1517,9 @@ function renderVerification(){
   $('#verification-results').replaceChildren(...results.map(item=>{const row=el('div','verification-item');row.append(el('span','',item.name||item.path||t('File')),el('strong',item.status==='match'?'verification-match':'',VERIFICATION_STATUS[item.status]?t(VERIFICATION_STATUS[item.status]):item.status||t('Unknown')),el('span','small-text',item.message?localMessage(item.message):''));return row;}));
 }
 function wireFeatureEvents(){
+  $('#close-behavior')?.addEventListener('change',event=>saveFeatureSetting({closeBehavior:event.target.value},event.target));
+  $('#background-app')?.addEventListener('click',()=>attempt(()=>api.windowAction('background')));
+  $('#quit-app')?.addEventListener('click',()=>attempt(()=>api.windowAction('quit')));
   $('#download-list').before($('.download-tools'));
   $('#previous-image').addEventListener('click',()=>moveLightbox(-1));$('#next-image').addEventListener('click',()=>moveLightbox(1));$('#image-dialog').addEventListener('keydown',lightboxKey);$('#image-dialog').addEventListener('close',restoreLightboxFocus);
   $('#game-dialog').addEventListener('close',()=>{if($('#game-dialog').open)return;if($('#image-dialog').open)$('#image-dialog').close();setAccent();});

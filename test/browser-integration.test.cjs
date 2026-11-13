@@ -27,8 +27,9 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
   };
   const handles=new Map();
   const safeStorage={isEncryptionAvailable:()=>true,encryptString:text=>Buffer.from('sealed:'+text),decryptString:buffer=>buffer.toString().slice(7)};
+  const windowState={visible:true,shown:0,focused:0};
   const integration=createBrowserIntegration({
-    app:{getPath:()=>profile,getVersion:()=>'0.5.0'},win:{isDestroyed:()=>false,isMinimized:()=>false,restore(){},show(){},focus(){}},manager,
+    app:{getPath:()=>profile,getVersion:()=>'0.5.0'},win:{isDestroyed:()=>false,isVisible:()=>windowState.visible,isMinimized:()=>false,restore(){},show(){windowState.visible=true;windowState.shown++;},focus(){windowState.focused++;}},manager,
     shell:{openPath:async folder=>{events.opened.push(folder);return openPathError;},openExternal:async url=>{events.external.push(url);}},
     safeStorage,Notification:null,register:(name,fn)=>handles.set(name,fn),publish:()=>{events.published++;},
     resolveProvider:null,assertQueueAvailable:()=>{events.queueChecks++;},isTest,platform,setup,
@@ -38,7 +39,7 @@ function fixture(t,{platform='win32',isTest=false,enabled=false,registerError=nu
   });
   t.after(()=>integration.beforeQuit());
   const call=(name,value)=>handles.get(name)(value);
-  return {profile,events,manager,integration,handles,call,endpoint:path.join(profile,'browser-host','endpoint.json')};
+  return {profile,events,manager,integration,handles,call,windowState,endpoint:path.join(profile,'browser-host','endpoint.json')};
 }
 
 test('everything stays off until the user connects the extension',async t=>{
@@ -168,6 +169,32 @@ async function fromExtension(f,message){
     socket.write(Buffer.concat([{v:1,token:endpoint.token,origin:`chrome-extension://${protocol.CHROMIUM_EXTENSION_ID}/`},{v:1,...message}].map(frame=>protocol.encodeFrame(frame))));
   });
 }
+
+test('quit immediately returns native browser fallback while the download checkpoint is still pending',async t=>{
+  const {shutdownServices}=require('../src/app-lifecycle.cjs');
+  const f=fixture(t,{bridge:{inspect:async()=>{throw new Error('No new inspection during shutdown');}}});
+  await f.call('setBrowserIntegration',true);
+  let release;const checkpoint=new Promise(resolve=>{release=resolve;});let prepared=false;
+  const pending=shutdownServices({manager:{stop:()=>checkpoint},browserIntegration:f.integration,features:{beforeQuit:()=>{prepared=true;}}});
+  try{
+    assert.equal(fs.existsSync(f.endpoint),true,'disposal still waits for the checkpoint');
+    for(const type of ['capture','send'])assert.deepEqual(await fromExtension(f,{type,...(type==='send'?{kind:'link'}:{}),url:'https://cdn.example/photo.png'}),{ok:false,error:'not-running'});
+    assert.equal(f.integration.snapshot().bridge.pending,0);assert.equal(f.events.added.length,0);assert.equal(prepared,false);
+  }finally{release();await pending;}
+  assert.equal(prepared,true);assert.equal(f.events.unregistered,0);assert.equal(fs.existsSync(f.endpoint),false);
+});
+
+test('automatic saves keep a background window hidden while explicit media menus reveal the pending review',async t=>{
+  const notices=[];
+  const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:'photo.png',size:100,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'png'});
+  const f=fixture(t,{bridge:{inspect,notify:note=>notices.push(note)}});
+  await f.call('setBrowserIntegration',true);f.windowState.visible=false;
+  const capture=await fromExtension(f,{type:'capture',url:'https://cdn.example/photo.png',filename:'photo.png'});
+  assert.equal(capture.action,'take');assert.equal(f.windowState.visible,false);assert.equal(f.windowState.shown,0);assert.equal(f.windowState.focused,0);
+  assert.equal(notices.length,1);assert.match(notices[0].body,/Nothing downloads until you choose/);assert.equal(f.events.added.length,0);
+  const sent=await fromExtension(f,{type:'send',kind:'link',url:'https://cdn.example/video.mp4'});
+  assert.equal(sent.action,'take');assert.equal(f.windowState.visible,true);assert.equal(f.windowState.shown,1);assert.equal(f.windowState.focused,1);assert.equal(f.events.added.length,0);
+});
 test('a file downloaded on Nexus Mods is queued into Mods under its game; other browser downloads go to Browser downloads',async t=>{
   const inspect=async url=>({status:'ready',url,sourceUrl:url,filename:decodeURIComponent(new URL(url).pathname.split('/').pop()),size:3072,chain:[{url,host:new URL(url).hostname,listed:null}],sniffed:'7z'});
   const f=fixture(t,{bridge:{inspect}});

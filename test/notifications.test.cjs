@@ -11,7 +11,7 @@ test('update-available alerts appear once per version, name only the version and
   const shown=[];let enabled=false;const alerts=new NotificationAlerts({show:n=>shown.push(n),enabled:()=>enabled});
   alerts.available('0.5.0');assert.equal(shown.length,0);enabled=true;alerts.available('0.5.0');alerts.available('0.5.0');alerts.available('0.5.1');
   assert.deepEqual(shown.map(n=>n.title),['Ravenshelf update available','Ravenshelf update available']);assert.equal(shown[0].body,'Version 0.5.0 is available. Open Settings to review and install it.');
-  alerts.update('0.5.1');assert.equal(shown.at(-1).title,'Ravenshelf update ready');assert.match(shown.at(-1).body,/installs when you close Ravenshelf, or choose Restart now/);
+  alerts.update('0.5.1');assert.equal(shown.at(-1).title,'Ravenshelf update ready');assert.match(shown.at(-1).body,/installs when Ravenshelf fully exits, or you choose Restart now/);
   const failing=new NotificationAlerts({show:()=>{throw new Error('Notification service unavailable');}});assert.doesNotThrow(()=>failing.available('0.5.2'));
 });
 test('unfinished or uncertain antivirus results need attention, even when the download is complete',()=>{

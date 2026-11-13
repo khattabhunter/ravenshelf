@@ -187,7 +187,7 @@ class AppUpdater{
       }
       if(received!==release.size||hash.digest('hex')!==release.sha256||magic[0]!==0x4d||magic[1]!==0x5a)throw new Error('Update verification failed.');
       await opened.handle.sync();signal.throwIfAborted();await opened.verify(received);signal.throwIfAborted();this.ready={release,staged,directory};
-      this.set({phase:'ready',progress:1,installApproved:true,message:'Update verified. It installs when you close Ravenshelf, or choose Restart now.'});this.onReady(release.version);
+      this.set({phase:'ready',progress:1,installApproved:true,message:'Update verified. It installs when Ravenshelf fully exits, or you choose Restart now.'});this.onReady(release.version);
     }catch(error){
       // Remove only the partial file this attempt created, then its folder if
       // it is empty. rmdir never removes a folder that still has contents.

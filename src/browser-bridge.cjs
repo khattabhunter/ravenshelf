@@ -49,10 +49,14 @@ class BrowserBridge extends EventEmitter{
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
     Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,receiveMagnet,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
-    this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
+    this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();this.quitting=false;
   }
   get endpointFile(){return path.join(this.hostDir,'endpoint.json');}
+  // Stop accepting handoffs before the download checkpoint starts. The pipe
+  // stays available until disposal, so browsers receive an explicit fallback.
+  beginQuit(){this.quitting=true;this.controller.abort();this.queue=[];}
   async start(){
+    if(this.quitting)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
     if(this.server)return;
     const pipe='ravenshelf-'+crypto.randomBytes(16).toString('hex'),token=crypto.randomBytes(32);
     const address=this.platform==='win32'?`\\\\.\\pipe\\${pipe}`:(this.listenPath||path.join(this.hostDir,`${pipe}.sock`));
@@ -85,7 +89,13 @@ class BrowserBridge extends EventEmitter{
           reader.maxBytes=MAX_REQUEST_BYTES;return true;
         }
         done=true;socket.pause();
-        this.respond(browser,frame).then(response=>socket.end(encodeFrame(response)),()=>socket.destroy());
+        this.respond(browser,frame).then(response=>{
+          // A response may have been prepared just before quit began. Do not
+          // let an unsent acceptance cancel the browser's original download.
+          // Preserve a known malicious verdict instead of downgrading it.
+          const reply=this.quitting&&response?.action!=='block'?{ok:false,error:'not-running'}:response;
+          socket.end(encodeFrame(reply));
+        },()=>socket.destroy());
         return false;
       });}catch{done=true;socket.destroy();}
     });
@@ -107,6 +117,7 @@ class BrowserBridge extends EventEmitter{
   }
   localReason(reason){try{const local=this.localText(reason);return typeof local==='string'&&local?local.slice(0,1000):reason;}catch{return reason;}}
   async respond(browser,raw){
+    if(this.quitting)return {ok:false,error:'not-running'};
     if(!this.allowRequest())return {ok:false,error:'busy'};
     let message;try{message=validateRequest(raw);}catch{return {ok:false,error:'invalid'};}
     try{
@@ -144,6 +155,7 @@ class BrowserBridge extends EventEmitter{
   // browser keep it. Slow checks happen afterwards, while the user reviews.
   // Quick blocks are recorded here; the extension shows their notification.
   receive(browser,message){
+    if(this.quitting)return {action:'browser'};
     this.expire();
     // `given` is the browser's name for the file as it arrived; `filename` is that name as it would be saved.
     const given=baseName(message.filename);
@@ -177,10 +189,12 @@ class BrowserBridge extends EventEmitter{
     if(this.takeAllowance([request.url,request.finalUrl]))return {action:'browser'};
     const duplicate=[...this.captures.values()].find(capture=>capture.request.url===request.url&&this.now()-capture.createdAt<30000&&['checking','ready','manual'].includes(capture.status));
     if(duplicate)return {action:'take',id:duplicate.id};
-    if(this.pendingCount()>=MAX_PENDING)return {action:'block',reason:'Too many downloads are waiting in Ravenshelf. Review them first, then try again.'};
+    // Capacity is not a security verdict. Keep the original browser download
+    // when there is no room to accept another review.
+    if(this.pendingCount()>=MAX_PENDING)return {action:'browser'};
     const capture=this.record(browser,source,request,{status:'checking'});
     this.queue.push(capture.id);this.pump();
-    try{this.reveal();}catch{}
+    try{this.reveal({source});}catch{}
     try{this.notify({title:'Review a download in Ravenshelf',body:`${capture.displayName} was sent from your browser. Nothing downloads until you choose.`});}catch{}
     return {action:'take',id:capture.id};
   }
@@ -191,13 +205,14 @@ class BrowserBridge extends EventEmitter{
   }
   pendingCount(){return [...this.captures.values()].filter(capture=>['checking','ready','manual'].includes(capture.status)).length;}
   pump(){
+    if(this.quitting)return;
     while(this.active<2&&this.queue.length){
       const capture=this.captures.get(this.queue.shift());
       if(!capture||capture.status!=='checking')continue;
       this.active++;
       this.inspect(capture).catch(()=>{
-        if(capture.status==='checking'){capture.status='manual';capture.message='Ravenshelf could not check this link. You can let your browser download it.';}
-      }).finally(()=>{this.active--;this.emit('change');this.pump();});
+        if(!this.quitting&&capture.status==='checking'){capture.status='manual';capture.message='Ravenshelf could not check this link. You can let your browser download it.';}
+      }).finally(()=>{this.active--;if(!this.quitting){this.emit('change');this.pump();}});
     }
   }
   async inspect(capture){
@@ -212,7 +227,7 @@ class BrowserBridge extends EventEmitter{
       if(resolved?.status==='ready'&&hostOf(resolved.url)!==chain[0].host)chain.push({url:resolved.url,host:hostOf(resolved.url),listed:lookupHost(hostOf(resolved.url))});
       result={...resolved,status:chain.some(hop=>hop.listed)?'blocked':resolved?.status||'manual',chain,sniffed:'unknown',provider:true};
     }else result=await this.inspectImpl(start,{fetcher:this.fetcher,referer:originReferrer(request.referrer)||originReferrer(request.pageUrl),lookupHost,signal});
-    if(signal.aborted||!this.captures.has(capture.id))return;
+    if(this.quitting||signal.aborted||!this.captures.has(capture.id))return;
     // The label is for the file Ravenshelf would fetch. A link that led on to
     // another site is not a Nexus Mods file.
     if(request.mod&&!fromNexus({url:result.url}))delete request.mod;
@@ -220,6 +235,7 @@ class BrowserBridge extends EventEmitter{
     if(result.status!=='blocked'&&this.virusTotal?.snapshot().configured){
       for(const host of [...new Set(result.chain.map(hop=>hop.host))].filter(host=>!net.isIP(host)).slice(0,3)){
         const report=await this.virusTotal.lookup('domain',host,{signal});
+        if(this.quitting||signal.aborted||!this.captures.has(capture.id))return;
         if(['ok','not-found'].includes(report.status))virusTotal.push(report);
         else if(report.reason==='limit'){virusTotal.push(report);break;}
       }
@@ -258,6 +274,7 @@ class BrowserBridge extends EventEmitter{
     }
   }
   async action({id,action,acknowledgeRisk}={}){
+    if(this.quitting)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
     if(typeof id!=='string'||!this.captures.has(id))throw new Error('This browser download is no longer available.');
     const capture=this.captures.get(id);
     if(action==='dismiss'){this.captures.delete(id);this.emit('change');return this.snapshot();}
@@ -290,11 +307,11 @@ class BrowserBridge extends EventEmitter{
   }
   // VirusTotal file check for a finished browser download: only its SHA-256 is sent.
   async afterDownload(download,file){
-    if(download?.origin!=='browser'||!this.virusTotal)return null;
+    if(this.quitting||download?.origin!=='browser'||!this.virusTotal)return null;
     const settings=this.virusTotal.snapshot();
     if(!settings.configured||!settings.fileChecks)return null;
     const report=await this.virusTotal.lookup('file',await hashFile(file,{signal:this.controller.signal}),{signal:this.controller.signal});
-    if(!['ok','not-found'].includes(report.status))return null;
+    if(this.quitting||!['ok','not-found'].includes(report.status))return null;
     const virusTotal={status:report.status,malicious:report.malicious??0,suspicious:report.suspicious??0,harmless:report.harmless??0,undetected:report.undetected??0,link:report.link,checkedAt:new Date(this.now()).toISOString()};
     this.setReputation(download.id,{virusTotal});
     if(report.status==='ok'&&report.malicious>=2){try{this.notify({title:'Check this download before opening it',body:download.name?`${report.malicious} security vendors on VirusTotal flagged ${download.name}.`:`${report.malicious} security vendors on VirusTotal flagged a downloaded file.`});}catch{}}

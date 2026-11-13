@@ -12,9 +12,11 @@ const {analyzeArchiveSet}=require('./archive-set-validation.cjs');
 const {normalizeBandwidthLimit}=require('./bandwidth-limiter.cjs');
 const {normalizeSchedule}=require('./download-schedule.cjs');
 const {compareRequirements}=require('./compatibility.cjs');
+const {CLOSE_BEHAVIORS,MESSAGES:LIFECYCLE_MESSAGES}=require('./app-lifecycle.cjs');
 const BOOLEAN_SETTINGS=['autoUpdateEnabled','clipboardWatchEnabled','notificationsEnabled','adaptiveThemeEnabled'];
 function featureSettings(patch){
   const changes={};
+  if(patch?.closeBehavior!==undefined){if(!CLOSE_BEHAVIORS.includes(patch.closeBehavior))throw new Error(LIFECYCLE_MESSAGES.preference);changes.closeBehavior=patch.closeBehavior;}
   for(const key of BOOLEAN_SETTINGS)if(patch?.[key]!==undefined){if(typeof patch[key]!=='boolean')throw new Error('Choose on or off for this preference.');changes[key]=patch[key];}
   if(patch?.maxDownloadBytesPerSecond!==undefined)changes.maxDownloadBytesPerSecond=normalizeBandwidthLimit(patch.maxDownloadBytesPerSecond);
   if(patch?.downloadSchedule!==undefined)changes.downloadSchedule=normalizeSchedule(patch.downloadSchedule);
@@ -160,7 +162,7 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
     snapshot:()=>({updater:updater.snapshot(),clipboardInbox:inbox.snapshot(),verification:verifier.snapshot()}),
     configure,observe:()=>notifier.observe(manager.downloads),
     validateBatch:(links,allowIncomplete)=>{const result=analyzeArchiveSet(links);if(result.errors.length&&allowIncomplete!==true)throw new Error('Archive parts are missing or inconsistent. Review the link set before downloading.');return result;},
-    async beforeQuit(){
+    async beforeQuit({install=true}={}){
       closing=true;
       for(const timer of cleanupTimers)clearTimeout(timer);
       storageController?.abort();
@@ -169,7 +171,7 @@ function createFeatureServices({app,win,manager,completion,dialog,clipboard,Noti
       await pending;
       // Install only an update the user chose to download and that verified.
       const update=updater.snapshot();
-      if(update.phase!=='ready'||update.installApproved!==true)return;
+      if(!install||update.phase!=='ready'||update.installApproved!==true)return;
       const prepared=await updater.prepareInstall({restart:restartOnExit});if(!prepared)return;
       await new Promise((resolve,reject)=>{const child=spawn(prepared.helper,[prepared.job],{detached:true,windowsHide:true,stdio:'ignore'});child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
     }

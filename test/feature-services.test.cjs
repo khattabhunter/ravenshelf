@@ -120,6 +120,19 @@ test('Exit waits for interrupted updater cleanup before preparing a verified upd
   assert.equal(f.calls.prepare.length,1);assert.equal(f.calls.spawn.length,1);
 });
 
+test('failed earlier shutdown cleanup disposes update services without installing an approved update',async t=>{
+  const f=fixture(t);Object.assign(f.instances.updater.state,{phase:'ready',installApproved:true});
+  await f.services.beforeQuit({install:false});
+  assert.ok(f.calls.events.includes('update:dispose'));assert.ok(f.calls.events.includes('verify:cancel'));
+  assert.equal(f.calls.prepare.length,0);assert.equal(f.calls.spawn.length,0);
+});
+
+test('close behavior settings accept only the three supported choices',()=>{
+  const {featureSettings}=require('../src/feature-services.cjs');
+  for(const value of ['ask','background','quit'])assert.deepEqual(featureSettings({closeBehavior:value}),{closeBehavior:value});
+  for(const value of [true,null,{},'exit','never','BACKGROUND'])assert.throws(()=>featureSettings({closeBehavior:value}),/Choose what closing the window/);
+});
+
 test('Updates download only through the explicit download request and install only after approval',async t=>{
   const f=fixture(t);
   await f.handlers.get('downloadUpdate')();assert.deepEqual(f.calls.events.filter(event=>event.startsWith('update:')),['update:download']);

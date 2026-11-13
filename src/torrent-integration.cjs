@@ -168,9 +168,17 @@ function createTorrentIntegration({app,win,manager,register,publish,Notification
     if(!Array.isArray(selected)||selected.length>10000||selected.some(n=>!Number.isSafeInteger(n)))throw new Error(MESSAGES.choose);
     const chosen=new Set(selected);
     const files=request.read.files.map(file=>({...file,selected:chosen.has(file.index)&&!file.padding}));
+    const assertCurrent=()=>{
+      assertOn();assertQueueAvailable();manager.assertWritable?.(0);
+      if(request.controller.signal.aborted||requests.get(id)!==request)throw new Error(MESSAGES.request);
+    };
     // The checked file list is kept so a paused torrent resumes without asking other people again.
     await pruned;
+    assertCurrent();
     await writeAtomic(storeFile(request.parsed.infoHash),request.torrent);
+    // Quit, disabling torrents, or dismissing the review may happen during I/O.
+    // Recheck immediately before the synchronous queue mutation.
+    assertCurrent();
     const title=typeof gameTitle==='string'?gameTitle:request.gameTitle;
     const result=manager.addTorrent({infoHash:request.parsed.infoHash,magnet:request.parsed.magnet,name:request.read.name,files,gameTitle:request.source==='browser'&&!gameTitle?'':title});
     requests.delete(id);publish();

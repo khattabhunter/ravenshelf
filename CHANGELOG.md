@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.3 — Unreleased: background mode and browser saves
+
+- **Choose what closing the window does.** The default asks whether to keep Ravenshelf running in the background, exit, or cancel. A remembered choice can be changed in Settings. Background mode keeps enabled services and downloads running while the PC is awake, with a tray icon to reopen or exit. This does not add Windows autostart.
+- **Updates wait for a full exit.** Hiding the window does not install an update. A previously approved, verified update can install after full shutdown or **Restart now**; failed service cleanup prevents installation. Late scan and reputation results no longer rewrite the final download checkpoint.
+- **More browser saves reach the app.** Save image, video, audio and ordinary file downloads use both supported browser event paths without duplicate handoffs. Direct image, video and audio right-click choices send the selected file for review. Completed browser saves are retained; failed pauses, unavailable handoffs and a full review list leave the original download with the browser. Automatic captures keep a hidden app window hidden.
+- **Existing protections remain.** Captures still require review, dangerous files still require confirmation, and file-host popup/redirect blocking remains. Private windows, local addresses and URL credentials are excluded. Browser-created media, protected streams and login-dependent downloads are not universal capture targets. No new permissions, dependencies or telemetry were added.
+- **Saved-list recovery fixes.** More than 10,000 unfinished jobs remain available for resume instead of being trimmed. Missing-profile recovery keeps one checked destination when a junction changes; reused recovery copies are checked again after reading; malformed nested items preserve healthy favourites and shelves. Failed settings writes restore the previous preferences before changing live download controls.
+- **Shared torrent DNS checks cancel independently.** One cancelled caller no longer cancels another caller waiting for the same tracker. Abandoned queued lookups are removed, and pending callers are bounded; an actual system lookup retains its slot until it ends.
+- **Shutdown closes admission before saving.** New browser handoffs fall back to the browser as soon as quitting starts. Late folder-picker settings and torrent-review continuations cannot change the queue after shutdown starts; a dismissed torrent review cannot add a download later.
+
+Local validation: 1,178 automated tests passed with no failures or skips, plus isolated Electron checks of normal, recovered and newer-version profiles. The Windows validation package passed source, helper, extension, integrity and security-fuse checks. The updated verifier accepted the genuine public 0.10.2 build record and rejected altered records in Node and Electron. Version 0.10.3 remains unpublished and uninstalled. See [development release notes](docs/RELEASE-0.10.3.md).
+
 ## 0.10.2 — Saved-list and torrent fixes
 
 - **Profiles reached through a link open normally.** If your AppData folder was moved to another drive with a junction or symbolic link, 0.10.1 opened an empty, read-only list. Ravenshelf now follows the profile folder to its real place once, checks it as before, and saves there. A `library.json` that is itself a link, or has more than one hard link, is still refused.
