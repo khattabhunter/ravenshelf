@@ -105,11 +105,16 @@ function report(reply, url) {
 }
 
 // ---- downloads ----
+async function downloadState(id) {
+  try { const [found] = await api.downloads.search({ id }); return found ? found.state : ''; } catch (error) { return ''; }
+}
+// A blocked download is cancelled, or its file deleted if it already
+// finished, including when it finishes while being cancelled.
 async function removeDownload(id) {
-  let state = '';
-  try { const [found] = await api.downloads.search({ id }); state = found ? found.state : ''; } catch (error) {}
-  if (state === 'complete') await quiet(() => api.downloads.removeFile(id));
-  else await quiet(() => api.downloads.cancel(id));
+  if (await downloadState(id) !== 'complete') {
+    try { await api.downloads.cancel(id); } catch (error) {}
+  }
+  if (await downloadState(id) === 'complete') await quiet(() => api.downloads.removeFile(id));
   await quiet(() => api.downloads.erase({ id }));
 }
 // 'stop' when Ravenshelf took or blocked the download; 'continue' leaves it to
@@ -162,6 +167,22 @@ async function planFor(item) {
 const downloadDecisions = new Map(), finishedDownloads = new Map();
 const DOWNLOAD_DECISION_MS = 60000;
 const MAX_DOWNLOAD_DECISIONS = 256, MAX_FINISHED_DOWNLOADS = 4096;
+// A clock that never jumps with the system time.
+const monotonic = () => typeof performance === 'object' && performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+// Firefox throws away what was downloaded when it pauses a download from a
+// server that can't resume. Such an address is not paused again for a while,
+// so starting the download again works.
+const unpausable = new Map(), UNPAUSABLE_MS = 10 * 60000, MAX_UNPAUSABLE = 100;
+function rememberUnpausable(url) {
+  unpausable.delete(url); unpausable.set(url, monotonic());
+  if (unpausable.size > MAX_UNPAUSABLE) unpausable.delete(unpausable.keys().next().value);
+}
+function isUnpausable(url) {
+  const at = unpausable.get(url);
+  if (at === undefined) return false;
+  if (monotonic() - at > UNPAUSABLE_MS) { unpausable.delete(url); return false; }
+  return true;
+}
 // Chrome reports a new download before it knows the file's name; the name
 // arrives with the filename event, which also holds the download. Wait this
 // long for it before falling back to pausing the download.
@@ -188,7 +209,7 @@ function waitForFilename(record) {
   });
 }
 // A download the extension paused is held while it is paused and not finished.
-// Firefox reports its own pause as state 'interrupted' with paused true.
+// Firefox reports a pause as state 'interrupted' with paused true.
 function heldByPause(latest) { return Boolean(latest && latest.paused === true && latest.state !== 'complete'); }
 async function handleDownload(record) {
   await waitForFilename(record);
@@ -203,16 +224,22 @@ async function handleDownload(record) {
   if (plan.kind === 'block') return decide(record.item, plan);
   const current = await currentDownload(record.id);
   if (!current || current.state !== 'in_progress' || current.paused || current.incognito || record.item.incognito || record.userChanged) return 'continue';
-  if (!record.releases.length && api.downloads.onDeterminingFilename) {
-    // A Chromium save without a filename event: only intercept if the browser
-    // really paused. A small file may already have finished. Firefox is never
-    // paused: for a server that can't resume, its pause throws the data away.
+  if (!record.releases.length && !isUnpausable(record.item.url)) {
+    // Firefox, and Chromium saves without a filename event: only intercept if
+    // the browser really paused. A small file may already have finished.
     record.pausing = true;
-    try { await api.downloads.pause(record.id); record.ownsPause = true; } catch (error) { return 'continue'; } finally { record.pausing = false; }
+    try { await api.downloads.pause(record.id); record.ownsPause = true; } catch (error) { record.pausing = false; return 'continue'; }
+    const after = await currentDownload(record.id);
+    // Firefox's pause of a download from a server that can't resume cancels
+    // it and throws its data away. That was not the user: Ravenshelf is still
+    // asked, and if it leaves the download to the browser, the user is told.
+    if (after && after.state === 'interrupted' && after.paused !== true) { record.discarded = true; record.userChanged = false; }
+    record.pausing = false;
   }
   const canTake = async () => {
     const latest = await currentDownload(record.id);
     if (!latest || latest.incognito || record.userChanged || latest.state === 'complete') return false;
+    if (record.discarded) return latest.state === 'interrupted' && latest.paused !== true;
     return record.ownsPause ? heldByPause(latest) : latest.state === 'in_progress' && !latest.paused;
   };
   if (!await canTake()) return 'continue';
@@ -220,7 +247,7 @@ async function handleDownload(record) {
 }
 function captureDownload(item, release) {
   if (!item || !Number.isSafeInteger(item.id) || item.id < 0) { if (release) release(); return; }
-  const now = Date.now();
+  const now = monotonic();
   for (const [id, doneAt] of finishedDownloads) { if (now - doneAt <= DOWNLOAD_DECISION_MS) break; finishedDownloads.delete(id); }
   if (finishedDownloads.has(item.id)) { if (release) release(); return; }
   let record = downloadDecisions.get(item.id);
@@ -238,11 +265,16 @@ function captureDownload(item, release) {
       .catch(() => {}).finally(() => { if (release) release(); });
     return;
   }
-  record = { id: item.id, item: {}, releases: release ? [release] : [], ownsPause: false, pausing: false, userChanged: false, filenameArrived: null };
+  record = { id: item.id, item: {}, releases: release ? [release] : [], ownsPause: false, pausing: false, discarded: false, userChanged: false, filenameArrived: null };
   mergeItem(record.item, item);
   downloadDecisions.set(item.id, record);
   handleDownload(record).catch(() => 'continue').then(async result => {
-    if (result === 'continue' && record.ownsPause && !record.userChanged) {
+    if (result === 'continue' && record.discarded && !record.userChanged) {
+      // The browser lost this download while it was held. Firefox can start it
+      // again with Retry; the same address is not paused next time.
+      rememberUnpausable(record.item.url);
+      notify('retry-download', 'Start this download again', 'Your browser could not keep this download while Ravenshelf checked it. Choose Retry in your browser’s downloads list, or start it again.');
+    } else if (result === 'continue' && record.ownsPause && !record.userChanged) {
       const current = await currentDownload(record.id);
       if (heldByPause(current) && current.canResume !== false) await quiet(() => api.downloads.resume(record.id));
     }
@@ -253,7 +285,7 @@ function captureDownload(item, release) {
     record.item = null;
     downloadDecisions.delete(record.id);
     finishedDownloads.delete(record.id);
-    finishedDownloads.set(record.id, Date.now());
+    finishedDownloads.set(record.id, monotonic());
     if (finishedDownloads.size > MAX_FINISHED_DOWNLOADS) finishedDownloads.delete(finishedDownloads.keys().next().value);
   });
 }
@@ -268,8 +300,15 @@ if (api.downloads.onChanged) api.downloads.onChanged.addListener(delta => {
   if (!record) return;
   // A user cancelling, pausing, resuming or finishing an intercepted download
   // wins over a late reply. The extension's own pause is not a user change:
-  // Firefox reports it as 'interrupted' with paused true.
+  // Firefox reports it as 'interrupted' with paused true (or, for a server
+  // that can't resume, 'interrupted' alone, which handleDownload sorts out).
   const state = delta.state && delta.state.current, paused = delta.paused && delta.paused.current;
+  if (record.pausing && state === 'interrupted') return;
+  if (record.discarded) {
+    // Only the user can start a download the browser already dropped.
+    if (state === 'in_progress' || state === 'complete') record.userChanged = true;
+    return;
+  }
   const ownPause = (record.ownsPause || record.pausing) && paused === true;
   if (state === 'complete' || (state && state !== 'in_progress' && !ownPause)) record.userChanged = true;
   else if ((record.ownsPause || record.pausing) && paused === false) record.userChanged = true;

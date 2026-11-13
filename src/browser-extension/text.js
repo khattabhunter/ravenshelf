@@ -41,6 +41,8 @@
     'Download this file with Ravenshelf': 'تنزيل هذا الملف باستخدام Ravenshelf',
     'Download this video with Ravenshelf': 'تنزيل هذا الفيديو باستخدام Ravenshelf',
     'Private window': 'نافذة خاصة',
+    'Start this download again': 'ابدأ هذا التنزيل من جديد',
+    'Your browser could not keep this download while Ravenshelf checked it. Choose Retry in your browser’s downloads list, or start it again.': 'لم يتمكن متصفحك من الاحتفاظ بهذا التنزيل أثناء فحص Ravenshelf له. اختر «إعادة المحاولة» في قائمة التنزيلات في متصفحك، أو ابدأه من جديد.',
     'Ravenshelf does not take downloads from private windows.': 'لا يستلم Ravenshelf التنزيلات من النوافذ الخاصة.',
     'Ravenshelf closed a pop-up': 'أغلق Ravenshelf نافذة منبثقة',
     '{source} tried to open {target}. File hosts use pop-ups for ads and fake downloads.': 'حاول الموقع {source} فتح {target}. تستخدم مواقع استضافة الملفات النوافذ المنبثقة للإعلانات والتنزيلات المزيّفة.',

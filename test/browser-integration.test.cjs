@@ -119,6 +119,14 @@ test('when connecting fails and the switch cannot be turned back off, the real r
   assert.equal(f.manager.settings.browserIntegrationEnabled,false,'the switch is off for this session');assert.equal(state.enabled,false);
 });
 
+test('a connection that fails because Ravenshelf is closing leaves the saved choice alone',async t=>{
+  const failure=new Error('Ravenshelf is closing. Wait for cleanup to finish.'),f=fixture(t,{registerError:failure});
+  f.manager.turnOff=function(){throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');};
+  const update=f.manager.updateSettings;f.manager.updateSettings=function(changes){const result=update.call(this,changes);if(changes.browserIntegrationEnabled)this.stopping=true;return result;};
+  await assert.rejects(f.call('setBrowserIntegration',true),error=>error===failure);
+  assert.equal(f.manager.settings.browserIntegrationEnabled,true,'the final save keeps what the user chose');
+});
+
 test('an enabled connection starts with Ravenshelf, and quitting keeps it registered',async t=>{
   const f=fixture(t,{enabled:true});
   await tick(50);

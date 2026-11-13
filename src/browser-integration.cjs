@@ -111,8 +111,13 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
       if(!enabled){const saved=manager.turnOff({browserIntegrationEnabled:false});await stop();if(!saved)throw new Error(SESSION_ONLY);return;}
       manager.updateSettings({browserIntegrationEnabled:true});
       // A failed rollback must not hide why connecting failed, and the switch
-      // is off for this session even when that can't be saved.
-      try{await start();}catch(error){try{manager.turnOff({browserIntegrationEnabled:false});}catch{manager.settings={...manager.settings,browserIntegrationEnabled:false};}throw error;}
+      // is off for this session even when that can't be saved. While closing,
+      // nothing is changed, so the final save keeps the user's choice.
+      try{await start();}catch(error){
+        try{manager.turnOff({browserIntegrationEnabled:false});}
+        catch{if(!manager.stopping){manager.settings={...manager.settings,browserIntegrationEnabled:false};manager.changed?.();}}
+        throw error;
+      }
     });
     return snapshot();
   });

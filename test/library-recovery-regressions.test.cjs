@@ -77,9 +77,12 @@ for(const mutation of ['content','replacement','hardlink'])test(`a reused recove
     }return count;}
   });
   const result=loadLibrary(w.file,{io});assert.equal(changed,true);assert.equal(result.canSave,true);assert.equal(result.warning,RECOVERED);assert.notEqual(result.recoveryFile,first.recoveryFile);
-  // One open handle for both checks, so the copy read is the copy counted.
-  const copy=fs.openSync(result.recoveryFile,'r');try{assert.deepEqual(fs.readFileSync(copy),bytes);assert.equal(fs.fstatSync(copy).nlink,1);}finally{fs.closeSync(copy);}
-  atomicJSON(result.file,{schemaVersion:1,...result.data});assert.deepEqual(fs.readFileSync(result.recoveryFile),bytes,'repair leaves an intact copy of the original');
+  // One open handle for every check, so the copy read is the copy counted.
+  const copy=fs.openSync(result.recoveryFile,'r'),read=()=>{const buffer=Buffer.alloc(bytes.length+16);return buffer.subarray(0,fs.readSync(copy,buffer,0,buffer.length,0));};
+  try{
+    assert.deepEqual(read(),bytes);assert.equal(fs.fstatSync(copy).nlink,1);
+    atomicJSON(result.file,{schemaVersion:1,...result.data});assert.deepEqual(read(),bytes,'repair leaves an intact copy of the original');assert.equal(fs.fstatSync(copy).nlink,1);
+  }finally{fs.closeSync(copy);}
 });
 
 test('bounded malformed items preserve neighbouring favorites, shelves, and shelf games',t=>{
