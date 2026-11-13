@@ -22,6 +22,7 @@ const icons = {
   library: '<rect x="3" y="4" width="4" height="16" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><path d="m17 5 4 15"/>',
   settings: '<path d="m10 3-.6 2.3-2 .9-2-.8-2 3.4 1.6 1.6-.1 2.3L3 14.3l2 3.4 2.2-.6 2 .9.8 2h4l.7-2.3 2-.9 2.1.8 2-3.4-1.6-1.6.1-2.3L21 8.7l-2-3.4-2.2.6-2-.9L14 3z"/><circle cx="12" cy="11.5" r="3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  magnet: '<path d="M6 3v8a6 6 0 0 0 12 0V3"/><path d="M6 7h4m4 0h4"/>',
   folder: '<path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m4 18 5-5 4 4 4-7 4 5"/>',
   layers: '<path d="m12 3 10 5-10 5L2 8zM2 12l10 5 10-5M2 16l10 5 10-5"/>',
@@ -439,6 +440,13 @@ function renderGameDetails(game) {
     panel.append(el('p', 'warning-note', t('No supported file-host links were found on this page. Open the source page to inspect the available links, or import a link set.')));
     panel.append(button(t('Import links'), 'button secondary', 'plus', () => { $('#game-dialog').close(); openImport(); }));
   }
+  const torrents = (Array.isArray(game.torrents) ? game.torrents : []).filter(item => item && typeof item.magnet === 'string' && item.magnet.startsWith('magnet:?'));
+  if (torrents.length && torrentFeatureAvailable()) {
+    const row = el('div', 'torrent-option');
+    row.append(icon('magnet'), el('span', '', t('This game also has a torrent (magnet link).')));
+    row.append(button(t('Download with torrent'), 'button secondary compact', 'magnet', () => startMagnet(torrents[0].magnet, gameName(game))));
+    panel.append(row);
+  }
   const closedMirrors = (Array.isArray(game.closedMirrors) ? game.closedMirrors : []).filter(name => typeof name === 'string').slice(0, 5);
   if (closedMirrors.length) panel.append(el('p', 'small-text closed-mirrors', t('Not offered because these hosts have shut down: {hosts}.', { hosts: joinLabels(closedMirrors) })));
   panel.append(results); body.append(panel);
@@ -642,6 +650,17 @@ function updateDownloadProgress(node, item) {
   $('.download-transfer', node).textContent = detail;
   const connections = $('.download-connections', node);
   let connectionText = '';
+  if (item.kind === 'torrent') {
+    // Torrents report the people they share with and their upload speed instead of connections.
+    if (item.status === 'downloading') {
+      const peers = Math.max(0, Math.floor(Number(item.torrent?.peers) || 0)), upload = Math.max(0, Number(item.torrent?.uploadSpeed) || 0);
+      connectionText = item.torrent?.sharing ? '' : peers ? tn(peers, 'Connected to {n} person', 'Connected to {n} people') : t('Looking for people sharing this torrent…');
+      if (!item.torrent?.sharing) connectionText += ' · ' + t('Uploading {speed}/s', { speed: formatBytes(upload, t('{size} B', { size: 0 })) });
+    }
+    if (item.connectionNote && ['downloading', 'paused', 'error'].includes(item.status)) connectionText += `${connectionText ? ' · ' : ''}${localMessage(item.connectionNote)}`;
+    connections.textContent = connectionText; connections.hidden = !connectionText;
+    return;
+  }
   if (item.kind === 'media') {
     // YouTube jobs report what they are doing (details, video, audio, joining) instead of connections.
     connectionText = ['downloading', 'paused', 'error'].includes(item.status) ? localMessage(String(item.connectionNote || '')) : '';
@@ -664,8 +683,8 @@ function updateDownloadCard(node, item) {
   node.className = `download-item ${item.status || ''}`;
   const selection=$('.download-select',node);if(selection)selection.checked=selectedDownloads.has(String(item.id));
   $('.download-name', node).textContent = item.name || item.filename || fileName(item);
-  $('.download-game', node).textContent = item.kind === 'media' ? ['YouTube', MEDIA_QUALITY_LABELS[item.media?.quality] && t(MEDIA_QUALITY_LABELS[item.media.quality])].filter(Boolean).join(' · ') : modLabel(item.mod) || (item.gameTitle ? folderTitle(item.gameTitle) : t('Imported download'));
-  $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : item.kind === 'media' ? 'video' : 'file'));
+  $('.download-game', node).textContent = item.kind === 'media' ? ['YouTube', MEDIA_QUALITY_LABELS[item.media?.quality] && t(MEDIA_QUALITY_LABELS[item.media.quality])].filter(Boolean).join(' · ') : item.kind === 'torrent' ? [t('Torrent'), item.gameTitle ? folderTitle(item.gameTitle) : ''].filter(Boolean).join(' · ') : modLabel(item.mod) || (item.gameTitle ? folderTitle(item.gameTitle) : t('Imported download'));
+  $('.download-file-icon', node).replaceChildren(icon(item.status === 'completed' ? 'check' : item.status === 'error' ? 'alert' : item.kind === 'media' ? 'video' : item.kind === 'torrent' ? 'magnet' : 'file'));
   const status = $('.download-status', node); status.textContent = statusLabel(item); status.className = `download-status ${item.status || ''}`;
   updateDownloadProgress(node, item);
   const error = $('.download-error', node); error.textContent = item.error ? localMessage(item.error) : ''; error.hidden = !item.error;
@@ -751,6 +770,7 @@ function renderSettings() {
   if(featureUIAvailable())renderFeatureSettings();
   if(browserFeatureAvailable())renderBrowserSettings();
   if(mediaFeatureAvailable())renderYouTubeSettings();
+  if(torrentFeatureAvailable())renderTorrentSettings();
 }
 function renderCatalogSections() {
   const container=$('#catalog-sections');container.replaceChildren();
@@ -1116,6 +1136,7 @@ function applyState(next) {
   if(next.catalogRefresh)receiveCatalogCheck(next.catalogRefresh);
   if(next.browser!==undefined)browserState=next.browser;
   if(next.media!==undefined)mediaState=next.media;
+  if(next.torrents!==undefined)torrentState=next.torrents;
   $('#version').textContent = `v${state.version}`;
   updateBadges();
   renderCompletionAction();
@@ -1135,6 +1156,7 @@ function applyState(next) {
   }
   if(browserFeatureAvailable())afterBrowserState();
   if(mediaFeatureAvailable())afterMediaState();
+  if(torrentFeatureAvailable())afterTorrentState();
 }
 function applyProgress(next) {
   // A delta cannot create a queue, revive a completed file or overwrite a newer
@@ -1150,6 +1172,7 @@ function applyProgress(next) {
         !Number.isInteger(progress.activeConnections) || progress.activeConnections < 0 || progress.activeConnections > 4) continue;
     item.received = progress.received; item.total = progress.total;
     item.speed = progress.speed; item.activeConnections = progress.activeConnections;
+    if (item.kind === 'torrent' && item.torrent && Number.isSafeInteger(progress.peers) && progress.peers >= 0 && Number.isFinite(progress.uploadSpeed) && progress.uploadSpeed >= 0) { item.torrent.peers = progress.peers; item.torrent.uploadSpeed = progress.uploadSpeed; }
     const card = currentView === 'downloads' ? downloadCards.get(progress.id) : null;
     if (card) updateDownloadProgress(card, item);
   }
@@ -1590,6 +1613,7 @@ function wireEvents() {
   if(featureUIAvailable())wireFeatureEvents();
   if(browserFeatureAvailable())wireBrowserEvents();
   if(mediaFeatureAvailable())wireMediaEvents();
+  if(torrentFeatureAvailable())wireTorrentEvents();
 }
 // ---- browser extension: setup, reviews of browser downloads, VirusTotal ----
 let browserState = null, browserBusy = false, capturesPrimed = false, capturesShown = '';
@@ -1843,6 +1867,7 @@ function renderDownloadReputation(node, item) {
   node.hidden = item.origin !== 'browser' && !report;
   if (node.hidden) return;
   if (item.origin === 'browser') node.append(el('span', 'origin-chip', item.kind === 'media' ? t('From YouTube') : modLabel(item.mod) ? t('From Nexus Mods') : t('From your browser')));
+  if (item.kind === 'torrent') node.append(el('span', 'origin-chip', t('Torrent')));
   const info = report ? virusTotalSummary({ ...report, kind: 'file', subject: t('this file') }) : null;
   if (info) appendVirusTotal(node, info);
   node.className = `download-reputation ${info?.tone || ''}`.trim();
@@ -1975,6 +2000,160 @@ function wireMediaEvents() {
   $('#youtube-dismiss').addEventListener('click', () => mediaTask(() => api.dismissYouTubeRequests(), t('Waiting YouTube videos dismissed.')));
   $('#youtube-dialog-later').addEventListener('click', async () => { $('#youtube-dialog').close(); await mediaTask(() => api.dismissYouTubeRequests()); });
   $('#youtube-quality').addEventListener('change', event => mediaTask(() => api.saveYouTubeSettings({ quality: event.target.value }), t('Preference saved.')));
+}
+// ---- torrents: settings, the magnet link review, and requests from the browser ----
+let torrentState = null, torrentBusy = false, torrentShownRequest = null, torrentRequestsSeen = null, lastTorrentPhase = null;
+const UPLOAD_LABELS = { 10240: later('10 KB/s'), 51200: later('50 KB/s'), 102400: later('100 KB/s'), 512000: later('500 KB/s'), 1048576: later('1 MB/s') };
+const SHARE_LABELS = { 0: later('Stop uploading right away'), 15: later('Share for 15 more minutes'), 60: later('Share for an hour more') };
+function torrentFeatureAvailable() { return typeof api?.openMagnet === 'function'; }
+function torrentTools() { return torrentState?.tools || {}; }
+function torrentRequests() { return Array.isArray(torrentState?.requests) ? torrentState.requests : []; }
+function torrentStatus() {
+  const tools = torrentTools();
+  if (!torrentState?.supported) return { text: t('Torrent downloads work with Ravenshelf on Windows.'), tone: '' };
+  if (!torrentState.enabled) return { text: t('Torrent downloads are off.'), tone: '' };
+  if (tools.phase === 'installing') return { text: `${tools.message ? localMessage(tools.message) : t('Setting up…')} ${t('{percent}%', { percent: Math.round((Number(tools.progress) || 0) * 100) })}`, tone: '' };
+  if (tools.phase === 'ready') return { text: t('Ready. Open a magnet link from a game page or your browser.'), tone: 'ok' };
+  if (['damaged', 'error'].includes(tools.phase)) return { text: tools.message ? localMessage(tools.message) : t('Setup did not finish. Try again.'), tone: 'error' };
+  return { text: t('Not set up yet. Setup downloads aria2 ({size}) once from its official GitHub release and checks it before every use.', { size: formatBytes(tools.downloadBytes, t('about 2.4 MB')) }), tone: '' };
+}
+function choiceOptions(select, values, labels) {
+  const key = values.join(',');
+  if (select.dataset.choices !== key) { select.replaceChildren(...values.map(value => { const option = el('option', '', labels[value] ? t(labels[value]) : String(value)); option.value = String(value); return option; })); select.dataset.choices = key; }
+}
+function renderTorrentSettings() {
+  const card = $('#torrent-card'); if (!card) return;
+  card.hidden = !torrentState;
+  if (card.hidden) return;
+  const tools = torrentTools(), phase = tools.phase, status = torrentStatus(), on = torrentState.enabled === true;
+  $('#torrent-status').textContent = status.text;
+  $('#torrent-status').className = `small-text browser-status ${status.tone}`.trim();
+  const progress = $('#torrent-progress');
+  progress.hidden = !on || phase !== 'installing'; progress.value = Math.round((Number(tools.progress) || 0) * 100);
+  $('#torrent-enable').hidden = on || !torrentState.supported; $('#torrent-enable').disabled = torrentBusy;
+  $('#torrent-disable').hidden = !on; $('#torrent-disable').disabled = torrentBusy;
+  const setup = $('#torrent-setup');
+  setup.hidden = !on || ['installing', 'ready'].includes(phase);
+  setup.textContent = phase === 'damaged' ? t('Set up again') : phase === 'error' ? t('Try setup again') : t('Set up torrent downloads');
+  setup.disabled = torrentBusy;
+  $('#torrent-cancel').hidden = phase !== 'installing';
+  $('#torrent-remove').hidden = !['ready', 'damaged'].includes(phase); $('#torrent-remove').disabled = torrentBusy;
+  $('#torrent-options').hidden = !on;
+  const upload = $('#torrent-upload'), share = $('#torrent-share');
+  choiceOptions(upload, Array.isArray(torrentState.uploadLimits) ? torrentState.uploadLimits : [], UPLOAD_LABELS);
+  choiceOptions(share, Array.isArray(torrentState.shareChoices) ? torrentState.shareChoices : [], SHARE_LABELS);
+  if (document.activeElement !== upload) upload.value = String(torrentState.uploadLimit);
+  if (document.activeElement !== share) share.value = String(torrentState.shareMinutes);
+  upload.disabled = share.disabled = torrentBusy;
+  $('#torrent-tools').replaceChildren(...(Array.isArray(tools.tools) ? tools.tools : []).map(tool => el('li', '', [`${tool.name} ${tool.version}`, localMessage(tool.license), tool.source].map(own).join(' · '))));
+}
+async function torrentTask(work, success) {
+  torrentBusy = true; renderTorrentSettings();
+  try {
+    const result = await work();
+    if (result && typeof result === 'object' && 'tools' in result && 'requests' in result) { torrentState = result; afterTorrentState(); }
+    if (success) toast(success);
+    return result;
+  } catch (error) { toast(errorText(error), true); return null; }
+  finally { torrentBusy = false; renderTorrentSettings(); }
+}
+// A magnet link from a game page: torrents must be on and set up first.
+async function startMagnet(magnet, gameTitle = '') {
+  if (!torrentState?.enabled) { toast(t('Turn on torrent downloads in Settings first.'), true); return; }
+  if (torrentTools().phase !== 'ready') { toast(t('Set up torrent downloads in Settings first, then retry.'), true); return; }
+  try {
+    const request = await api.openMagnet({ magnet, gameTitle });
+    if (request && typeof request.id === 'string') openTorrentDialog(request.id);
+  } catch (error) { toast(errorText(error), true); }
+}
+function openTorrentDialog(id) {
+  torrentShownRequest = id;
+  const dialog = $('#torrent-dialog');
+  delete dialog.dataset.rendered;
+  renderTorrentDialog();
+  if (!dialog.open) { if ($('#game-dialog').open) $('#game-dialog').close(); showDialog(dialog); }
+}
+function torrentChosen() {
+  return $$('#torrent-files input[type="checkbox"]').filter(box => box.checked && !box.disabled).map(box => Number(box.value)).filter(Number.isSafeInteger);
+}
+function renderTorrentTotal(request) {
+  const chosen = new Set(torrentChosen()), files = Array.isArray(request?.files) ? request.files : [];
+  const size = files.filter(file => chosen.has(file.index)).reduce((sum, file) => sum + (Number(file.length) || 0), 0);
+  $('#torrent-dialog-total').textContent = files.length ? tn(chosen.size, '{n} file chosen · {size}', '{n} files chosen · {size}', { size: formatBytes(size, t('{size} B', { size: 0 })) }) : '';
+  $('#torrent-download').disabled = !chosen.size || torrentBusy;
+}
+function renderTorrentDialog() {
+  const dialog = $('#torrent-dialog'), request = torrentRequests().find(item => item.id === torrentShownRequest);
+  if (!request) { if (dialog.open) dialog.close(); torrentShownRequest = null; return; }
+  $('#torrent-dialog-name').textContent = request.name || t('Unnamed torrent');
+  const status = $('#torrent-dialog-status');
+  if (request.status === 'finding') { status.textContent = request.peers ? tn(request.peers, 'Finding the file list… {n} person found so far.', 'Finding the file list… {n} people found so far.') : t('Finding the file list from people sharing this torrent. This can take a minute.'); status.className = 'small-text browser-status'; }
+  else if (request.status === 'error') { status.textContent = localMessage(request.error || ''); status.className = 'small-text browser-status error'; }
+  else { status.textContent = t('Choose the files to download. Optional files (fg-optional, fg-selective) can be left out.'); status.className = 'small-text browser-status ok'; }
+  const list = $('#torrent-files');
+  // The list is drawn once per request, so ticks the user made are kept.
+  if (request.status === 'ready' && dialog.dataset.rendered !== request.id) {
+    dialog.dataset.rendered = request.id;
+    const prefix = (request.name || '') + '/';
+    list.replaceChildren(...request.files.map(file => {
+      const row = el('label', 'torrent-file check-label');
+      const box = document.createElement('input'); box.type = 'checkbox'; box.value = String(file.index); box.checked = !file.padding; box.disabled = file.padding === true;
+      box.addEventListener('change', () => renderTorrentTotal(request));
+      const shown = String(file.path || '').startsWith(prefix) ? String(file.path).slice(prefix.length) : String(file.path || '');
+      row.append(box, el('span', 'torrent-file-name', own(shown.split('/').join(' › '))), el('span', 'link-size', formatBytes(file.length, t('{size} B', { size: 0 }))));
+      return row;
+    }));
+  } else if (request.status !== 'ready') { list.replaceChildren(); delete dialog.dataset.rendered; }
+  renderTorrentTotal(request.status === 'ready' ? request : null);
+}
+async function closeTorrentDialog() {
+  const id = torrentShownRequest; torrentShownRequest = null;
+  if ($('#torrent-dialog').open) $('#torrent-dialog').close();
+  if (id) await torrentTask(() => api.closeMagnet(id));
+}
+// Called after every state update: opens a magnet link sent from the browser,
+// keeps an open review current, and reports when setup finishes.
+function afterTorrentState() {
+  if (!torrentState) return;
+  const requests = torrentRequests(), ids = requests.map(item => item.id).join(',');
+  if (torrentRequestsSeen !== null && !torrentShownRequest) {
+    const seen = new Set(torrentRequestsSeen.split(',').filter(Boolean));
+    const arrived = requests.find(item => item.source === 'browser' && !seen.has(item.id));
+    if (arrived && !$$('dialog').some(other => other.open && other.id !== 'game-dialog')) openTorrentDialog(arrived.id);
+  }
+  torrentRequestsSeen = ids;
+  const phase = torrentTools().phase;
+  if (lastTorrentPhase === 'installing' && phase === 'ready') toast(t('Torrent downloads are ready.'));
+  lastTorrentPhase = phase;
+  if ($('#torrent-dialog').open) renderTorrentDialog();
+  if (currentView === 'settings') renderTorrentSettings();
+}
+function wireTorrentEvents() {
+  $('#torrent-enable').addEventListener('click', () => { $('#torrent-accept-check').checked = false; $('#torrent-accept').disabled = true; showDialog($('#torrent-accept-dialog')); });
+  $('#torrent-accept-check').addEventListener('change', event => { $('#torrent-accept').disabled = !event.target.checked; });
+  $('#torrent-accept').addEventListener('click', async () => {
+    if (!$('#torrent-accept-check').checked) return;
+    $('#torrent-accept-dialog').close();
+    await torrentTask(() => api.saveTorrentSettings({ enabled: true, accepted: true }), t('Torrent downloads are on. Set them up to start.'));
+  });
+  $('#torrent-accept-later').addEventListener('click', () => $('#torrent-accept-dialog').close());
+  $('#torrent-disable').addEventListener('click', () => torrentTask(() => api.saveTorrentSettings({ enabled: false }), t('Torrent downloads are off.')));
+  $('#torrent-setup').addEventListener('click', () => torrentTask(() => api.setUpTorrents()));
+  $('#torrent-cancel').addEventListener('click', () => torrentTask(() => api.cancelTorrentSetup()));
+  $('#torrent-remove').addEventListener('click', () => torrentTask(() => api.removeTorrentTools(), t('The torrent downloader was removed.')));
+  $('#torrent-upload').addEventListener('change', event => torrentTask(() => api.saveTorrentSettings({ uploadLimit: Number(event.target.value) }), t('Preference saved.')));
+  $('#torrent-share').addEventListener('change', event => torrentTask(() => api.saveTorrentSettings({ shareMinutes: Number(event.target.value) }), t('Preference saved.')));
+  for (const id of ['torrent-dialog-close', 'torrent-dialog-cancel']) $('#' + id).addEventListener('click', () => closeTorrentDialog());
+  $('#torrent-dialog').addEventListener('cancel', event => { event.preventDefault(); closeTorrentDialog(); });
+  $('#torrent-download').addEventListener('click', async () => {
+    const id = torrentShownRequest, selected = torrentChosen();
+    if (!id || !selected.length) return;
+    const result = await torrentTask(() => api.addTorrent({ id, selected }));
+    if (result && Number.isSafeInteger(result.added)) {
+      torrentShownRequest = null; if ($('#torrent-dialog').open) $('#torrent-dialog').close();
+      toast(result.added ? t('Torrent added to your downloads.') : t('This torrent is already in your downloads.'));
+    }
+  });
 }
 // A new language reloads the window in it, back on the Settings page.
 async function changeLanguage(choice, control) {

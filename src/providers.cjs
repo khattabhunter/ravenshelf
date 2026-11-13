@@ -12,6 +12,7 @@ const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
 const {isPasteHost,isPixeldrainHost,isMultiupHost,closedHost,closedByLabel,CLOSED_HOSTS}=require('./hosts.cjs');
 const pixeldrain=require('./pixeldrain.cjs');
 const multiup=require('./multiup.cjs');
+const {parseMagnet}=require('./magnet.cjs');
 const pbkdf2 = promisify(crypto.pbkdf2);
 const BASE = 'https://fitgirl-repacks.site';
 const MAX_TEXT = 6 * 1024 * 1024;
@@ -168,7 +169,13 @@ function parseDetail(html, url) {
   if(/Only updated files for a new non-HV repack/i.test(content.text()) && /unpack them OVER setup files/i.test(content.text())) sourceNotes.unshift('This mirror includes a separate replacement setup archive for the newer non-HV repack. The source says to unpack that archive over the main setup files, with overwriting. Keep it separate from the numbered multipart sequence.');
   if(/turn off AV|disable.{0,30}(?:antivirus|defender)|installation folders to exclusions/i.test(content.text())) sourceNotes.push('The source page also contains instructions to weaken antivirus protection. Ravenshelf does not apply those instructions.');
   const closedMirrors=CLOSED_HOSTS.map(entry=>entry.name).filter(name=>closed.has(name));
-  return {...game,screenshots:screenshots.slice(0,12),groups:[...groups.values()],closedMirrors,installation:sourceNotes.length?'Source-reported installation notes (not independently verified):\n'+sourceNotes.join('\n'):''};
+  // The page's magnet links, one per torrent (a page often links the same torrent twice).
+  const torrents=[];
+  content.find('a[href^="magnet:"]').each((_,el)=>{
+    if(torrents.length>=3)return false;
+    try{const parsed=parseMagnet(String($(el).attr('href')||''));if(!torrents.some(item=>item.infoHash===parsed.infoHash))torrents.push({infoHash:parsed.infoHash,name:parsed.name,magnet:parsed.magnet});}catch{}
+  });
+  return {...game,screenshots:screenshots.slice(0,12),groups:[...groups.values()],closedMirrors,torrents,installation:sourceNotes.length?'Source-reported installation notes (not independently verified):\n'+sourceNotes.join('\n'):''};
 }
 async function listGames({page=1,search='',letter=''}={}) {
   page=Math.max(1,Math.min(2000,Number.parseInt(page,10)||1));

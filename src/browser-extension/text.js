@@ -108,6 +108,8 @@
     'Adds a Ravenshelf button to YouTube’s player. Right-click a video for the same.': 'يضيف زر Ravenshelf إلى مشغّل YouTube. انقر بزر الفأرة الأيمن على فيديو للخيار نفسه.',
     'Sort Nexus Mods files by game': 'ترتيب ملفات Nexus Mods حسب اللعبة',
     'Reads which game, mod and files a Nexus Mods page is about, so that a file you download there is saved in a Mods folder for its game.': 'يقرأ اللعبة والمود والملفات التي تتناولها صفحة Nexus Mods، ليُحفظ الملف الذي تنزّله منها في مجلد Mods الخاص بلعبته.',
+    'Open FitGirl magnet links in Ravenshelf': 'فتح روابط magnet في FitGirl داخل Ravenshelf',
+    'A magnet link you click on fitgirl-repacks.site opens in Ravenshelf, which shows the torrent’s files first. When Ravenshelf’s torrent downloads are off, the link opens as before.': 'يُفتح رابط magnet الذي تنقر عليه في fitgirl-repacks.site داخل Ravenshelf، فيعرض ملفات التورنت أولًا. وعندما تكون تنزيلات التورنت في Ravenshelf متوقفة، يُفتح الرابط كما كان من قبل.',
     'Private windows are never captured. This extension talks only to Ravenshelf on this PC.': 'لا تلتقط الإضافة أي شيء من النوافذ الخاصة أبدًا. تتواصل هذه الإضافة مع Ravenshelf على هذا الحاسوب فقط.',
     // The warning page
     'Blocked by Ravenshelf': 'صفحة حظرها Ravenshelf',

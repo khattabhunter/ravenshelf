@@ -501,3 +501,39 @@ test('the pinned torrent engine is aria2 1.37.0, checked by size and SHA-256',()
   assert.equal(Object.isFrozen(tool),true);assert.equal(Object.isFrozen(tool.files[0]),true);
   for(const message of [...Object.values(TOOL_MESSAGES),...Object.values(TORRENT)])assert.equal(publicErrorMessage(new Error(message),'setUpTorrents'),message);
 });
+
+test('Delete files removes only a torrent’s own files, and never a folder another download owns',async t=>{
+  const {createDownloadCleanup}=require('../src/download-cleanup.cjs');
+  const {buffer,infoHash}=torrentFile(multi());
+  const read=magnet.readTorrent(buffer,infoHash),q=managerFor(t,fakeRunner());
+  q.manager.addTorrent({infoHash,magnet:`magnet:?xt=urn:btih:${infoHash}`,name:read.name,files:filesOf(read,[1,2,4]),gameTitle:'G'});
+  await q.finished();
+  const [d]=q.manager.downloads,top=path.join(d.folder,d.name);
+  assert.equal(d.status,'completed',d.error);
+  fs.writeFileSync(path.join(top,'my notes.txt'),'mine');
+  const cleanup=createDownloadCleanup({getDownloads:()=>q.manager.downloads});
+  const preview=await cleanup.preview([d.id]);
+  assert.deepEqual(preview.warnings,[]);assert.equal(preview.items[0].bytes,33);
+  const result=await cleanup.deletePreview({ids:[d.id],token:preview.token});
+  assert.deepEqual(result.removedIds,[d.id]);assert.equal(result.bytesFreed,33);
+  assert.deepEqual(fs.readdirSync(top),['my notes.txt'],'a file the torrent did not list stays, so its folder stays');
+  // A torrent that is not finished owns only its working folder.
+  const other=managerFor(t,{download:async(job,{workspace,signal})=>{
+    const target=path.join(workspace,...job.torrent.files[0].path.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,Buffer.alloc(4));
+    fs.writeFileSync(path.join(workspace,job.torrent.name+'.aria2'),'progress');
+    await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));throw Object.assign(new Error('stopped'),{name:'AbortError'});
+  }});
+  other.manager.addTorrent({infoHash,magnet:`magnet:?xt=urn:btih:${infoHash}`,name:read.name,files:filesOf(read,[1]),gameTitle:'G'});
+  const [partial]=other.manager.downloads;
+  // A finished copy under the same name, published by someone else, must never be touched.
+  const published=path.join(partial.folder,read.name);fs.mkdirSync(published,{recursive:true});fs.writeFileSync(path.join(published,'setup.exe'),'other');
+  for(let i=0;i<500&&!fs.existsSync(path.join(torrentWorkspace(partial),read.name+'.aria2'));i++)await tick(2);
+  other.manager.action(partial.id,'pause');await other.finished();
+  const otherCleanup=createDownloadCleanup({getDownloads:()=>other.manager.downloads});
+  const second=await otherCleanup.preview([partial.id]);
+  assert.equal(second.items[0].bytes,4+'progress'.length);
+  const removed=await otherCleanup.deletePreview({ids:[partial.id],token:second.token});
+  assert.deepEqual(removed.removedIds,[partial.id]);
+  assert.equal(fs.existsSync(torrentWorkspace(partial)),false);
+  assert.equal(fs.readFileSync(path.join(published,'setup.exe'),'utf8'),'other');
+});

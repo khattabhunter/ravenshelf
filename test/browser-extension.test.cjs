@@ -93,7 +93,7 @@ test('extension files are local, script-free in markup, and never contact the ne
   for(const browser of ['chromium','firefox']){
     const manifest=extensionManifest(browser,'1.2.3');
     assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
-    assert.deepEqual(manifest.content_scripts.map(script=>script.matches),[['https://www.youtube.com/*'],['https://www.nexusmods.com/*']],'only YouTube and Nexus Mods pages get a page script');
+    assert.deepEqual(manifest.content_scripts.map(script=>script.matches),[['https://www.youtube.com/*'],['https://www.nexusmods.com/*'],['https://fitgirl-repacks.site/*']],'only YouTube, Nexus Mods and FitGirl pages get a page script');
     assert.match(manifest.content_security_policy.extension_pages,/script-src 'self'/);
     for(const icon of Object.values(manifest.icons))assert.ok(EXTENSION_FILES.includes(icon),icon);
     for(const script of manifest.background.scripts||[manifest.background.service_worker])assert.ok(EXTENSION_FILES.includes(script),script);
@@ -801,4 +801,49 @@ test('a program that a page made itself is blocked with a text that can be shown
   assert.match(TEXT.create('ar').t(plan.template,plan.params),/^[\u0600-\u06ff]/);
   const unnamed=P.downloadPlan({id:2,url:'data:application/octet-stream;base64,AA',filename:'.exe'},{capture:true});
   if(unnamed.kind==='block')assert.equal(TEXT.create('en').t(unnamed.template,unnamed.params),unnamed.reason);
+});
+
+// ---- magnet links on fitgirl-repacks.site ----
+const MAGNET_LINK='magnet:?xt=urn:btih:1a7168b2475e6dad602526a093c8e75a5ea0a27a&dn=Game';
+test('a magnet link clicked on FitGirl goes to Ravenshelf only from its own page script, in a normal window',async()=>{
+  const answers=[];
+  const b=fakeBrowser({native:message=>{answers.push(message);return message.type==='magnet'?{ok:true,action:'review'}:{ok:false,error:'invalid'};}});
+  const send=(msg,sender)=>new Promise(resolve=>{const handled=b.api.runtime.onMessage.emit(msg,sender,value=>resolve(own(value)))[0];if(handled!==true)resolve(undefined);});
+  const page={id:'self',url:'https://fitgirl-repacks.site/game/',frameId:0,tab:{id:3,incognito:false}};
+  assert.deepEqual(await send({cmd:'magnet',magnet:MAGNET_LINK},page),{ok:true,action:'review'});
+  assert.deepEqual(answers.filter(m=>m.type==='magnet'),[{v:1,type:'magnet',magnet:MAGNET_LINK}]);
+  // Not from a FitGirl page, not the top frame, a private window, or not a magnet link: nothing is sent.
+  for(const sender of [{...page,url:'https://fitgirl-repacks.site.evil.test/'},{...page,frameId:2},{...page,url:'https://evil.example/'}])
+    assert.equal(await send({cmd:'magnet',magnet:MAGNET_LINK},sender),undefined,sender.url);
+  assert.deepEqual(await send({cmd:'magnet',magnet:MAGNET_LINK},{...page,tab:{id:3,incognito:true}}),{ok:false});
+  assert.deepEqual(await send({cmd:'magnet',magnet:'https://x.example/'},page),{ok:false});
+  assert.deepEqual(await send({cmd:'magnet',magnet:'magnet:?xt=a\nb'},page),{ok:false});
+  // The switch in the toolbar window turns it off.
+  assert.equal((await b.message({cmd:'set',key:'magnets',value:false})).ok,true);
+  assert.deepEqual(await send({cmd:'magnet',magnet:MAGNET_LINK},page),{ok:false});
+  assert.equal(answers.filter(m=>m.type==='magnet').length,1);
+});
+
+test('the FitGirl page script passes on only a real left click on a magnet link, and opens it as before when Ravenshelf says no',async()=>{
+  function pageScript(reply){
+    const listeners=[],sent=[],opened=[];
+    const document={addEventListener:(type,fn,capture)=>{assert.equal(type,'click');assert.equal(capture,true);listeners.push(fn);}};
+    class Element{constructor(href){this.href=href;}closest(selector){assert.equal(selector,'a[href]');return this.href===null?null:this;}getAttribute(name){return name==='href'?this.href:null;}}
+    const chrome={runtime:{sendMessage:async message=>{sent.push(own(message));if(reply instanceof Error)throw reply;return reply;}}};
+    const context=vm.createContext({document,Element,chrome,location:{assign:url=>opened.push(url)},Promise});
+    vm.runInContext(read('magnet.js'),context,{filename:'magnet.js'});
+    const click=(href,patch={})=>{const event={isTrusted:true,defaultPrevented:false,button:0,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,target:new Element(href),prevented:false,
+      preventDefault(){this.prevented=true;},stopPropagation(){},...patch};listeners[0](event);return event;};
+    return {click,sent,opened};
+  }
+  const taken=pageScript({ok:true,action:'review'});
+  assert.equal(taken.click(MAGNET_LINK).prevented,true);await tick();
+  assert.deepEqual(taken.sent,[{cmd:'magnet',magnet:MAGNET_LINK}]);assert.deepEqual(taken.opened,[]);
+  for(const patch of [{isTrusted:false},{button:1},{ctrlKey:true},{shiftKey:true},{defaultPrevented:true}])assert.equal(taken.click(MAGNET_LINK,patch).prevented,false,JSON.stringify(patch));
+  assert.equal(taken.click('https://fitgirl-repacks.site/other/').prevented,false);assert.equal(taken.click(null).prevented,false);
+  await tick();assert.equal(taken.sent.length,1);
+  for(const reply of [{ok:true,action:'off'},{ok:false},undefined,new Error('no app')]){
+    const declined=pageScript(reply);declined.click(MAGNET_LINK);await tick();
+    assert.deepEqual(declined.opened,[MAGNET_LINK],JSON.stringify(reply));
+  }
 });
