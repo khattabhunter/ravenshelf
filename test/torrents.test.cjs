@@ -249,11 +249,14 @@ function engineFor(t,fake,options={}){
 
 test('the engine starts aria2 with a fresh secret, finds a file list, and checks it against the magnet link',async t=>{
   const {buffer,infoHash}=torrentFile(multi());
-  const fake=fakeAria2({torrents:{[infoHash]:buffer}}),{engine,root}=engineFor(t,fake);
+  const fake=fakeAria2({torrents:{[infoHash]:buffer}}),{engine,root}=engineFor(t,fake,{idleMs:60000});
   const parsed=magnet.parseMagnet(`magnet:?xt=urn:btih:${infoHash}&dn=Game`);
   const peers=[];
   const got=await engine.metadata(parsed,{onStatus:status=>peers.push(status.peers)});
   assert.deepEqual(got,buffer);assert.ok(peers.includes(3));
+  // Right away, before aria2's idle stop: requests without the secret are refused by aria2 (the stand-in does the same).
+  const answer=await fake.fetch(`http://127.0.0.1:${fake.port}/jsonrpc`,{body:JSON.stringify({jsonrpc:'2.0',id:'x',method:'aria2.getVersion',params:['token:wrong']})});
+  assert.equal((await answer.json()).error.message,'Unauthorized');
   const [spawned]=fake.spawned;
   assert.equal(spawned.file,path.join(root,'aria2c.exe'));assert.equal(spawned.options.shell,false);assert.equal(spawned.options.windowsHide,true);
   assert.equal(JSON.stringify(spawned.options.env).includes('private-fixture'),false,'the user profile is not passed on');
@@ -269,9 +272,6 @@ test('the engine starts aria2 with a fresh secret, finds a file list, and checks
   // A file list larger than 10 MB is not read.
   const huge=fakeAria2({torrents:{[infoHash]:Buffer.alloc(10*1024*1024+1)}}),third=engineFor(t,huge);
   await assert.rejects(third.engine.metadata(parsed),{message:'The torrent downloader stopped unexpectedly. Retry to resume.'});
-  // Requests without the secret are refused by aria2 (the stand-in does the same).
-  const answer=await fake.fetch(`http://127.0.0.1:${fake.port}/jsonrpc`,{body:JSON.stringify({jsonrpc:'2.0',id:'x',method:'aria2.getVersion',params:['token:wrong']})});
-  assert.equal((await answer.json()).error.message,'Unauthorized');
 });
 
 test('aria2 gets a new DHT node ID each time it starts: its DHT file is removed before a start and after a stop',async t=>{
