@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.1 — Unreleased: privacy and recovery
+## 0.10.1 — Privacy and recovery
 
 - Minimize browser page context and provider referrer/form headers; remove completed ordinary browser download query tokens and headers while preserving active signed links for resume.
 - Fix native-message authentication when multiple frames arrive together; add the image right-click handoff with private-window exclusions.
