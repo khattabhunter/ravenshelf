@@ -76,7 +76,9 @@ for(const mutation of ['content','replacement','hardlink'])test(`a reused recove
       else fs.linkSync(first.recoveryFile,path.join(w.root,'linked-copy.json'));
     }return count;}
   });
-  const result=loadLibrary(w.file,{io});assert.equal(changed,true);assert.equal(result.canSave,true);assert.equal(result.warning,RECOVERED);assert.notEqual(result.recoveryFile,first.recoveryFile);assert.deepEqual(fs.readFileSync(result.recoveryFile),bytes);assert.equal(fs.lstatSync(result.recoveryFile).nlink,1);
+  const result=loadLibrary(w.file,{io});assert.equal(changed,true);assert.equal(result.canSave,true);assert.equal(result.warning,RECOVERED);assert.notEqual(result.recoveryFile,first.recoveryFile);
+  // One open handle for both checks, so the copy read is the copy counted.
+  const copy=fs.openSync(result.recoveryFile,'r');try{assert.deepEqual(fs.readFileSync(copy),bytes);assert.equal(fs.fstatSync(copy).nlink,1);}finally{fs.closeSync(copy);}
   atomicJSON(result.file,{schemaVersion:1,...result.data});assert.deepEqual(fs.readFileSync(result.recoveryFile),bytes,'repair leaves an intact copy of the original');
 });
 
@@ -195,7 +197,7 @@ test('a list too large to read back is never written: the old file stays and not
   assert.equal(manager.downloads.length,1);assert.equal(fs.existsSync(path.join(w.root,'Downloads','New game')),false);assert.deepEqual(fs.readFileSync(w.file),original);
   // Once the list fits again (finished downloads removed), saving and adding resume.
   manager.maxStateBytes=MAX_BYTES;assert.equal(manager.save(),true);assert.equal(manager.stateTooLarge,false);assert.equal(manager.state().stateRecoveryWarning,'');
-  const size=fs.statSync(w.file).size,before=fs.readFileSync(w.file);manager.maxStateBytes=size+50;
+  const before=fs.readFileSync(w.file);manager.maxStateBytes=before.length+50;
   // A new download that would push the list over the limit is taken out again and refused.
   assert.throws(()=>manager.add({links:[{status:'ready',url:'https://files.example.com/big.zip',filename:'big.zip'}],gameTitle:'Game'}),{message:LIST_TOO_LARGE});
   assert.equal(manager.downloads.length,1);assert.deepEqual(fs.readFileSync(w.file),before);assert.equal(manager.stateTooLarge,false);

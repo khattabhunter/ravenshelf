@@ -1175,7 +1175,7 @@ test('an abandoned running DNS lookup keeps its slot but a later caller gets a f
 
 test('tracker lookups refused as too many or misconfigured use internal errors, not the stopped-downloader message',async()=>{
   const shown=Object.values(engineModule.MESSAGES);
-  assert.throws(()=>engineModule.createSystemLookup({slots:3}),error=>error instanceof RangeError&&!shown.includes(error.message));
+  assert.throws(()=>engineModule.createSystemLookup({slots:3}),error=>(error instanceof RangeError)&&!shown.includes(error.message));
   const pending=[],lookup=engineModule.createSystemLookup({lookupImpl:()=>new Promise(resolve=>pending.push(resolve))});
   const waits=Array.from({length:513},(_,i)=>lookup('host'+i+'.example').then(()=>null,error=>error));
   const refused=await waits[512];
