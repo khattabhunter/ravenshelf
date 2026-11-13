@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide follows the Ravenshelf 0.10.3 release candidate for Windows. **0.10.3 is not released yet**; its [candidate notes](RELEASE-0.10.3.md) record 1,178 passing local tests and successful Windows package inspection. Real Chrome/Firefox capture checks and verification of the future public release remain pending. The published preview remains [0.10.2](RELEASE-0.10.2.md). Features marked 0.10.3 below are not in that published download.
+This guide follows Ravenshelf 0.10.3 for Windows ([release notes](RELEASE-0.10.3.md)). Sections marked 0.10.3 describe what changed in that version.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.10.2-Windows.exe` from the [v0.10.2 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.2). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.10.3-Windows.exe` from the [v0.10.3 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.3). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, exit it fully before opening the new executable. In 0.10.3, use **Exit Ravenshelf** rather than hiding its window in the background. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
@@ -22,7 +22,7 @@ After a successful update, the helper keeps the previous executable next to the 
 
 Updating from 0.4.1 to 0.4.2 still uses 0.4.1's behavior: it prepares the update automatically and installs it on close. The approval step applies to updates offered by 0.4.2 and later.
 
-### Closing the window and running in background (0.10.3 development)
+### Closing the window and running in background (0.10.3)
 
 By default, closing the window asks what to do:
 
@@ -31,6 +31,10 @@ By default, closing the window asks what to do:
 - **Cancel** leaves the window open.
 
 Tick **Remember my choice** only if you want future window closes to use that choice. Change it later in **Settings → When I close the window**: **Ask each time**, **Keep running in background**, or **Exit Ravenshelf**. Settings also has buttons for an immediate background action or full exit. The tray's **Exit Ravenshelf** always exits, even when your remembered close choice is background. If the tray cannot be created or the preference cannot be saved, the window remains visible.
+
+If the window is minimized when you close it, Ravenshelf brings it back first so you can see the question. If the tray icon can't be shown, the window stays open.
+
+A full exit waits for downloads and services to stop. If that takes longer than about 45 seconds, Ravenshelf exits anyway, saves the download list, and does not install a waiting update; with desktop notifications on, a notice tells you the update was not installed. Check for updates again after reopening. Work still running at that moment, such as deleting a large folder, may be left half done.
 
 Background mode does not add Windows autostart or prevent sleep. It keeps this running session alive, including enabled catalogue refresh, update checks, clipboard recognition, browser protection services and torrent work. Closing or restarting Windows is separate from hiding the app. The extension does not automatically launch an exited Ravenshelf.
 
@@ -220,11 +224,13 @@ With **Send downloads to Ravenshelf** on, an eligible download waits while Raven
 
 Then you choose. **Download** adds the file to your queue, in the **Browser downloads** folder (files from Nexus Mods go to a **Mods** folder instead: see [Nexus Mods downloads](#nexus-mods-downloads)). **Download in browser instead** lets your browser download it once, for links Ravenshelf can't fetch, such as pages that need your sign-in. **Dismiss** forgets it. Programs, scripts and disk images ask you to confirm the warning first. Disguised programs (such as `invoice.pdf.exe`), programs over unencrypted HTTP and links through listed sites are blocked and can't be downloaded from the review.
 
+In Chrome, Edge and Brave, Ravenshelf waits up to a second for the browser to report the file's real name before deciding, so a program can't hide behind an address with no name. In Firefox, the download keeps running while Ravenshelf decides and is cancelled only if Ravenshelf takes it. A link that Ravenshelf's file check has already blocked stays blocked when you try it again, even when the review list is full. An unencrypted (HTTP) download whose name the browser did not report is stopped.
+
 If Ravenshelf is exited, doesn't answer, refuses the handoff or has a full review list, the browser keeps the download. Failed pauses also leave the file with the browser. Unencrypted (HTTP) downloads that are not programs stay with the browser under the existing security policy. Downloads in private windows are never sent to Ravenshelf. Reviews you don't act on expire after an hour.
 
 Right-click a link and choose **Download with Ravenshelf** to send it directly. Images offer **Download this image with Ravenshelf**. In 0.10.3, direct video and audio files also offer **Download this video file with Ravenshelf** and **Download this audio with Ravenshelf**; the selected media address is sent, not a nearby ad or linked page. On a FuckingFast, FileKeeper or DataNodes page, the page's right-click menu and the toolbar button offer **Download this file with Ravenshelf**. YouTube keeps its separate video menu and quality choices.
 
-In 0.10.3, automatic captures leave a background window hidden. The app's review notification follows your notification setting; click it or use the tray icon to open the review. An explicit right-click handoff can bring Ravenshelf forward. Files still wait for your **Download** choice even when the app is hidden. Pending review cards are memory-only: queue the files you want before a full exit, which discards those cards.
+In 0.10.3, automatic captures leave a background window hidden. The app's review notification follows your notification setting; click it or use the tray icon to open the review. If desktop notifications are off, Ravenshelf shows its window instead, so a download the browser handed over never seems to disappear. An explicit right-click handoff can bring Ravenshelf forward. Files still wait for your **Download** choice even when the app is hidden. Pending review cards are memory-only: queue the files you want before a full exit, which discards those cards.
 
 ### Blocking in the browser
 
@@ -402,7 +408,7 @@ The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the 
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
-From 0.10.1, Ravenshelf validates the saved library before opening the queue. If some data is damaged, valid entries remain available and the original bytes are preserved as `library.json.recovery-<ID>.json` in the same profile folder before any repair. From 0.10.2 the repaired list is saved at once, the same damaged bytes are copied only once, and at most 5 recovery copies are kept: the oldest, the newest, and any copy just reused (the others are deleted). In 0.10.3, malformed nested favourites or shelf games drop only the damaged item while preserving healthy neighbours. Unfinished queues above 10,000 entries retain every valid unfinished job; only finished history is trimmed, and new additions are refused until the list falls below the limit. Settings changes are also refused when the saved list is read-only; a failed settings write restores the previous preference. A profile folder reached through a junction (for example AppData moved to another drive) is followed to its real place, and a list held for a moment by antivirus or sync software is read after a short wait. The window displays a recovery warning. These copies can contain private paths and signed download links; keep them local. If the original file cannot be read safely, the recovery copy cannot be made, or the library belongs to a newer app version, Ravenshelf does not overwrite it, start downloads or add new ones (adding one shows why). Close the app and restore a known-good backup, or use the newer version named by the warning. Do not delete the original or recovery copy merely to dismiss the warning.
+From 0.10.1, Ravenshelf validates the saved library before opening the queue. If some data is damaged, valid entries remain available and the original bytes are preserved as `library.json.recovery-<ID>.json` in the same profile folder before any repair. From 0.10.2 the repaired list is saved at once, the same damaged bytes are copied only once, and at most 5 recovery copies are kept: the oldest, the newest, and any copy just reused (the others are deleted). In 0.10.3, malformed nested favourites or shelf games drop only the damaged item while preserving healthy neighbours. Unfinished queues above 10,000 entries retain every valid unfinished job; only old history is trimmed (the oldest finished files first, cancelled downloads last, never files waiting for a Defender scan or flagged by Defender), without a recovery copy or warning, and new additions are refused until the list falls below the limit. A list too large to read back (over 128 MB) is never written: the previous file stays and the window explains what to do. Settings changes are also refused when the saved list is read-only, except turning off clipboard watching, update checks, notifications, the browser connector or torrents, which then lasts until restart; a failed settings write restores the previous preference. A profile folder reached through a junction (for example AppData moved to another drive) is followed to its real place, and a list held for a moment by antivirus or sync software is read after a short wait. The window displays a recovery warning. These copies can contain private paths and signed download links; keep them local. If the original file cannot be read safely, the recovery copy cannot be made, or the library belongs to a newer app version, Ravenshelf does not overwrite it, start downloads or add new ones (adding one shows why). Close the app and restore a known-good backup, or use the newer version named by the warning. Do not delete the original or recovery copy merely to dismiss the warning.
 
 If Windows cannot encrypt saved download headers, Ravenshelf displays a warning and keeps those headers in memory only. The queue and partial files remain saved. After restart, affected downloads refresh their source links before resuming and may need another protected-browser step. Nexus Mods files are never looked up again: they continue at their own link, without the page address. Version 0.3.1 removes plaintext headers from the current older queue file; it does not rewrite previous backups.
 
