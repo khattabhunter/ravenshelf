@@ -152,17 +152,28 @@ function findExecutables(root,title,context) {
 // replaced by a plain sentence.
 const SCAN_MESSAGES=new Set(['Local registration inspection timed out.','Inventory response exceeded its limit.','Windows metadata inspection could not finish.','Windows metadata response was invalid.']);
 const scanWarning=error=>SCAN_MESSAGES.has(error?.message)?error.message:'Windows game records could not be read. Choose Scan games to try again.';
-async function runPowerShell(request) {
-  const script=fs.readFileSync(path.join(__dirname,'installed-scan.ps1'),'utf8');
-  const executable=path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+// As with the hardware probe, discover commands only in Windows' module
+// directory. Remove every spelling: Windows environment names ignore case.
+function scanEnvironment(env,modules){
+  const clean={};
+  for(const [name,value] of Object.entries(env||{}))if(name.toUpperCase()!=='PSMODULEPATH')clean[name]=value;
+  clean.PSModulePath=modules;
+  return clean;
+}
+async function runPowerShell(request,{spawnImpl=spawn,systemRoot=process.env.SystemRoot||'C:\\Windows',env=process.env,readFile=fs.readFileSync,timeoutMs}={}) {
+  if(!request||typeof request!=='object'||Array.isArray(request)||!['discover','versions'].includes(request.action)||Object.keys(request).some(key=>!['action','paths'].includes(key))||
+    (request.action==='discover'&&request.paths!==undefined)||(request.action==='versions'&&(!Array.isArray(request.paths)||request.paths.length>500||request.paths.some(file=>!validLocalPath(file)||!file.toLowerCase().endsWith('.exe')))))throw new Error('Windows metadata response was invalid.');
+  const script=readFile(path.join(__dirname,'installed-scan.ps1'),'utf8');
+  const root=typeof systemRoot==='string'&&/^[A-Za-z]:\\[^\0-\x1f]*$/.test(systemRoot)?systemRoot:'C:\\Windows';
+  const home=path.win32.join(root,'System32','WindowsPowerShell','v1.0');
   return new Promise((resolve,reject)=>{
-    const child=spawn(executable,['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,stdio:['pipe','pipe','pipe']});
-    let out='',err='',done=false;
+    const child=spawnImpl(path.win32.join(home,'powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,stdio:['pipe','pipe','ignore'],env:scanEnvironment(env,path.win32.join(home,'Modules'))});
+    let out='',done=false;
     const partial=()=>out.trim().split(/\r?\n/).filter(Boolean).flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
-    const timer=setTimeout(()=>{child.kill();if(request.action==='versions')finish(null,{items:partial(),timedOut:true});else finish(new Error('Local registration inspection timed out.'));},request.action==='versions'?45000:20000);
+    const timer=setTimeout(()=>{child.kill();if(request.action==='versions')finish(null,{items:partial(),timedOut:true});else finish(new Error('Local registration inspection timed out.'));},timeoutMs??(request.action==='versions'?45000:20000));
     function finish(error,value){if(done)return;done=true;clearTimeout(timer);error?reject(error):resolve(value);}
     child.stdout.on('data',chunk=>{out+=chunk.toString('utf8');if(out.length>6*1024*1024){child.kill();finish(new Error('Inventory response exceeded its limit.'));}});
-    child.stderr.on('data',chunk=>{if(err.length<2000)err+=chunk.toString('utf8');});
+    child.stdout.on('error',()=>{child.kill();finish(new Error('Windows metadata inspection could not finish.'));});
     child.on('error',e=>finish(e));child.on('close',code=>{if(done)return;if(request.action==='versions')return finish(null,{items:partial(),timedOut:code!==0});if(code!==0)return finish(new Error('Windows metadata inspection could not finish.'));try{finish(null,JSON.parse(out.trim().replace(/^\uFEFF/,'')));}catch{finish(new Error('Windows metadata response was invalid.'));}});
     child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(request));
   });
@@ -242,4 +253,4 @@ async function scanInstalledGames({extraFolders=[],onProgress}={}) {
   return {games:complete,scannedAt:new Date().toISOString(),locations:[...locations],warnings:[...warnings]};
 }
 module.exports={scanInstalledGames};
-module.exports._test={scanWarning,parseVdf,libraryRootsFromVdf,parseSteamManifest,parseEpicManifest,parseUninstall,meaningfulVersion,validLocalPath,inside,executableScore,mergeGame,applyVersionMetadata,findExecutables,readSmall};
+module.exports._test={scanWarning,parseVdf,libraryRootsFromVdf,parseSteamManifest,parseEpicManifest,parseUninstall,meaningfulVersion,validLocalPath,inside,executableScore,mergeGame,applyVersionMetadata,findExecutables,readSmall,runPowerShell,scanEnvironment};

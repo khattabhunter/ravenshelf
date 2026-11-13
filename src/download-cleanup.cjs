@@ -1,4 +1,5 @@
 'use strict';
+const {isWindowsDeviceName}=require('./safe-name.cjs');
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
@@ -18,7 +19,7 @@ const pathKey=value=>process.platform==='win32'?value.toLowerCase():value;
 function bad(){throw new Error(UNSAFE);}
 function within(root,target){const relative=path.relative(root,target);return !path.isAbsolute(relative)&&relative!=='..'&&!relative.startsWith('..'+path.sep);}
 function local(value){if(typeof value!=='string'||!value||value.length>2048||!path.isAbsolute(value)||/^[\\/]{2}/.test(value)||/[\0-\x1f]/.test(value))bad();return path.resolve(value);}
-function filename(value){return typeof value==='string'&&value.length>0&&value.length<=255&&!/[\\/<>:"|?*\0-\x1f\x7f]/.test(value)&&!/[. ]$/.test(value)&&!/^\.{1,2}$/.test(value)&&!/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(value);}
+function filename(value){return typeof value==='string'&&value.length>0&&value.length<=255&&!/[\\/<>:"|?*\0-\x1f\x7f]/.test(value)&&!/[. ]$/.test(value)&&!/^\.{1,2}$/.test(value)&&!isWindowsDeviceName(value);}
 function idsOf(ids){if(!Array.isArray(ids)||!ids.length||ids.length>MAX_SELECTION||ids.some(id=>typeof id!=='string'||!id||id.length>200))throw new Error('Choose between 1 and 500 downloads.');return [...new Set(ids)].sort();}
 async function maybeStat(file){try{return await fs.promises.lstat(file,{bigint:true});}catch(error){if(error.code==='ENOENT')return null;throw error;}}
 async function ancestors(file){

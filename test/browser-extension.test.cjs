@@ -20,7 +20,7 @@ test('download plans keep local paths and private windows out, and match what th
   assert.deepEqual(P.downloadPlan({id:1,url:'https://a.example/x.zip',byExtensionId:'other'},on),{kind:'ignore'});
   for(const url of ['ftp://a.example/x.zip','file:///C:/x.zip','chrome://downloads/','https://a.example/'+'x'.repeat(8200)])assert.deepEqual(P.downloadPlan({id:1,url},on),{kind:'ignore'},url);
   const chrome=P.downloadPlan({id:1,url:'https://short.example/x',finalUrl:'https://cdn.example/game.zip',referrer:'https://page.example/p',filename:'C:\\Users\\Player\\Downloads\\game.zip',mime:'application/zip',totalBytes:1234,fileSize:0},on);
-  assert.deepEqual(chrome,{kind:'ask',message:{type:'capture',url:'https://short.example/x',incognito:false,finalUrl:'https://cdn.example/game.zip',referrer:'https://page.example/p',filename:'game.zip',mime:'application/zip',totalBytes:1234}});
+  assert.deepEqual(chrome,{kind:'ask',message:{type:'capture',url:'https://short.example/x',incognito:false,finalUrl:'https://cdn.example/game.zip',referrer:'https://page.example/',filename:'game.zip',mime:'application/zip',totalBytes:1234}});
   const firefox=P.downloadPlan({id:2,url:'https://cdn.example/a.rar',referrer:'moz-extension://abc/page.html',filename:'/home/player/Downloads/a.rar',totalBytes:-1,fileSize:-1},on);
   assert.deepEqual(firefox.message,{type:'capture',url:'https://cdn.example/a.rar',incognito:false,filename:'a.rar'},'non-web referrers, unknown sizes and folders are dropped');
   assert.equal(P.downloadPlan({id:3,url:'https://a.example/x',finalUrl:'https://a.example/x'},on).message.finalUrl,undefined,'an unchanged final address is not repeated');
@@ -204,7 +204,7 @@ test('protection lists sync into browser rules, and a refused rule does not cost
   assert.deepEqual(full.addRules[0].condition.requestDomains,['bad.example','worse.example']);
   assert.deepEqual(rules.at(-1),P.toggleRules({guard:true,protection:true,pausedUntil:0},Date.now()));
   assert.equal(b.store.local.listVersion,'v1');assert.equal(b.store.local.listTotal,3);assert.equal(b.store.local.status,'connected');
-  assert.deepEqual(b.of('menu').map(call=>call[1]),['ravenshelf-link','ravenshelf-page','ravenshelf-youtube']);
+  assert.deepEqual(b.of('menu').map(call=>call[1]),['ravenshelf-link','ravenshelf-image','ravenshelf-page','ravenshelf-youtube']);
   assert.ok(b.of('alarm').some(call=>call[0]==='alarm'&&call[1]==='ravenshelf-sync'));
   const before=b.of('native').length;
   b.api.alarms.onAlarm.emit({name:'ravenshelf-sync'});await tick(40);
@@ -351,6 +351,28 @@ test('while Ravenshelf is still fetching its lists, the extension looks again so
 });
 
 // ---- YouTube ----
+test('image menus send the image itself, minimize page context and exclude private or local images',async()=>{
+  for(const firefox of [false,true]){
+    const b=fakeBrowser({firefox,native:()=>({ok:true,action:'take',id:'image'})});
+    const menu=firefox?b.api.menus:b.api.contextMenus;
+    const click=(srcUrl,tab={id:2,incognito:false})=>menu.onClicked.emit({menuItemId:'ravenshelf-image',srcUrl,linkUrl:'https://other.example/linked-page',pageUrl:'https://page.example/private/account?token=synthetic-secret#fragment'},tab);
+    click('https://images.example/photo.png?signature=keep');await tick();
+    assert.deepEqual(b.of('native').map(call=>call[1]),[{v:1,type:'send',kind:'link',url:'https://images.example/photo.png?signature=keep',pageUrl:'https://page.example/'}]);
+    click('https://images.example/private.png',{id:3,incognito:true});
+    for(const url of ['data:image/png;base64,AAAA','blob:https://page.example/id','file:///C:/private.png','javascript:alert(1)',undefined])click(url);
+    await tick();assert.equal(b.of('native').length,1);
+    assert.doesNotThrow(()=>protocol.validateRequest(b.of('native')[0][1]));
+  }
+});
+
+test('captured page context is minimized before native messaging without losing Nexus matching',()=>{
+  const url='https://files.example/a.zip?signature=needed';
+  const plan=P.downloadPlan({url,referrer:'https://page.example/account?private=synthetic-secret#hidden',filename:'a.zip'},{capture:true});
+  assert.equal(plan.message.url,url);assert.equal(plan.message.referrer,'https://page.example/');
+  for(const referrer of ['https://user:secret@page.example/account','http://router.local/admin','https://127.0.0.1/private'])
+    assert.equal(P.downloadPlan({url,referrer},{capture:true}).message.referrer,undefined);
+});
+
 const VIDEO='aqz-KE-bpKQ',CANONICAL=`https://www.youtube.com/watch?v=${VIDEO}`;
 const fromYouTube=(b,msg,{url=`https://www.youtube.com/watch?v=${VIDEO}&t=5`,frameId=0,tab={id:5,incognito:false}}={})=>new Promise(resolve=>{
   const handled=b.api.runtime.onMessage.emit(msg,{id:'self',url,tab,frameId},value=>resolve(own(value)))[0];
@@ -426,7 +448,7 @@ test('a file downloaded on Nexus Mods is sent to Ravenshelf with its game and mo
   await startDownload(b,{id:2,url:mirror,referrer:'https://mirror.example/page',filename:MOD_FILE});
   assert.equal(captures(b)[1].mod,undefined);
   await startDownload(b,{id:3,url:mirror,referrer:MOD_URL,filename:MOD_FILE});
-  assert.deepEqual(captures(b)[2],{v:1,type:'capture',url:mirror,incognito:false,referrer:MOD_URL,filename:MOD_FILE});
+  assert.deepEqual(captures(b)[2],{v:1,type:'capture',url:mirror,incognito:false,referrer:'https://www.nexusmods.com/',filename:MOD_FILE});
   // Other downloads are sent exactly as before.
   await startDownload(b,{id:4,url:'https://cdn.example/game.zip',filename:'game.zip'});
   assert.deepEqual(captures(b)[3],{v:1,type:'capture',url:'https://cdn.example/game.zip',incognito:false,filename:'game.zip'});
@@ -779,7 +801,7 @@ test('the extension learns the app language when it says hello, and its menu and
   await b.message({cmd:'status'});await tick(30);
   assert.equal(b.store.local.appLanguage,'ar');assert.equal(b.store.local.appDigits,'arab');
   const titles=b.of('menu').map(call=>call[2]);
-  assert.deepEqual(titles.slice(-3),[TEXT.AR['Download with Ravenshelf'],TEXT.AR['Download this file with Ravenshelf'],TEXT.AR['Download this video with Ravenshelf']]);
+  assert.deepEqual(titles.slice(-4),[TEXT.AR['Download with Ravenshelf'],TEXT.AR['Download this image with Ravenshelf'],TEXT.AR['Download this file with Ravenshelf'],TEXT.AR['Download this video with Ravenshelf']]);
   // A reason the app sends is already in its language and is shown as it is.
   b.api.contextMenus.onClicked.emit({menuItemId:'ravenshelf-link',linkUrl:'https://cdn.example/a.zip',pageUrl:'https://example.com/'},{incognito:false});await tick(30);
   assert.deepEqual(b.of('notify').at(-1),['notify',TEXT.AR['Ravenshelf blocked this link'],'\u0646\u0635 \u0645\u0646 \u0627\u0644\u062a\u0637\u0628\u064a\u0642']);
@@ -787,7 +809,7 @@ test('the extension learns the app language when it says hello, and its menu and
   language='en';const before=b.of('menu').length;
   await b.message({cmd:'status'});await tick(30);
   assert.equal(b.store.local.appLanguage,'en');
-  assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
+  assert.deepEqual(b.of('menu').slice(before).map(call=>call[2]),['Download with Ravenshelf','Download this image with Ravenshelf','Download this file with Ravenshelf','Download this video with Ravenshelf']);
   // An answer with an unknown language changes nothing.
   language='fr';await b.message({cmd:'status'});await tick(30);assert.equal(b.store.local.appLanguage,'en');
 });

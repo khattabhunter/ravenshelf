@@ -1,4 +1,5 @@
 'use strict';
+const {isWindowsDeviceName}=require('./safe-name.cjs');
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
@@ -11,7 +12,7 @@ function failure(code){const error=new Error(code);error.safeCode=code;return er
 function safeRelative(value){
   if(typeof value!=='string'||!value||value.length>512||/[\0-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(value)||path.posix.isAbsolute(value)||path.win32.isAbsolute(value)||/[<>:"|?*]/.test(value))throw failure('MANIFEST_PATH');
   const parts=value.replace(/\\/g,'/').split('/');
-  if(parts.length>32||parts.some(part=>!part||part==='.'||part==='..'||part!==part.trim()||/[. ]$/.test(part)||/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part)))throw failure('MANIFEST_PATH');
+  if(parts.length>32||parts.some(part=>!part||part==='.'||part==='..'||part!==part.trim()||/[. ]$/.test(part)||isWindowsDeviceName(part)))throw failure('MANIFEST_PATH');
   return parts.join('/');
 }
 function local(value){

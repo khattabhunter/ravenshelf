@@ -22,6 +22,29 @@ test('fixed landing page uses shared Chromium session without stale credentials 
   assert.equal(request.options.credentials,'include');assert.equal(request.options.redirect,'manual');assert.equal(request.options.bypassCustomProtocolHandlers,true);
   for(const name of ['user-agent','cookie','authorization'])assert.equal(request.options.headers.has(name),false);
 });
+test('Chromium page and form requests send clean referrers without page tokens or fragments',async()=>{
+  const f=fixture();
+  await f.fastFetch(page,{headers:{Referer:'https://fuckingfast.co/abcdefgh1234?private=synthetic-secret#private-fragment','HX-Current-URL':'https://fuckingfast.co/abcdefgh1234?private=other-secret#private-fragment'}});
+  const headers=f.calls.find(call=>call.kind==='page').options.headers;
+  assert.equal(headers.get('Referer'),'https://fuckingfast.co/abcdefgh1234');
+  assert.equal(headers.get('HX-Current-URL'),'https://fuckingfast.co/abcdefgh1234');
+  for(const value of ['https://user:password@page.example/private','https://127.0.0.1/private','https://printer.local/private','http://page.example/private']){
+    const denied=fixture();await denied.fastFetch(page,{headers:{Referer:value,'HX-Current-URL':value}});
+    const sent=denied.calls.find(call=>call.kind==='page').options.headers;
+    assert.equal(sent.has('Referer'),false);assert.equal(sent.has('HX-Current-URL'),false);
+  }
+});
+test('a page redirect to a file origin drops the referrer path before Node receives it',async()=>{
+  const f=fixture({fetcher:async()=>new Response(null,{status:302,headers:{location:direct}})});
+  const response=await f.fastFetch(page,{headers:{Referer:'https://fuckingfast.co/abcdefgh1234?token=synthetic-secret#filename','HX-Current-URL':'https://fuckingfast.co/abcdefgh1234?token=another-secret#filename'}});
+  await response.body?.cancel();
+  assert.equal(f.calls.find(call=>call.kind==='page').options.headers.get('Referer'),'https://fuckingfast.co/abcdefgh1234');
+  assert.equal(f.calls.find(call=>call.kind==='file').options.headers.get('Referer'),'https://fuckingfast.co/');
+  assert.equal(f.calls.find(call=>call.kind==='page').options.headers.get('HX-Current-URL'),'https://fuckingfast.co/abcdefgh1234');
+  assert.equal(f.calls.find(call=>call.kind==='file').options.headers.get('HX-Current-URL'),'https://fuckingfast.co/');
+  const initial=fixture();await(await initial.fastFetch(direct,{headers:{Referer:'https://fuckingfast.co/abcdefgh1234#filename'}})).body?.cancel();
+  assert.equal(initial.calls.find(call=>call.kind==='file').options.headers.get('Referer'),'https://fuckingfast.co/abcdefgh1234','an intentional initial provider request may keep its clean page path');
+});
 test('arbitrary sites, subdomain pages, paths, query strings and methods cannot enter Chromium transport',async()=>{
   const f=fixture();
   for(const url of ['https://evil.example/abcdefgh','https://fuckingfast.co.evil.example/abcdefgh','https://cdn.fuckingfast.co/abcdefgh','https://fuckingfast.co/ads/show','https://fuckingfast.co/abcdefgh?redirect=bad','https://127.0.0.1/file','http://fuckingfast.co/abcdefgh'])await assert.rejects(f.fastFetch(url));

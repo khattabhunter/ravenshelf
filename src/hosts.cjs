@@ -19,6 +19,13 @@ const isPixeldrainHost=host=>{const h=lower(host).replace(/^www\./,'');return PI
 const MULTIUP_HOSTS=Object.freeze(['multiup.io','multiup.org']);
 const isMultiupHost=host=>{const h=lower(host).replace(/^www\./,'');return MULTIUP_HOSTS.includes(h);};
 
+// The app's provider resolvers may deliberately need a clean page path as a
+// referrer. Ordinary browser files retain only the page's origin. Keep this
+// host distinction shared by the browser bridge and saved download state.
+const PROVIDER_ROOTS=Object.freeze(['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com',...PIXELDRAIN_HOSTS,...PASTE_HOSTS]);
+const EXACT_PROVIDER_ROOTS=new Set([...PIXELDRAIN_HOSTS,...PASTE_HOSTS]);
+const isDownloadProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||(!EXACT_PROVIDER_ROOTS.has(root)&&host.endsWith('.'+root)))||isPixeldrainHost(host);};
+
 // Hosts that have shut down. Ravenshelf never contacts them: an expired name
 // can be bought by someone else (one LetsUpload address now shows gambling spam).
 const CLOSED_HOSTS=Object.freeze([
@@ -33,4 +40,4 @@ const closedByLabel=label=>{const text=String(label||'').toLowerCase();return CL
 // Files on these hosts are fetched over one connection, as their free service allows.
 const oneConnection=url=>isPixeldrainHost(hostOf(url));
 
-module.exports={PASTE_HOSTS,isPasteHost,PIXELDRAIN_HOSTS,isPixeldrainHost,MULTIUP_HOSTS,isMultiupHost,CLOSED_HOSTS,closedHost,closedByLabel,oneConnection,hostOf};
+module.exports={PASTE_HOSTS,isPasteHost,PIXELDRAIN_HOSTS,isPixeldrainHost,MULTIUP_HOSTS,isMultiupHost,CLOSED_HOSTS,closedHost,closedByLabel,oneConnection,hostOf,PROVIDER_ROOTS,isDownloadProvider};

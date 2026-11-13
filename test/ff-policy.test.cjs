@@ -33,6 +33,7 @@ function networkFixture(fetcher){
     if(name==='undici')return {Agent:class{},fetch:fetcher};
     if(name==='./ff-policy.cjs')return require('../src/ff-policy.cjs');
     if(name==='./hosts.cjs')return require('../src/hosts.cjs');
+    if(name==='./referrer-policy.cjs')return require('../src/referrer-policy.cjs');
     return require(name);
   }};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/net.cjs'),'utf8'),sandbox);

@@ -180,4 +180,23 @@ function readTorrent(buffer,infoHash){
   return {infoHash,name,files,totalLength:total,pieceLength};
 }
 
-module.exports={MESSAGES,parseMagnet,readTorrent,decode,base32Hex};
+// The info-hash authenticates only the info dictionary, not trackers, web
+// seeds, comments or other top-level fields. Never pass those untrusted fields
+// from a saved or returned metadata file to aria2. Keep the exact hashed bytes
+// and rebuild the small outer dictionary from the reviewed magnet's trackers.
+function sanitizeTorrent(buffer,infoHash,trackers=[]){
+  readTorrent(buffer,infoHash);
+  if(!Array.isArray(trackers)||trackers.length>MAX_TRACKERS||trackers.some(value=>typeof value!=='string'||value.length>MAX_TRACKER))throw new Error(MESSAGES.damaged);
+  const allowed=parseMagnet('magnet:?xt=urn:btih:'+infoHash+trackers.map(value=>'&tr='+encodeURIComponent(value)).join('')).trackers;
+  const bytes=value=>{const content=Buffer.from(value,'utf8');return Buffer.concat([Buffer.from(content.length+':'),content]);};
+  const parts=[Buffer.from('d')];
+  if(allowed.length){
+    parts.push(bytes('announce'),bytes(allowed[0]),bytes('announce-list'),Buffer.from('l'));
+    for(const tracker of allowed)parts.push(Buffer.from('l'),bytes(tracker),Buffer.from('e'));
+    parts.push(Buffer.from('e'));
+  }
+  parts.push(bytes('info'),decode(buffer).info,Buffer.from('e'));
+  return Buffer.concat(parts);
+}
+
+module.exports={MESSAGES,parseMagnet,readTorrent,sanitizeTorrent,decode,base32Hex};

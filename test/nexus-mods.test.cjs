@@ -903,7 +903,7 @@ test('a finished mod file keeps only the plain address of its link',async t=>{
   q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip',referer:'https://page.example/'})],gameTitle:'Browser downloads'});
   await q.finished();
   const [mod,plain]=q.manager.downloads,address=CDN.split('?')[0];
-  assert.equal(server.requests[0].referer,FILE_URL);
+  assert.equal(server.requests[0].referer,'https://www.nexusmods.com/');
   assert.equal(mod.status,'completed',mod.error);assert.equal(plain.status,'completed',plain.error);
   assert.equal(server.requests[0].url,CDN,'the whole link is what was fetched');
   // The part after "?" is a signed pass with the account's number in it. It was needed to fetch the file, and is not kept after that.
@@ -912,8 +912,8 @@ test('a finished mod file keeps only the plain address of its link',async t=>{
   assert.equal(q.manager.state().downloads[0].url,address,'so the window does not show it');
   const saved=fs.readFileSync(q.options.stateFile,'utf8');
   assert.ok(saved.includes(address));assert.doesNotMatch(saved,/user_id|md5=|expires=/,'and it is not left on disk');
-  // Other downloads keep their address as it was.
-  assert.equal(plain.url,ordinary);assert.equal(plain.sourceUrl,ordinary);assert.deepEqual(plain.headers,{Referer:'https://page.example/'});
+  // Finished ordinary browser downloads also discard temporary URL tokens.
+  assert.equal(plain.url,ordinary.split('?')[0]);assert.equal(plain.sourceUrl,ordinary.split('?')[0]);assert.deepEqual(plain.headers,{});
   // A mod download that has not finished keeps its link: it needs it to carry on.
   const refusing=queueFor(t,{fetch:async()=>new Response('busy',{status:500,headers:{'content-type':'text/html'}})});
   refusing.manager.add({links:[modLink()],gameTitle:mods.modFolder(LABEL),group:mods.MODS_FOLDER});await refusing.finished();
@@ -1209,7 +1209,7 @@ test('a cancelled mod download gives up its link at once, and takes a new one fr
   const {ids:[id]}=q.manager.add({links:[modLink({size,referer:FILE_URL})],...PLACE});
   q.manager.action(id,'pause');await q.finished();
   const d=q.manager.downloads[0];
-  assert.equal(d.status,'paused');assert.equal(d.url,CDN,'a paused download keeps its link: it needs it to carry on');assert.deepEqual(d.headers,{Referer:FILE_URL});
+  assert.equal(d.status,'paused');assert.equal(d.url,CDN,'a paused download keeps its link: it needs it to carry on');assert.deepEqual(d.headers,{Referer:'https://www.nexusmods.com/'});
   // Part of the file had arrived.
   fs.writeFileSync(path.join(d.folder,d.name+'.atlas-part'),server.payload.subarray(0,MiB));Object.assign(d,{received:MiB,total:size,etag:'"v1"'});
   q.manager.action(id,'cancel');
@@ -1228,7 +1228,7 @@ test('a cancelled mod download gives up its link at once, and takes a new one fr
   assert.equal(Object.hasOwn(d,'needsNewLink'),false);
   await q.finished();
   assert.equal(d.status,'completed',d.error);
-  assert.deepEqual(server.requests.map(request=>[request.url,request.range,request.referer]),[[fresh,`bytes=${MiB}-`,PAGE_URL]]);
+  assert.deepEqual(server.requests.map(request=>[request.url,request.range,request.referer]),[[fresh,`bytes=${MiB}-`,'https://www.nexusmods.com/']]);
   assert.ok(fs.readFileSync(path.join(d.folder,d.name)).equals(server.payload));
   assert.equal(d.url,address);assert.deepEqual(d.headers,{});
   // Cancelled while it runs, or after it failed: the same.
@@ -1270,7 +1270,7 @@ test('a cancelled mod download gives up its link at once, and takes a new one fr
   const twice=q.manager.add({links:[modLink({mod:undefined,url:ordinary,sourceUrl:ordinary,filename:'game.zip',size})],gameTitle:'Browser downloads'});
   assert.equal(twice.added,1);assert.notEqual(twice.ids[0],plainId);assert.equal(q.manager.downloads.find(item=>item.id===twice.ids[0]).name,'game (1).zip');
   q.manager.action(plainId,'retry');await q.finished();
-  assert.equal(plain.status,'completed',plain.error);assert.equal(plain.url,ordinary);
+  assert.equal(plain.status,'completed',plain.error);assert.equal(plain.url,ordinary.split('?')[0]);
 });
 
 test('what Ravenshelf 0.7.0 still kept of a finished or cancelled mod downloadâ€™s link is dropped when the app starts',async t=>{
@@ -1292,10 +1292,13 @@ test('what Ravenshelf 0.7.0 still kept of a finished or cancelled mod downloadâ€
   // Finished: 0.7.0 had already dropped the link, but kept the page address.
   assert.equal(now['done.7z'].url,plainAddress('done.7z'));assert.deepEqual(now['done.7z'].headers,{});assert.equal(Object.hasOwn(now['done.7z'],'needsNewLink'),false);
   // Paused or failed: still needed.
-  for(const name of ['paused.7z','failed.7z']){assert.equal(now[name].url,cdnFile(name),name);assert.deepEqual(now[name].headers,{Referer:FILE_URL},name);assert.equal(Object.hasOwn(now[name],'needsNewLink'),false,name);}
-  // Anything that is not a Nexus Mods file from the browser is left as it was.
-  for(const name of ['plain.zip','plain-done.zip'])assert.equal(now[name].url,`https://cdn.example/${name}?token=1`,name);
-  assert.equal(now['elsewhere.7z'].url,cdnFile('elsewhere.7z'));assert.equal(Object.hasOwn(now['elsewhere.7z'],'needsNewLink'),false);
+  for(const name of ['paused.7z','failed.7z']){assert.equal(now[name].url,cdnFile(name),name);assert.deepEqual(now[name].headers,{Referer:'https://www.nexusmods.com/'},name);assert.equal(Object.hasOwn(now[name],'needsNewLink'),false,name);}
+  // Ordinary cancelled links still support Retry; finished links no longer need tokens.
+  assert.equal(now['plain.zip'].url,'https://cdn.example/plain.zip?token=1');
+  assert.equal(now['plain-done.zip'].url,'https://cdn.example/plain-done.zip');
+  // An invalid mod label is quarantined, while the original state is recoverable.
+  assert.equal(now['elsewhere.7z'],undefined);assert.match(manager.stateRecoveryWarning,/original library was preserved/);
+  const backup=fs.readdirSync(root).find(name=>name.startsWith('state.json.recovery-'));assert.ok(backup);assert.equal(fs.readFileSync(path.join(root,backup),'utf8'),written);
   // And it is written back at once, not at some later change.
   const saved=Object.fromEntries(JSON.parse(fs.readFileSync(stateFile,'utf8')).downloads.map(d=>[d.name,d]));
   assert.equal(saved['cancelled.7z'].url,plainAddress('cancelled.7z'));assert.equal(saved['cancelled.7z'].needsNewLink,true);

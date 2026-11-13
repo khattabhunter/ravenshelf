@@ -35,6 +35,7 @@
     'Ravenshelf stopped {name} that a web page created for download. Programs made this way are a common malware trick.': 'أوقف Ravenshelf الملف {name} الذي أنشأته صفحة ويب للتنزيل. البرامج المصنوعة بهذه الطريقة حيلة شائعة للبرمجيات الضارة.',
     'Ravenshelf stopped a program that a web page created for download. Programs made this way are a common malware trick.': 'أوقف Ravenshelf برنامجًا أنشأته صفحة ويب للتنزيل. البرامج المصنوعة بهذه الطريقة حيلة شائعة للبرمجيات الضارة.',
     'Download with Ravenshelf': 'التنزيل باستخدام Ravenshelf',
+    'Download this image with Ravenshelf': 'تنزيل هذه الصورة باستخدام Ravenshelf',
     'Download this file with Ravenshelf': 'تنزيل هذا الملف باستخدام Ravenshelf',
     'Download this video with Ravenshelf': 'تنزيل هذا الفيديو باستخدام Ravenshelf',
     'Private window': 'نافذة خاصة',

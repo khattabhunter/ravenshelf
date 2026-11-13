@@ -75,12 +75,12 @@ test('names come from the final address when the site sends none',()=>{
 
 test('a direct file is inspected with one ranged request and no cookies',async()=>{
   const {fetcher,calls}=fetcherFrom({'https://files.example/get/1':file()});
-  const result=await inspectLink('https://files.example/get/1',{fetcher,referer:'https://page.example/item'});
+  const result=await inspectLink('https://files.example/get/1',{fetcher,referer:'https://page.example/private-account?token=synthetic-secret#hidden'});
   assert.equal(result.status,'ready');assert.equal(result.filename,'Setup.exe');assert.equal(result.size,123456);assert.equal(result.sniffed,'windows-program');
   assert.equal(calls.length,1);
   const {options}=calls[0];
   assert.equal(options.redirect,'manual');assert.equal(options.method,'GET');
-  assert.equal(options.headers.Range,`bytes=0-${SNIFF_BYTES-1}`);assert.equal(options.headers.Referer,'https://page.example/item');
+  assert.equal(options.headers.Range,`bytes=0-${SNIFF_BYTES-1}`);assert.equal(options.headers.Referer,'https://page.example/');
   assert.equal(options.headers.Cookie,undefined);assert.equal(options.headers['Accept-Encoding'],'identity');
   assert.deepEqual(result.chain.map(hop=>hop.host),['files.example']);
 });
@@ -92,7 +92,7 @@ test('redirects are followed one hop at a time and recorded',async()=>{
     'https://mid.example/z':redirect('https://cdn.example/file.zip',301),
     'https://cdn.example/file.zip':file(Buffer.from([0x50,0x4b,3,4]),{'content-disposition':'attachment; filename="file.zip"','content-range':'bytes 0-3/999'})
   });
-  const result=await inspectLink('https://short.example/x',{fetcher,referer:'https://page.example/'});
+  const result=await inspectLink('https://short.example/x',{fetcher,referer:'https://page.example/account?private=synthetic-secret#hidden'});
   assert.equal(result.status,'ready');assert.equal(result.url,'https://cdn.example/file.zip');assert.equal(result.sourceUrl,'https://short.example/x');
   assert.deepEqual(result.chain.map(hop=>hop.host),['short.example','mid.example','mid.example','cdn.example']);
   assert.equal(calls[0].options.headers.Referer,'https://page.example/');

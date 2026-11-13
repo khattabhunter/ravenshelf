@@ -50,6 +50,16 @@
   }
   function extensionOf(name) { const match = /\.([a-z0-9-]{1,24})$/i.exec(String(name || '').trim().replace(/[. ]+$/, '')); return match ? match[1].toLowerCase() : ''; }
   function schemeOf(url) { try { return new URL(url).protocol; } catch (error) { return ''; } }
+  // Page context is never a download URL: send only its public origin to the
+  // app, without page paths, query tokens, fragments or credentials.
+  function contextOrigin(value) {
+    if (typeof value !== 'string' || !value || value.length > MAX_URL || /[\x00-\x20\x7f]/.test(value)) return undefined;
+    let url; try { url = new URL(value); } catch (error) { return undefined; }
+    const host = url.hostname.toLowerCase();
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || !host.includes('.') || host.endsWith('.') ||
+      host.includes(':') || /^[\d.]+$/.test(host) || /(?:^|\.)(?:localhost|local|localdomain|internal|lan)$/.test(host) || host === 'home.arpa' || host.endsWith('.home.arpa')) return undefined;
+    return url.origin + '/';
+  }
 
   // What to do with a download the browser is starting, before asking the app.
   // `context` holds what open Nexus Mods pages reported ({ pages, now }), so a
@@ -75,7 +85,8 @@
     const referrer = typeof item.referrer === 'string' && ['http:', 'https:'].includes(schemeOf(item.referrer)) && item.referrer.length <= MAX_URL ? item.referrer : undefined;
     const message = { type: 'capture', url, incognito: false };
     if (finalUrl) message.finalUrl = finalUrl;
-    if (referrer) message.referrer = referrer;
+    const contextReferrer = contextOrigin(referrer);
+    if (contextReferrer) message.referrer = contextReferrer;
     if (filename && filename.length <= 1024) message.filename = filename;
     if (typeof item.mime === 'string' && item.mime && item.mime.length <= 200 && !/[\x00-\x1f\x7f]/.test(item.mime)) message.mime = item.mime;
     if (size) message.totalBytes = size;
@@ -303,7 +314,7 @@
     if (/forbidden/i.test(text)) return 'not-allowed';
     return 'unavailable';
   }
-  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusFile, nexusMatch };
+  const policy = { HOST_NAME, PROTECTED_HOSTS, SEND_PAGE_HOSTS, SEND_PAGE_PATTERNS, THREAT_RESOURCE_TYPES, RULE_IDS, THREAT_RULE_IDS, CATEGORIES, YOUTUBE_PAGE_PATTERNS, PLAYER_CHOICES, MEDIA_QUALITIES, hostOf, onHosts, protectedRoot, baseName, extensionOf, contextOrigin, downloadPlan, threatRule, guardRule, allowAllRule, ruleCategory, toggleRules, popupVerdict, canSendPage, nativeError, youtubeVideoId, youtubeUrl, mediaReplyText, NEXUS_HOST, NEXUS_FILE_ROOTS, NEXUS_PAGE_MS, NEXUS_MAX_FILES, nexusId, nexusText, nexusAddress, nexusKey, nexusLooseKey, nexusPage, nexusFile, nexusMatch };
   if (typeof module === 'object' && module.exports) module.exports = policy;
   else root.RavenshelfPolicy = Object.freeze(policy);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
