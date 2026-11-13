@@ -160,6 +160,128 @@ function safeImageUrl(value) {
   }
   catch { return ''; }
 }
+// Pictures in this window this session: shown, switched to another picture,
+// or left as a placeholder. Counts only, never saved.
+const pictureStats = { shown: 0, fallbacks: 0, placeholders: 0 };
+// Cards try the source's own small thumbnails, then the cover. A favourite
+// saved with only a full-size RiotPixels picture also tries that picture's
+// thumbnail first. At most three pictures are tried.
+function cardImageCandidates(game) {
+  const listed = Array.isArray(game?.cardImages) ? game.cardImages.slice(0, 3) : [];
+  const fromImage = [];
+  if (typeof game?.image === 'string' && game.image) {
+    try {
+      const url = new URL(game.image);
+      if (/(?:^|\.)riotpixels\.(?:net|com)$/i.test(url.hostname) && /\.jpg$/i.test(url.pathname) && !/\.240p\.jpg$/i.test(url.pathname)) { url.pathname += '.240p.jpg'; fromImage.push(url.href); }
+    } catch {}
+    fromImage.push(game.image);
+  }
+  return [...new Set([...listed, ...fromImage].map(safeImageUrl).filter(Boolean))].slice(0, 3);
+}
+// The game page shows the full-size pictures, best first.
+function detailImageCandidates(game) {
+  const listed = Array.isArray(game?.imageCandidates) ? game.imageCandidates.slice(0, 3) : [];
+  return [...new Set([...listed, game?.image].map(safeImageUrl).filter(Boolean))].slice(0, 3);
+}
+// Electron doesn't tell Ravenshelf's picture loader when a picture leaves the
+// page, so each picture request carries a number. Whenever something leaves
+// the page, the numbers of waiting pictures no longer on it are reported, so
+// their requests are cancelled. The check runs only after something leaves.
+// Numbers start at a random point each time the window loads, so numbers
+// reported before a reload (a language change, say) can't match new pictures.
+const LAST_PICTURE_NUMBER = 999999999999999;
+let pictureNumber = (() => {
+  try { const value = new Uint32Array(2); crypto.getRandomValues(value); return (value[0] * 2 ** 32 + value[1]) % 900000000000000; }
+  catch { return Math.floor(Math.random() * 900000000000000); }
+})();
+const picturesOnPage = new Map();
+let pictureCheck = null;
+function numberedPicture(url, image) {
+  pictureNumber = pictureNumber >= LAST_PICTURE_NUMBER ? 1 : pictureNumber + 1;
+  picturesOnPage.set(pictureNumber, image);
+  return { src: `${url}&r=${pictureNumber}`, number: pictureNumber };
+}
+function checkLeftPictures() {
+  if (!pictureCheck && picturesOnPage.size) pictureCheck = setTimeout(reportLeftPictures, 300);
+}
+// One picture request on an image that tries no other picture.
+function setNumberedPicture(image, url) {
+  const request = numberedPicture(url, image);
+  const done = () => picturesOnPage.delete(request.number);
+  image.addEventListener('load', done, { once: true });
+  image.addEventListener('error', done, { once: true });
+  image.dataset.picture = url;
+  image.src = request.src;
+}
+function reportLeftPictures() {
+  pictureCheck = null;
+  const left = [];
+  for (const [number, image] of picturesOnPage) if (!image.isConnected) { picturesOnPage.delete(number); left.push(number); }
+  for (let index = 0; index < left.length && typeof api?.leavePictures === 'function'; index += 500) api.leavePictures(left.slice(index, index + 500)).catch(() => {});
+}
+if (typeof MutationObserver === 'function') new MutationObserver(records => { if (records.some(record => record.removedNodes.length)) checkLeftPictures(); }).observe(document.documentElement, { childList: true, subtree: true });
+// Loads the pictures one after another: one that fails moves on to the next,
+// and when none is left, onExhausted runs. A picture that has left the page
+// stops trying, so leaving a page never starts new requests.
+function loadPicture(image, candidates, { onExhausted } = {}) {
+  let index = 0, current = null;
+  const show = position => {
+    if (current) picturesOnPage.delete(current.number);
+    current = numberedPicture(candidates[position], image);
+    image.dataset.picture = candidates[position];
+    image.src = current.src;
+  };
+  image.addEventListener('load', () => { if (current) picturesOnPage.delete(current.number); if (image.isConnected) pictureStats.shown++; }, { once: true });
+  image.addEventListener('error', () => {
+    if (current) picturesOnPage.delete(current.number);
+    if (!image.isConnected) return;
+    index++;
+    if (index < candidates.length) { pictureStats.fallbacks++; show(index); return; }
+    pictureStats.placeholders++;
+    onExhausted?.();
+  });
+  show(0);
+}
+// Settings › Picture loading: what the main process counted this session, by
+// site, and what this window showed. Site names and counts only.
+const PICTURE_COUNTS = [
+  ['fetches', later('Requests sent: {n}')], ['loaded', later('Loaded: {n}')], ['memory', later('From memory: {n}')],
+  ['cancelled', later('Cancelled when leaving a page: {n}')], ['notFound', later('Not found (404): {n}')], ['refused', later('Refused (401/403): {n}')],
+  ['tooMany', later('Too many requests (429): {n}')], ['serverError', later('Site error (5xx): {n}')], ['otherStatus', later('Other reply: {n}')],
+  ['timeout', later('Timed out: {n}')], ['dns', later('Site name not found (DNS): {n}')], ['network', later('Connection failed: {n}')],
+  ['notImage', later('Not a picture: {n}')], ['tooLarge', later('Too large: {n}')], ['incomplete', later('Incomplete: {n}')],
+  ['blocked', later('Blocked for safety: {n}')], ['cooldown', later('Skipped while the site is paused: {n}')], ['busy', later('Waited too long for a turn: {n}')],
+  ['recentFailure', later('Skipped, failed a moment ago: {n}')]
+];
+function pictureSiteName(host) {
+  if (host === 'other sites') return t('Other sites');
+  if (host === 'invalid requests') return t('Invalid requests');
+  return String(host || '');
+}
+async function showPictureLoading() {
+  const box = $('#picture-loading-summary');
+  box.hidden = false;
+  let report;
+  try { report = await api.imageDiagnostics(); } catch (error) { box.replaceChildren(el('p', '', errorText(error))); return; }
+  const lines = [];
+  const sites = Array.isArray(report?.sites) ? report.sites : [];
+  if (!sites.length) lines.push(el('p', '', t('Nothing loaded yet in this session.')));
+  for (const site of sites) {
+    const counts = PICTURE_COUNTS.filter(([key]) => Number(site?.counts?.[key]) > 0).map(([key, text]) => t(text, { n: Number(site.counts[key]) }));
+    const line = el('p', '');
+    const name = el('strong', '', pictureSiteName(site?.host)); name.dir = 'ltr';
+    line.append(name, el('span', '', ' — ' + (counts.length ? counts.join(' · ') : t('Nothing loaded yet in this session.'))));
+    lines.push(line);
+  }
+  const pictures = report?.pictures || {};
+  lines.push(el('p', '', [t('Pictures that failed, then loaded later: {n}', { n: Number(pictures.failedThenLoaded) || 0 }), t('Pictures still failing: {n}', { n: Number(pictures.stillFailing) || 0 })].join(' · ')));
+  lines.push(el('p', '', Number.isInteger(pictures.firstFailureAfter) ? t('First failure after {n} pictures loaded.', { n: pictures.firstFailureAfter }) : t('No picture has failed yet.')));
+  for (const paused of Array.isArray(report?.pausedSites) ? report.pausedSites : []) lines.push(el('p', '', t('{site} asked for a pause: {n} s left.', { site: pictureSiteName(paused.host), n: Number(paused.seconds) || 0 })));
+  lines.push(el('p', '', t('In this window: {shown} shown · {fallbacks} switched to another picture · {placeholders} placeholders', { shown: pictureStats.shown, fallbacks: pictureStats.fallbacks, placeholders: pictureStats.placeholders })));
+  const cache = report?.cache || {};
+  lines.push(el('p', 'small-text', t('Kept in memory: {n} · {size} of {limit}', { n: Number(cache.pictures) || 0, size: formatBytes(Number(cache.bytes) || 0, t('{size} B', { size: 0 })), limit: formatBytes(Number(cache.limitBytes) || 0, t('{size} B', { size: 0 })) })));
+  box.replaceChildren(...lines);
+}
 function gameTitle(game) { return game?.title || t('Untitled game'); }
 // The same name as Ravenshelf keeps it: it names the game's download folder,
 // so it is never translated.
@@ -215,11 +337,11 @@ function makeGameCard(game) {
   open.dataset.gameUrl = game.url || '';
   open.setAttribute('aria-label', t('View {title}', { title: gameTitle(game) }));
   const cover = el('div', 'game-cover');
-  const imageUrl = safeImageUrl(game.image);
-  if (imageUrl) {
-    const image = el('img'); image.src = imageUrl; image.alt = ''; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer';
-    image.addEventListener('error', () => { image.remove(); cover.prepend(el('div', 'image-placeholder', 'R')); }, { once: true });
+  const candidates = cardImageCandidates(game);
+  if (candidates.length) {
+    const image = el('img'); image.alt = ''; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer';
     cover.append(image);
+    loadPicture(image, candidates, { onExhausted: () => { image.remove(); cover.prepend(el('div', 'image-placeholder', 'R')); } });
   } else cover.append(el('div', 'image-placeholder', 'R'));
   cover.append(el('span', 'cover-badge', t('REPACK')));
   if (Number.isInteger(game.sourceRank) && game.sourceRank > 0) {
@@ -383,13 +505,14 @@ async function openGame(game) {
 }
 function renderGameDetails(game) {
   const header = el('div', 'detail-top');
-  const imageUrl = safeImageUrl(game.image);
-  if (imageUrl) {
-    const image = el('img', 'detail-cover'); image.src = imageUrl; image.alt = t('{title} cover', { title: gameTitle(game) }); image.referrerPolicy = 'no-referrer';
-    const cover = button('', 'detail-cover-button', null, () => openLightbox([imageUrl,...screenshots],0,gameTitle(game),cover));
+  const coverImages = detailImageCandidates(game);
+  if (coverImages.length) {
+    const image = el('img', 'detail-cover'); image.alt = t('{title} cover', { title: gameTitle(game) }); image.referrerPolicy = 'no-referrer';
+    const cover = button('', 'detail-cover-button', null, () => openLightbox([image.dataset.picture || coverImages[0],...screenshots],0,gameTitle(game),cover));
     cover.setAttribute('aria-label', t('Enlarge {title} cover', { title: gameTitle(game) })); cover.append(image);
     image.addEventListener('load', () => { if (currentDetail?.url===game.url) applyCoverAccent(image); }, {once:true});
-    image.addEventListener('error', () => image.remove(), { once: true }); header.append(cover);
+    header.append(cover);
+    loadPicture(image, coverImages, { onExhausted: () => image.remove() });
   }
   const information = el('div', 'detail-info');
   information.append(el('div', 'eyebrow small', t('FITGIRL REPACK')));
@@ -411,7 +534,7 @@ function renderGameDetails(game) {
   const screenshots = (Array.isArray(game.screenshots) ? game.screenshots : []).map(safeImageUrl).filter(Boolean).slice(0, 10);
   if (screenshots.length) {
     const strip = el('div', 'screenshot-strip'); strip.setAttribute('aria-label', t('Game screenshots'));
-    screenshots.forEach((url, index) => { const image = el('img'); image.src = url; image.alt = t('Game screenshot {number}', { number: index + 1 }); image.loading = 'lazy'; image.referrerPolicy = 'no-referrer'; const enlarge=button('','screenshot-button',null,()=>openLightbox(screenshots,index,gameTitle(game),enlarge));enlarge.setAttribute('aria-label',t('Enlarge screenshot {number}', { number: index + 1 }));image.addEventListener('error', () => enlarge.remove(), { once: true });enlarge.append(image);strip.append(enlarge); });
+    screenshots.forEach((url, index) => { const image = el('img'); image.alt = t('Game screenshot {number}', { number: index + 1 }); image.loading = 'lazy'; image.referrerPolicy = 'no-referrer'; const enlarge=button('','screenshot-button',null,()=>openLightbox(screenshots,index,gameTitle(game),enlarge));enlarge.setAttribute('aria-label',t('Enlarge screenshot {number}', { number: index + 1 }));image.addEventListener('error', () => enlarge.remove(), { once: true });enlarge.append(image);strip.append(enlarge);setNumberedPicture(image, url); });
     body.append(strip);
   }
   const resources=el('section','game-resources'); body.append(resources); loadGameResources(game,resources);
@@ -1196,8 +1319,19 @@ function openLightbox(urls,index,title,opener=document.activeElement){
   lightboxIndex=Math.max(0,Math.min(lightboxItems.length-1,Number(index)||0));lightboxOpener=opener;
   dialog.dataset.title=String(title||t('Game image'));renderLightbox();showDialog(dialog);$('[data-close="image-dialog"]')?.focus();
 }
+// The enlarged picture stays in the page while you move between pictures, so
+// the one you move away from is reported here, not by the page check.
+let lightboxRequest=null;
+function leaveLightboxPicture(){
+  if(lightboxRequest&&picturesOnPage.delete(lightboxRequest.number)&&typeof api?.leavePictures==='function')api.leavePictures([lightboxRequest.number]).catch(()=>{});
+  lightboxRequest=null;
+}
+function showLightboxPicture(image,url){leaveLightboxPicture();lightboxRequest=numberedPicture(url,image);image.src=lightboxRequest.src;}
 function renderLightbox(){
-  const image=$('#lightbox-image'),dialog=$('#image-dialog'),original=lightboxItems[lightboxIndex],large=enlargedImage(original);image.onerror=()=>{if(image.src!==original)image.src=original;};image.src=large;image.alt=t('{title} · image {number} of {count}',{title:dialog.dataset.title,number:lightboxIndex+1,count:lightboxItems.length});
+  const image=$('#lightbox-image'),dialog=$('#image-dialog'),original=lightboxItems[lightboxIndex],large=enlargedImage(original);let triedOriginal=large===original;
+  image.onload=()=>{if(lightboxRequest)picturesOnPage.delete(lightboxRequest.number);};
+  image.onerror=()=>{if(!lightboxRequest)return;picturesOnPage.delete(lightboxRequest.number);if(!triedOriginal){triedOriginal=true;showLightboxPicture(image,original);}};
+  showLightboxPicture(image,large);image.alt=t('{title} · image {number} of {count}',{title:dialog.dataset.title,number:lightboxIndex+1,count:lightboxItems.length});
   $('#image-caption').textContent=image.alt;$('#previous-image').disabled=lightboxItems.length<2;$('#next-image').disabled=lightboxItems.length<2;
 }
 function enlargedImage(value){
@@ -1205,10 +1339,10 @@ function enlargedImage(value){
   try{const source=new URL(new URL(original).searchParams.get('url'));if(/(?:^|\.)riotpixels\.(?:net|com)$/i.test(source.hostname)){source.pathname=source.pathname.replace(/\.jpg\.240p\.jpg$/i,'.jpg');return safeImageUrl(source.href);}}catch{}
   return original;
 }
-function moveLightbox(step){if(lightboxItems.length){lightboxIndex=(lightboxIndex+step+lightboxItems.length)%lightboxItems.length;renderLightbox();}}
+function moveLightbox(step){if(lightboxItems.length>1){lightboxIndex=(lightboxIndex+step+lightboxItems.length)%lightboxItems.length;renderLightbox();}}
 // The arrow keys move the way the pictures run: in Arabic, the next picture is to the left.
 function lightboxKey(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();moveLightbox((event.key==='ArrowLeft')!==i18n.arabic?-1:1);}else if(event.key==='Escape'){event.preventDefault();$('#image-dialog').close();}}
-function restoreLightboxFocus(){if($('#image-dialog').open)return;const target=lightboxOpener;lightboxOpener=null;lightboxItems=[];$('#lightbox-image').removeAttribute('src');if(target?.isConnected!==false&&typeof target?.focus==='function')target.focus({preventScroll:true});else $('#catalog-heading')?.focus();}
+function restoreLightboxFocus(){if($('#image-dialog').open)return;const target=lightboxOpener;lightboxOpener=null;lightboxItems=[];leaveLightboxPicture();$('#lightbox-image').removeAttribute('src');if(target?.isConnected!==false&&typeof target?.focus==='function')target.focus({preventScroll:true});else $('#catalog-heading')?.focus();}
 function luminance(rgb){return rgb.map(value=>{const c=value/255;return c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4;}).reduce((sum,value,index)=>sum+value*[0.2126,0.7152,0.0722][index],0);}
 function readableAccent(rgb){
   const background=luminance([48,40,64]);let color=rgb.map(value=>Math.max(0,Math.min(255,Math.round(value))));
@@ -1538,6 +1672,7 @@ function wireFeatureEvents(){
   const openClipboard=()=>{showDialog($('#clipboard-dialog'));refreshClipboard();};$('#open-clipboard').addEventListener('click',openClipboard);$('#refresh-clipboard').addEventListener('click',refreshClipboard);
   const tray=button(t('Copied links'),'text-button',null,openClipboard);tray.id='clipboard-tray-button';tray.hidden=true;$('.top-actions').prepend(tray);
   $('#open-verification').addEventListener('click',async()=>{showDialog($('#verification-dialog'));if(typeof api?.getVerificationState==='function'){try{verificationState=await api.getVerificationState();}catch{}}renderVerification();});
+  $('#show-picture-loading').addEventListener('click',()=>{showPictureLoading();});
   $('#start-verification').addEventListener('click',async()=>{if(typeof api?.verifyFiles!=='function')return;$('#start-verification').disabled=true;try{verificationState=await api.verifyFiles()||{phase:'idle'};}catch(error){verificationState={phase:'error',error:errorText(error)};}renderVerification();});
   $('#cancel-verification').addEventListener('click',async()=>{if(typeof api?.cancelVerification!=='function')return;const control=$('#cancel-verification');control.disabled=true;try{verificationState=await api.cancelVerification();}catch(error){toast(errorText(error),true);}finally{control.disabled=false;renderVerification();}});
   renderFeatureSettings();renderDownloadSelection();

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.4 — Game pictures
+
+Improvements under test for game pictures that stop loading after browsing several pages. The cause is not confirmed yet, so this is not a confirmed fix.
+
+- **Pictures of pages you left are cancelled.** Electron never reported pictures leaving the page, so earlier versions kept downloading every picture of every page you passed, competing with the current page's. The window now reports them by request number, and their requests are cancelled; a picture another card still needs keeps loading.
+- **Controlled loading.** At most 4 requests go to one site at a time, in order. After a 429 (or a 503 with Retry-After), no picture from that site is requested for the time the site asks (5 seconds to 10 minutes, 60 seconds by default); its pictures wait for the pause and then load. No picture waits more than 90 seconds for its turn.
+- **Fallback without endless retries.** A card tries at most 3 pictures, then shows the placeholder. Cards whose cover is on imageban.ru try the post's small screenshot thumbnails first. A failed picture is skipped for 2 minutes.
+- **Memory-only picture cache.** Up to 40 MB of downloaded picture data (400 pictures, 4 MB each), each dropped after 30 minutes, never written to disk. The limit counts downloaded bytes only, not Ravenshelf's total memory.
+- **Settings → Picture loading.** A summary of this session by site and failure type (404, 429, timeout, DNS and others), with cancellations counted apart from failures. Site names and counts only; kept in memory, never saved or sent.
+- Picture safety checks are unchanged. The browser extension did not change. See [release notes](docs/RELEASE-0.10.4.md).
+
+Checks: 1,249 automated tests (on Linux 1,210 passed and 39 Windows-only tests were skipped), six independent reviews, and real-app runs on a simulated internet: with a site that limits requests, 0.10.3 showed 40 of 130 pictures and 0.10.4 showed 130 of 130; memory levelled off. The real sites and Windows were not tested, so this is not a confirmed fix.
+
 ## 0.10.3 — Background mode and browser saves
 
 - **Choose what closing the window does.** By default Ravenshelf asks whether to keep running in the background (with a tray icon), exit, or cancel; a remembered choice can be changed in Settings. Background mode keeps downloads and the services you turned on running while the PC is awake. It does not add Windows autostart. A minimized window comes back before the question opens, and a tray icon that can't be shown keeps the window open.

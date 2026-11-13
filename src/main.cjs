@@ -6,7 +6,7 @@ const {execFile}=require('node:child_process');
 const {DownloadManager,safeName,atomicJSON,loadJSON}=require('./downloads.cjs');
 const {gameFolder,SESSION_ONLY}=require('./library-state.cjs');
 const {safeURL}=require('./net.cjs');
-const {imageResponse}=require('./image-loader.cjs');
+const {createImageService}=require('./image-loader.cjs');
 const {createHeaderVault}=require('./header-vault.cjs');
 const {createDefenderScanner}=require('./defender-scan.cjs');
 const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
@@ -182,11 +182,14 @@ app.whenReady().then(async()=>{
   // The window's language and its texts, written for the current settings
   // each time the window loads (see i18n.cjs).
   const localeScript=()=>Buffer.from(i18n.windowScript(manager?.settings,app.getPreferredSystemLanguages()),'utf8');
+  // One picture service for the window: shared requests, a few per site,
+  // pauses after "too many requests", and a small memory-only cache.
+  const images=createImageService();
   protocol.handle('atlas',async request=>{
     try {
     const u=new URL(request.url);
     if(u.hostname!=='app')return new Response('Not found',{status:404,headers:ERROR_RESPONSE_HEADERS});
-    if(u.pathname==='/image')return await imageResponse(request);
+    if(u.pathname==='/image')return await images.respond(request);
     const entry=u.pathname==='/locale.js'?['','text/javascript; charset=utf-8']:resources[u.pathname];
     if(!entry)return new Response('Not found',{status:404,headers:ERROR_RESPONSE_HEADERS});
     return new Response(entry[0]?fs.readFileSync(path.join(__dirname,'renderer',entry[0])):localeScript(),{headers:{'content-type':entry[1],'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"}});
@@ -263,6 +266,10 @@ app.whenReady().then(async()=>{
   handle('getState',appState);
   handle('listGames',async options=>providers.listGames({page:Math.max(1,Math.min(2000,Number(options?.page)||1)),search:String(options?.search||'').slice(0,200)}));
   handle('getCatalogSections',()=>catalog.getCatalogSections());
+  // Picture loading this session: sites, categories and counts, in memory only.
+  handle('imageDiagnostics',()=>images.snapshot());
+  // Picture requests the window no longer needs (numbers only, checked there).
+  handle('leavePictures',numbers=>images.leave(numbers));
   handle('listCatalog',options=>catalog.listCatalog({section:String(options?.section||'newest').slice(0,40),page:Math.max(1,Math.min(2000,Number(options?.page)||1)),search:String(options?.search||'').slice(0,200),forceRefresh:options?.forceRefresh===true}));
   handle('getGameResources',game=>catalog.getGameResources({title:String(game?.title||'').slice(0,500),steamAppId:/^\d{1,12}$/.test(String(game?.steamAppId))?String(game.steamAppId):null}));
   handle('openGameplay',openGameplay);

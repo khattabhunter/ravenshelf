@@ -102,6 +102,13 @@ function parseGame($, article, fallbackUrl) {
   const screenshotCandidates=screenshotImages.flatMap(src=>[src.replace(/\.jpg\.240p\.jpg(?=$|\?)/i,'.jpg'),src]);
   const imageCandidates=[...new Set((/(?:^|\.)imageban\.ru$/.test(coverHost)?[...screenshotCandidates,sourceImage]:[sourceImage,...screenshotCandidates]).filter(Boolean))].slice(0,8);
   const image=imageCandidates[0]||'';
+  // Catalogue cards use the source's own small pictures (the screenshot
+  // thumbnails it links), then the cover; at most three, tried in turn. The
+  // full-size pictures above are for the game page.
+  // imageban.ru covers often fail to load (its picture servers did not
+  // resolve when checked in November 2026), so its covers go last there too.
+  const imagebanCover=/(?:^|\.)imageban\.ru$/.test(coverHost);
+  const cardImages=[...new Set((imagebanCover?[...screenshotImages.slice(0,2),sourceImage]:[sourceImage,...screenshotImages.slice(0,2)]).filter(Boolean))].slice(0,3);
   let steamAppId=null;
   content.find('a[href],source[src]').each((_,el)=>{
     if(steamAppId)return;
@@ -113,7 +120,7 @@ function parseGame($, article, fallbackUrl) {
   });
   const descriptionNode = content.find('.su-spoiler').filter((_, el) => /Game Description/i.test($(el).find('.su-spoiler-title').first().text())).first().find('.su-spoiler-content').first();
   const description = descriptionNode.length ? textWithLines($,descriptionNode) : '';
-  return {id:url.pathname.replace(/^\/|\/$/g,''),url:url.href,title,image,sourceImage,imageCandidates,steamAppId,description:description.slice(0,20000),repackSize,originalSize:field($,content,'Original Size'),date:article.find('time').first().attr('datetime') || '',genres:field($,content,'Genres/Tags')};
+  return {id:url.pathname.replace(/^\/|\/$/g,''),url:url.href,title,image,sourceImage,imageCandidates,cardImages,steamAppId,description:description.slice(0,20000),repackSize,originalSize:field($,content,'Original Size'),date:article.find('time').first().attr('datetime') || '',genres:field($,content,'Genres/Tags')};
 }
 function parseListing(html, {page=1,letter=''} = {}) {
   const $ = cheerio.load(html), games = [], seen = new Set();

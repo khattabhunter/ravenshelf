@@ -1,12 +1,12 @@
 # Ravenshelf user guide
 
-This guide follows Ravenshelf 0.10.3 for Windows ([release notes](RELEASE-0.10.3.md)). Sections marked 0.10.3 describe what changed in that version.
+This guide follows Ravenshelf 0.10.4 for Windows ([release notes](RELEASE-0.10.4.md)). Sections marked 0.10.3 or 0.10.4 describe what changed in that version.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.10.3-Windows.exe` from the [v0.10.3 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.3). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.10.4-Windows.exe` from the [v0.10.4 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.4). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
-To move from an older version, exit it fully before opening the new executable. In 0.10.3, use **Exit Ravenshelf** rather than hiding its window in the background. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
+To move from an older version, exit it fully before opening the new executable. From 0.10.3, use **Exit Ravenshelf** rather than hiding its window in the background. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
 ### Automatic app updates
 
@@ -79,6 +79,12 @@ The **A few you might like** suggestions use available genre information from sa
 ### Images, requirements and player recommendations
 
 Click a game cover or screenshot to enlarge it. Use the left/right arrow keys or on-screen buttons to browse, and **Escape** to close and return to the image button. **Settings → Match accents to game artwork** controls the optional cover-derived color accents.
+
+#### Picture loading (0.10.4)
+
+Game cards try up to 3 pictures in turn (for a cover on imageban.ru, the post's small screenshots first), then show a placeholder. Ravenshelf sends at most 4 picture requests to one site at a time and shares one request between cards that need the same picture. When you leave a page (or move away from an enlarged picture), the window reports its pictures that haven't arrived, and their requests are cancelled unless another card still needs them. When a site answers "too many requests" (429), Ravenshelf sends it no picture requests for the time the site asks, between 5 seconds and 10 minutes; its pictures wait and then load. No picture waits more than 90 seconds for its turn. A picture that failed is skipped for 2 minutes; opening the page again after that tries it again. Loaded pictures are kept in memory (up to 40 MB of downloaded picture data, each for 30 minutes), so going back to a page shouldn't download them again; nothing is written to disk. This limit counts downloaded bytes, not Ravenshelf's total memory.
+
+If pictures stop loading, open **Settings → Picture loading** and choose **Show picture loading**. It shows this session's requests, loaded pictures, pictures from memory, cancellations (not failures) and each kind of failure, by site, plus sites paused now and what the window showed. It has only site names and counts, stays in memory, and resets when Ravenshelf closes. These changes are improvements under test; the cause of missing pictures is not confirmed yet.
 
 Game details show system requirements when the source provides them. Where a verified Steam app ID is available, Ravenshelf requests Steam requirements and recommendation counts. The displayed stars are `positive recommendations ÷ total reviews × 5`, rounded to one decimal, beside the percentage and review count. They are not literal five-star reviews or a Ravenshelf editorial score. Missing data is labeled unavailable. **Can you run it?** (below) compares the lists with this PC. Use **View Steam source** to inspect the linked listing. The review data comes from [Steam's documented review API](https://partner.steamgames.com/doc/webapi/IUserReviewsService#GetAppReviews).
 
