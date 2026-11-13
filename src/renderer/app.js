@@ -2005,7 +2005,7 @@ function wireMediaEvents() {
   $('#youtube-quality').addEventListener('change', event => mediaTask(() => api.saveYouTubeSettings({ quality: event.target.value }), t('Preference saved.')));
 }
 // ---- torrents: settings, the magnet link review, and requests from the browser ----
-let torrentState = null, torrentBusy = false, torrentShownRequest = null, torrentRequestsSeen = null, lastTorrentPhase = null, torrentBoxes = [], torrentLocalView = null;
+let torrentState = null, torrentBusy = false, torrentShownRequest = null, torrentAutoOpened = new Set(), lastTorrentPhase = null, torrentBoxes = [], torrentLocalView = null, torrentWaitingSeen = 0;
 const UPLOAD_LABELS = { 10240: later('10 KB/s'), 51200: later('50 KB/s'), 102400: later('100 KB/s'), 512000: later('500 KB/s'), 1048576: later('1 MB/s') };
 const SHARE_LABELS = { 0: later('Stop uploading right away'), 15: later('Share for 15 more minutes'), 60: later('Share for an hour more') };
 function torrentFeatureAvailable() { return typeof api?.openMagnet === 'function'; }
@@ -2040,6 +2040,9 @@ function renderTorrentSettings() {
   setup.textContent = phase === 'damaged' ? t('Set up again') : phase === 'error' ? t('Try setup again') : t('Set up torrent downloads');
   setup.disabled = torrentBusy;
   $('#torrent-cancel').hidden = phase !== 'installing';
+  const waiting = Math.max(0, Math.floor(Number(torrentState.waiting) || 0));
+  $('#torrent-waiting').hidden = !waiting;
+  $('#torrent-waiting').textContent = waiting ? tn(waiting, 'A magnet link from your browser is waiting. It opens when setup finishes.', '{n} magnet links from your browser are waiting. They open when setup finishes.') : '';
   $('#torrent-remove').hidden = !['ready', 'damaged'].includes(phase); $('#torrent-remove').disabled = torrentBusy;
   $('#torrent-options').hidden = !on;
   const upload = $('#torrent-upload'), share = $('#torrent-share');
@@ -2123,13 +2126,17 @@ async function closeTorrentDialog() {
 // keeps an open review current, and reports when setup finishes.
 function afterTorrentState() {
   if (!torrentState) return;
-  const requests = torrentRequests(), ids = requests.map(item => item.id).join(',');
-  if (torrentRequestsSeen !== null && !torrentShownRequest) {
-    const seen = new Set(torrentRequestsSeen.split(',').filter(Boolean));
-    const arrived = requests.find(item => item.source === 'browser' && !seen.has(item.id));
-    if (arrived && !$$('dialog').some(other => other.open && other.id !== 'game-dialog')) openTorrentDialog(arrived.id);
+  // Each magnet link from the browser opens once, in turn, when no other dialog is open.
+  const requests = torrentRequests();
+  for (const id of [...torrentAutoOpened]) if (!requests.some(item => item.id === id)) torrentAutoOpened.delete(id);
+  if (!torrentShownRequest && !$$('dialog').some(other => other.open && other.id !== 'game-dialog')) {
+    const arrived = requests.find(item => item.source === 'browser' && !torrentAutoOpened.has(item.id));
+    if (arrived) { torrentAutoOpened.add(arrived.id); openTorrentDialog(arrived.id); }
   }
-  torrentRequestsSeen = ids;
+  // A magnet link from the browser waits for setup: show where to set it up.
+  const waiting = Math.max(0, Math.floor(Number(torrentState.waiting) || 0));
+  if (waiting > torrentWaitingSeen && !$$('dialog').some(other => other.open)) { showView('settings'); $('#torrent-card')?.scrollIntoView?.({ block: 'center' }); }
+  torrentWaitingSeen = waiting;
   const phase = torrentTools().phase;
   if (lastTorrentPhase === 'installing' && phase === 'ready') toast(t('Torrent downloads are ready.'));
   lastTorrentPhase = phase;

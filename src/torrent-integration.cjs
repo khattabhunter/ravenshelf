@@ -45,17 +45,29 @@ async function writeAtomic(file,buffer){
   try{await fs.promises.rename(temporary,file);}catch(error){await fs.promises.unlink(temporary).catch(()=>{});throw error;}
 }
 
-function createTorrentIntegration({app,win,manager,register,publish,assertQueueAvailable=()=>{},isTest=false,platform=process.platform,folders=null,toolsOptions={},engineOptions={},now=Date.now}){
+function createTorrentIntegration({app,win,manager,register,publish,Notification=null,assertQueueAvailable=()=>{},isTest=false,platform=process.platform,folders=null,toolsOptions={},engineOptions={},now=Date.now}){
   manager.settings={...manager.settings,torrents:normalizeSettings(manager.settings.torrents)};
   const where=folders||torrentFolders({profile:app.getPath('userData'),isTest});
   const settings=()=>manager.settings.torrents;
-  const tools=new MediaTools({root:where.tools,tools:TOOLS,roles:['aria2c'],messages:TOOL_MESSAGES,bandwidthLimiter:manager.bandwidthLimiter,platform,onChange:()=>publish(),...toolsOptions});
+  const tools=new MediaTools({root:where.tools,tools:TOOLS,roles:['aria2c'],messages:TOOL_MESSAGES,bandwidthLimiter:manager.bandwidthLimiter,platform,onChange:()=>publish(),onReady:()=>openWaiting(),...toolsOptions});
   const engine=new TorrentEngine({tools,stateDir:path.join(where.state,'engine'),
     settings:()=>({uploadLimit:settings().uploadLimit,downloadLimit:manager.settings.maxDownloadBytesPerSecond||0}),...engineOptions});
   const requests=new Map();let closing=false;
+  // Magnet links from the browser that arrived before setup finished: kept in
+  // memory only, for an hour at most, and opened for review once setup is done.
+  let waiting=[];
   const reveal=()=>{if(win&&!win.isDestroyed?.()){if(win.isMinimized())win.restore();win.show();win.focus();}};
+  const notify=({title,body})=>{
+    if(manager.settings.notificationsEnabled===false||isTest)return;
+    try{if(typeof Notification==='function'&&Notification.isSupported()){const alert=new Notification({title,body});alert.on('click',reveal);alert.show();}}catch{}
+  };
   const storeFile=infoHash=>path.join(where.store,infoHash+'.torrent');
-  const expire=()=>{const limit=now()-REQUEST_TTL_MS;for(const [id,request]of requests)if(request.at<limit){request.controller.abort();requests.delete(id);}};
+  const expire=()=>{const limit=now()-REQUEST_TTL_MS;for(const [id,request]of requests)if(request.at<limit){request.controller.abort();requests.delete(id);}waiting=waiting.filter(item=>item.at>=limit);};
+  function openWaiting(){
+    expire();const items=waiting;waiting=[];
+    for(const item of items){try{if(settings().enabled)open({magnet:item.magnet,source:'browser'});}catch{/* It can be clicked again in the browser. */}}
+    publish();
+  }
   const assertOn=()=>{
     if(closing)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
     if(platform!=='win32')throw new Error(TOOL_MESSAGES.unsupported);
@@ -103,7 +115,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
     expire();
     const s=settings();
     return {supported:platform==='win32',enabled:s.enabled,accepted:s.accepted,uploadLimit:s.uploadLimit,shareMinutes:s.shareMinutes,uploadLimits:[...UPLOAD_LIMITS],shareChoices:[...SHARE_MINUTES],
-      tools:tools.snapshot(),requests:[...requests.values()].map(requestView)};
+      tools:tools.snapshot(),requests:[...requests.values()].map(requestView),waiting:waiting.length};
   }
   // Starts reading a magnet link: its file list comes from a saved copy, or
   // from other people (which can take a while). Nothing else is downloaded.
@@ -162,7 +174,17 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
   // user. 'off' when torrents are off, so the browser can hand it elsewhere.
   function receive({magnet}={}){
     if(closing||platform!=='win32'||!settings().enabled)return {action:'off'};
-    if(tools.refresh()!=='ready'){reveal();return {action:'setup'};}
+    if(tools.refresh()!=='ready'){
+      let parsed;try{parsed=parseMagnet(magnet);}catch{return {action:'invalid'};}
+      expire();
+      if(!waiting.some(item=>item.infoHash===parsed.infoHash)){
+        if(waiting.length>=MAX_REQUESTS)return {action:'busy'};
+        waiting.push({magnet:parsed.magnet,infoHash:parsed.infoHash,at:now()});
+      }
+      publish();reveal();
+      notify({title:'Set up torrent downloads',body:'Ravenshelf needs a one-time setup before it can download torrents. Your magnet link opens after that.'});
+      return {action:'setup'};
+    }
     try{open({magnet,source:'browser'});}
     catch(error){return {action:error?.message===MAGNET.invalid||error?.message===MAGNET.version2?'invalid':'busy'};}
     reveal();
@@ -181,7 +203,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
         next.accepted=true;next.enabled=true;
       }else if(options.enabled===false){
         if(activeJobs())throw new Error(MESSAGES.stillActive);
-        next.enabled=false;
+        next.enabled=false;waiting=[];
         for(const id of [...requests.keys()])close(id);
         engine.stop().catch(()=>{});
       }
@@ -195,7 +217,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
   register('removeTorrentTools',async()=>{
     if(closing)throw new Error('Ravenshelf is closing. Wait for cleanup to finish.');
     if(activeJobs()||requests.size)throw new Error(TOOL_MESSAGES.busy);
-    await engine.stop();await tools.remove();publish();return snapshot();
+    await engine.stop();await tools.remove();waiting=[];publish();return snapshot();
   });
   register('openMagnet',options=>{
     if(!options||typeof options!=='object'||typeof options.magnet!=='string')throw new Error(MAGNET.invalid);
@@ -205,7 +227,7 @@ function createTorrentIntegration({app,win,manager,register,publish,assertQueueA
   register('addTorrent',options=>add(options&&typeof options==='object'?options:{}));
   return {
     snapshot,receive,open,add,close,engine,tools,pruned,
-    async beforeQuit(){closing=true;for(const request of requests.values())request.controller.abort();requests.clear();await engine.dispose();await tools.dispose();}
+    async beforeQuit(){closing=true;waiting=[];for(const request of requests.values())request.controller.abort();requests.clear();await engine.dispose();await tools.dispose();}
   };
 }
 module.exports={createTorrentIntegration,TOOLS,TOOL_MESSAGES,MESSAGES,UPLOAD_LIMITS,SHARE_MINUTES,normalizeSettings,torrentFolders};

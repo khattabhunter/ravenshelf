@@ -426,14 +426,14 @@ test('stopping a torrent while it shares still finishes it; a missing file is an
   assert.equal(none.manager.downloads[0].error,'Turn on torrent downloads in Settings first, then retry.');
 });
 
-function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings,before=null}={}){
+function integrationFor(t,{fake=fakeAria2(),platform='win32',ready=true,settings,before=null,now=Date.now}={}){
   const root=scratch(t),registered=new Map(),published=[];
   const manager=new DownloadManager({stateFile:path.join(root,'library.json'),downloadDir:path.join(root,'Downloads')});
   if(settings)manager.settings.torrents=settings;
   if(before)before(root,manager);
   t.after(()=>manager.stop());
   const tools={refresh:()=>ready?'ready':'missing',snapshot:()=>({phase:ready?'ready':'missing'}),install(){this.installed=true;},cancel(){},remove:async()=>{},removeOthers:async()=>{},dispose:async()=>{},verified:fakeTools(root).verified};
-  const integration=createTorrentIntegration({app:{getPath:()=>root},win:null,manager,register:(name,fn)=>registered.set(name,fn),publish:()=>published.push(1),platform,
+  const integration=createTorrentIntegration({app:{getPath:()=>root},win:null,manager,register:(name,fn)=>registered.set(name,fn),publish:()=>published.push(1),platform,now,
     folders:{tools:path.join(root,'tools'),state:path.join(root,'state'),store:path.join(root,'store')},
     toolsOptions:{},engineOptions:{spawnImpl:fake.spawn,rpcFetch:fake.fetch,kill:fake.kill,pollMs:1,idleMs:30,startTimeoutMs:500,env:{SystemRoot:'C:\\Windows'}}});
   // The pinned tool set is replaced by a stand-in that is always ready (or never).
@@ -518,6 +518,40 @@ test('a magnet link from the browser waits for the user, and a bad one is refuse
   assert.deepEqual(validateRequest({v:1,type:'magnet',magnet:`magnet:?xt=urn:btih:${infoHash}`}),{type:'magnet',magnet:`magnet:?xt=urn:btih:${infoHash}`});
   for(const bad of [{v:1,type:'magnet'},{v:1,type:'magnet',magnet:'https://x.example/'},{v:1,type:'magnet',magnet:'magnet:?xt=a\n'},{v:1,type:'magnet',magnet:'magnet:?'+'a'.repeat(9000)},{v:1,type:'magnet',magnet:'magnet:?xt=a',pageUrl:'https://x.example/'}])
     assert.throws(()=>validateRequest(bad),/Invalid browser request/);
+});
+
+test('a magnet link from the browser waits while torrents are not set up, and opens when setup finishes',async t=>{
+  const {buffer,infoHash}=torrentFile(multi()),other='c'.repeat(40);
+  const on={enabled:true,accepted:true,uploadLimit:102400,shareMinutes:0};
+  const s=integrationFor(t,{ready:false,fake:fakeAria2({torrents:{[infoHash]:buffer}}),settings:on});
+  const link=`magnet:?xt=urn:btih:${infoHash}&dn=Game`;
+  assert.deepEqual(s.integration.receive({magnet:link}),{action:'setup'});
+  assert.deepEqual(s.integration.receive({magnet:link}),{action:'setup'},'the same torrent waits once');
+  assert.equal(s.integration.snapshot().waiting,1);
+  assert.deepEqual(s.integration.receive({magnet:'magnet:?xt=urn:btih:nothex'}),{action:'invalid'});
+  for(let i=0;i<4;i++)s.integration.receive({magnet:`magnet:?xt=urn:btih:${String(i).repeat(40)}`});
+  assert.equal(s.integration.snapshot().waiting,5);
+  assert.deepEqual(s.integration.receive({magnet:`magnet:?xt=urn:btih:${other}`}),{action:'busy'},'at most five wait');
+  assert.equal(s.integration.snapshot().requests.length,0,'nothing is looked up before setup');
+  // Setup finishes: the waiting links open for review, as links from the browser.
+  const ready=()=>'ready';s.integration.tools.refresh=ready;s.integration.engine.tools.refresh=ready;s.tools.refresh=ready;
+  s.integration.tools.onReady();
+  const snap=s.integration.snapshot();
+  assert.equal(snap.waiting,0);
+  assert.equal(snap.requests.length,5);
+  assert.ok(snap.requests.every(request=>request.source==='browser'));
+  assert.equal(snap.requests[0].name,'Game');
+  // Turning torrents off forgets links still waiting.
+  const later=integrationFor(t,{ready:false,settings:on});
+  later.integration.receive({magnet:link});
+  later.call('saveTorrentSettings',{enabled:false});
+  assert.equal(later.integration.snapshot().waiting,0);
+  // A waiting link is kept for an hour at most.
+  let clock=1_000_000;
+  const timed=integrationFor(t,{ready:false,settings:on,now:()=>clock});
+  timed.integration.receive({magnet:link});
+  clock+=60*60*1000;assert.equal(timed.integration.snapshot().waiting,1);
+  clock+=1;assert.equal(timed.integration.snapshot().waiting,0);
 });
 
 test('the pinned torrent engine is aria2 1.37.0, checked by size and SHA-256',()=>{

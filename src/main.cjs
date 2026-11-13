@@ -219,7 +219,7 @@ app.whenReady().then(async()=>{
   const hardware=createHardwareService();
   features=createFeatureServices({app,win,manager,completion,dialog:localDialog,clipboard,Notification:LocalNotification,register:handle,publish:publishState,providers,checked,hardware,isTest:Boolean(isTest)});
   media=createMediaIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
-  torrents=createTorrentIntegration({app,win,manager,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
+  torrents=createTorrentIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
   browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),receiveMagnet:request=>torrents.receive(request),isTest:Boolean(isTest)});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.

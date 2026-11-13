@@ -815,6 +815,7 @@
  "Ravenshelf is up to date.": "Ravenshelf محدّث.",
  "Ravenshelf links": "روابط Ravenshelf",
  "Ravenshelf needs a one-time setup before it can download YouTube videos. Your video starts after that.": "يحتاج Ravenshelf إلى إعداد لمرة واحدة قبل أن يتمكن من تنزيل فيديوهات YouTube. يبدأ الفيديو بعد ذلك.",
+ "Ravenshelf needs a one-time setup before it can download torrents. Your magnet link opens after that.": "يحتاج Ravenshelf إلى إعداد لمرة واحدة قبل أن يتمكن من تنزيل التورنت. يُفتح رابطك المغناطيسي بعد ذلك.",
  "Ravenshelf protected host — popups and off-site requests blocked": "مضيف Ravenshelf المحمي — النوافذ المنبثقة والطلبات الخارجية محظورة",
  "Ravenshelf reads the processor, graphics, memory and drives when you open this page. Nothing leaves this PC.": "يقرأ Ravenshelf المعالج والرسوميات والذاكرة ومحركات الأقراص عند فتح هذه الصفحة. لا يغادر أي شيء هذا الحاسوب.",
  "Ravenshelf saves it in your download folder, in:": "يحفظه Ravenshelf في مجلد التنزيل، في:",
@@ -1626,6 +1627,14 @@
   "few": "تعذّر تحديث {n} قوائم، وما زالت النسخة السابقة مستخدمة.",
   "many": "تعذّر تحديث {n} قائمة، وما زالت النسخة السابقة مستخدمة.",
   "other": "تعذّر تحديث {n} قائمة، وما زالت النسخة السابقة مستخدمة."
+ },
+ "{n} magnet links from your browser are waiting. They open when setup finishes.": {
+  "zero": "لا روابط مغناطيسية من متصفحك في الانتظار.",
+  "one": "رابط مغناطيسي من متصفحك في الانتظار. يُفتح عند انتهاء الإعداد.",
+  "two": "رابطان مغناطيسيان من متصفحك في الانتظار. يُفتحان عند انتهاء الإعداد.",
+  "few": "{n} روابط مغناطيسية من متصفحك في الانتظار. تُفتح عند انتهاء الإعداد.",
+  "many": "{n} رابطًا مغناطيسيًا من متصفحك في الانتظار. تُفتح عند انتهاء الإعداد.",
+  "other": "{n} رابط مغناطيسي من متصفحك في الانتظار. تُفتح عند انتهاء الإعداد."
  },
  "{n} min ago": {
   "zero": "الآن",

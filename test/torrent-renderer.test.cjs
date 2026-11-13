@@ -122,3 +122,39 @@ test('a torrent’s card shows the people it shares with and its upload speed in
   f.run("item.status='paused';item.connectionNote='';updateDownloadProgress(document.createElement('div'),item)");
   assert.equal(f.get('.download-connections').hidden,true);
 });
+
+test('a magnet link from the browser that waits for setup brings Settings forward and is counted on the card',()=>{
+  const f=fixture({openMagnet:async()=>({}),saveTorrentSettings:async()=>torrentState(),setUpTorrents:async()=>torrentState(),cancelTorrentSetup:async()=>torrentState(),removeTorrentTools:async()=>torrentState(),closeMagnet:async()=>torrentState(),addTorrent:async()=>({added:0,ids:[]})});
+  const shown=[];f.context.recordView=view=>shown.push(view);f.run('showView=recordView;');
+  f.run('wireTorrentEvents()');
+  setTorrents(f,torrentState({enabled:true,accepted:true}));f.run('afterTorrentState();renderTorrentSettings()');
+  assert.deepEqual(shown,[]);assert.equal(f.get('#torrent-waiting').hidden,true);
+  setTorrents(f,torrentState({enabled:true,accepted:true,waiting:1}));f.run('afterTorrentState();renderTorrentSettings()');
+  assert.deepEqual(shown,['settings']);
+  assert.equal(f.get('#torrent-waiting').hidden,false);
+  assert.equal(f.get('#torrent-waiting').textContent,'A magnet link from your browser is waiting. It opens when setup finishes.');
+  // The same count again does not move the window; a new link does.
+  f.run('afterTorrentState()');assert.deepEqual(shown,['settings']);
+  setTorrents(f,torrentState({enabled:true,accepted:true,waiting:2}));f.run('afterTorrentState();renderTorrentSettings()');
+  assert.deepEqual(shown,['settings','settings']);
+  assert.equal(f.get('#torrent-waiting').textContent,'2 magnet links from your browser are waiting. They open when setup finishes.');
+  setTorrents(f,torrentState({enabled:true,accepted:true,waiting:0}));f.run('afterTorrentState();renderTorrentSettings()');
+  assert.equal(f.get('#torrent-waiting').hidden,true);
+});
+
+test('several magnet links from the browser open one after another, each once',async()=>{
+  const req=(id,name)=>({id,status:'finding',name,peers:0,source:'browser'});
+  let after=null;
+  const f=fixture({openMagnet:async()=>({}),saveTorrentSettings:async()=>torrentState(),closeMagnet:async()=>after,addTorrent:async()=>({}),setUpTorrents:async()=>torrentState(),cancelTorrentSetup:async()=>torrentState(),removeTorrentTools:async()=>torrentState()});
+  f.run('wireTorrentEvents()');
+  setTorrents(f,torrentState({enabled:true,accepted:true,requests:[req('b1','First'),req('b2','Second')]},{phase:'ready'}));f.run('afterTorrentState()');
+  assert.equal(f.get('#torrent-dialog').open,true);assert.equal(f.get('#torrent-dialog-name').textContent,'First');
+  // Closing the first opens the second.
+  after=torrentState({enabled:true,accepted:true,requests:[req('b2','Second')]},{phase:'ready'});
+  await f.get('#torrent-dialog-cancel').emit('click');
+  assert.equal(f.get('#torrent-dialog').open,true);assert.equal(f.get('#torrent-dialog-name').textContent,'Second');
+  // Closing the second, while it is still listed, does not open it again.
+  after=torrentState({enabled:true,accepted:true,requests:[req('b2','Second')]},{phase:'ready'});
+  await f.get('#torrent-dialog-cancel').emit('click');
+  assert.equal(f.get('#torrent-dialog').open,false);
+});
