@@ -1553,6 +1553,9 @@ function wireEvents() {
     if (importBusy) return;
     const text = $('#import-links').value.trim();
     if (!text) { $('#import-links').focus(); toast(t('Paste a game page, paste URL, or file links first.'), true); return; }
+    // A pasted magnet link opens the torrent review instead of the link check.
+    const magnet = /(?:^|\s)(magnet:\?\S+)/i.exec(text)?.[1];
+    if (magnet && torrentFeatureAvailable() && !/https:\/\//i.test(text)) { $('#import-dialog').close(); await startMagnet(magnet); return; }
     importBusy = true; $('#check-import').disabled = true;
     try { await inspectLinks(text, $('#import-results')); }
     finally { importBusy = false; $('#check-import').disabled = false; }
@@ -2002,7 +2005,7 @@ function wireMediaEvents() {
   $('#youtube-quality').addEventListener('change', event => mediaTask(() => api.saveYouTubeSettings({ quality: event.target.value }), t('Preference saved.')));
 }
 // ---- torrents: settings, the magnet link review, and requests from the browser ----
-let torrentState = null, torrentBusy = false, torrentShownRequest = null, torrentRequestsSeen = null, lastTorrentPhase = null;
+let torrentState = null, torrentBusy = false, torrentShownRequest = null, torrentRequestsSeen = null, lastTorrentPhase = null, torrentBoxes = [], torrentLocalView = null;
 const UPLOAD_LABELS = { 10240: later('10 KB/s'), 51200: later('50 KB/s'), 102400: later('100 KB/s'), 512000: later('500 KB/s'), 1048576: later('1 MB/s') };
 const SHARE_LABELS = { 0: later('Stop uploading right away'), 15: later('Share for 15 more minutes'), 60: later('Share for an hour more') };
 function torrentFeatureAvailable() { return typeof api?.openMagnet === 'function'; }
@@ -2063,18 +2066,20 @@ async function startMagnet(magnet, gameTitle = '') {
   if (torrentTools().phase !== 'ready') { toast(t('Set up torrent downloads in Settings first, then retry.'), true); return; }
   try {
     const request = await api.openMagnet({ magnet, gameTitle });
-    if (request && typeof request.id === 'string') openTorrentDialog(request.id);
+    if (request && typeof request.id === 'string') openTorrentDialog(request.id, request);
   } catch (error) { toast(errorText(error), true); }
 }
-function openTorrentDialog(id) {
-  torrentShownRequest = id;
+// `view` is the request as openMagnet returned it, shown until the next state
+// update (which can arrive after the reply) includes it.
+function openTorrentDialog(id, view = null) {
+  torrentShownRequest = id; torrentLocalView = view && view.id === id ? view : null;
   const dialog = $('#torrent-dialog');
   delete dialog.dataset.rendered;
   renderTorrentDialog();
   if (!dialog.open) { if ($('#game-dialog').open) $('#game-dialog').close(); showDialog(dialog); }
 }
 function torrentChosen() {
-  return $$('#torrent-files input[type="checkbox"]').filter(box => box.checked && !box.disabled).map(box => Number(box.value)).filter(Number.isSafeInteger);
+  return torrentBoxes.filter(box => box.checked && !box.disabled).map(box => Number(box.value)).filter(Number.isSafeInteger);
 }
 function renderTorrentTotal(request) {
   const chosen = new Set(torrentChosen()), files = Array.isArray(request?.files) ? request.files : [];
@@ -2083,7 +2088,9 @@ function renderTorrentTotal(request) {
   $('#torrent-download').disabled = !chosen.size || torrentBusy;
 }
 function renderTorrentDialog() {
-  const dialog = $('#torrent-dialog'), request = torrentRequests().find(item => item.id === torrentShownRequest);
+  const dialog = $('#torrent-dialog');
+  let request = torrentRequests().find(item => item.id === torrentShownRequest);
+  if (request) torrentLocalView = null; else if (torrentLocalView?.id === torrentShownRequest) request = torrentLocalView;
   if (!request) { if (dialog.open) dialog.close(); torrentShownRequest = null; return; }
   $('#torrent-dialog-name').textContent = request.name || t('Unnamed torrent');
   const status = $('#torrent-dialog-status');
@@ -2095,15 +2102,16 @@ function renderTorrentDialog() {
   if (request.status === 'ready' && dialog.dataset.rendered !== request.id) {
     dialog.dataset.rendered = request.id;
     const prefix = (request.name || '') + '/';
+    torrentBoxes = [];
     list.replaceChildren(...request.files.map(file => {
       const row = el('label', 'torrent-file check-label');
-      const box = document.createElement('input'); box.type = 'checkbox'; box.value = String(file.index); box.checked = !file.padding; box.disabled = file.padding === true;
+      const box = document.createElement('input'); box.type = 'checkbox'; box.value = String(file.index); box.checked = !file.padding; box.disabled = file.padding === true; torrentBoxes.push(box);
       box.addEventListener('change', () => renderTorrentTotal(request));
       const shown = String(file.path || '').startsWith(prefix) ? String(file.path).slice(prefix.length) : String(file.path || '');
       row.append(box, el('span', 'torrent-file-name', own(shown.split('/').join(' › '))), el('span', 'link-size', formatBytes(file.length, t('{size} B', { size: 0 }))));
       return row;
     }));
-  } else if (request.status !== 'ready') { list.replaceChildren(); delete dialog.dataset.rendered; }
+  } else if (request.status !== 'ready') { list.replaceChildren(); torrentBoxes = []; delete dialog.dataset.rendered; }
   renderTorrentTotal(request.status === 'ready' ? request : null);
 }
 async function closeTorrentDialog() {
