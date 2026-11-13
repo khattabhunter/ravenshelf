@@ -1,12 +1,15 @@
 'use strict';
 const crypto=require('node:crypto');
-const ROOTS=['paste.fitgirl-repacks.site','fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com'];
+const {isPasteHost,isPixeldrainHost,isMultiupHost}=require('./hosts.cjs');
+// Hosts with subdomains (file servers); PixelDrain, MultiUpload and the paste sites only at their own addresses.
+const ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com'];
+const recognized=host=>ROOTS.some(h=>host===h||host.endsWith('.'+h))||isPasteHost(host)||isPixeldrainHost(host)||isMultiupHost(host);
 function recognizedLinks(text){
   if(typeof text!=='string'||text.length>32768)return [];
   const result=[];
   for(const raw of text.match(/https:\/\/[^\s<>"']+/g)||[]){
     if(raw.length>8192)continue;
-    try{const u=new URL(raw.replace(/[),.;]+$/,''));if(u.username||u.password||(u.port&&u.port!=='443')||!ROOTS.some(h=>u.hostname===h||u.hostname.endsWith('.'+h)))continue;if(u.hostname==='paste.fitgirl-repacks.site'&&!u.hash)continue;result.push(u.href);}catch{}
+    try{const u=new URL(raw.replace(/[),.;]+$/,''));if(u.username||u.password||(u.port&&u.port!=='443')||!recognized(u.hostname))continue;if(isPasteHost(u.hostname)&&!u.hash)continue;result.push(u.href);}catch{}
   }
   return [...new Set(result)].slice(0,50);
 }

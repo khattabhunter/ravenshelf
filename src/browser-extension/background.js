@@ -16,7 +16,7 @@ const BROWSER = isFirefox ? 'firefox' : 'chromium';
 const VERSION = api.runtime.getManifest().version;
 const menus = api.contextMenus || api.menus;
 const dnr = api.declarativeNetRequest;
-const DEFAULTS = Object.freeze({ capture: true, protection: true, guard: true, youtube: true, nexus: true, pausedUntil: 0, listVersion: '', listTotal: 0, listSyncedAt: 0, listFirstRule: 0, status: 'unknown', appVersion: '' });
+const DEFAULTS = Object.freeze({ capture: true, protection: true, guard: true, youtube: true, nexus: true, magnets: true, pausedUntil: 0, listVersion: '', listTotal: 0, listSyncedAt: 0, listFirstRule: 0, status: 'unknown', appVersion: '' });
 const PAUSE_MS = 10 * 60 * 1000;
 const SYNC_MINUTES = 60;
 const POPUP_WATCH_MS = 15000;
@@ -489,7 +489,7 @@ async function popupState() {
   const current = await settings();
   return {
     version: VERSION, browser: BROWSER, status: current.status, appVersion: current.appVersion,
-    capture: current.capture, protection: current.protection, guard: current.guard, youtube: current.youtube, nexus: current.nexus,
+    capture: current.capture, protection: current.protection, guard: current.guard, youtube: current.youtube, nexus: current.nexus, magnets: current.magnets,
     pausedUntil: current.pausedUntil > Date.now() ? current.pausedUntil : 0, listTotal: current.listTotal, listSyncedAt: current.listSyncedAt
   };
 }
@@ -503,7 +503,7 @@ async function handleMessage(message, sender) {
     return { ok: true, state: await popupState() };
   }
   if (command === 'set') {
-    if (!['capture', 'protection', 'guard', 'youtube', 'nexus'].includes(message.key) || typeof message.value !== 'boolean') return { ok: false };
+    if (!['capture', 'protection', 'guard', 'youtube', 'nexus', 'magnets'].includes(message.key) || typeof message.value !== 'boolean') return { ok: false };
     await api.storage.local.set({ [message.key]: message.value });
     // Switching Nexus Mods labels off also forgets what its pages said.
     if (message.key === 'nexus' && !message.value) { await restore(); modPages.clear(); persist(); }
@@ -578,7 +578,25 @@ async function handleNexus(message, sender) {
   persist();
   return { ok: true };
 }
+// Ravenshelf's own page script in the top frame of a fitgirl-repacks.site page,
+// passing on a magnet link the user clicked. Private windows keep their links.
+function magnetSender(sender) {
+  return Boolean(sender) && sender.id === api.runtime.id && Boolean(sender.tab) && sender.frameId === 0 &&
+    typeof sender.url === 'string' && /^https:\/\/fitgirl-repacks\.site\//.test(sender.url);
+}
+async function handleMagnet(message, sender) {
+  if (!message || message.cmd !== 'magnet' || typeof message.magnet !== 'string' || message.magnet.length > 8192 || !/^magnet:\?/i.test(message.magnet) || /[\x00-\x1f\x7f]/.test(message.magnet)) return { ok: false };
+  if (sender.tab.incognito) return { ok: false };
+  const current = await settings();
+  if (current.magnets === false) return { ok: false };
+  const reply = await ask({ type: 'magnet', magnet: message.magnet });
+  return reply.ok === true && typeof reply.action === 'string' ? { ok: true, action: reply.action } : { ok: false };
+}
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (magnetSender(sender) && !trustedSender(sender)) {
+    handleMagnet(message, sender).then(sendResponse, () => sendResponse({ ok: false }));
+    return true;
+  }
   if (youtubeSender(sender) && !trustedSender(sender)) {
     handleYouTube(message, sender).then(sendResponse, () => sendResponse({ ok: false }));
     return true;

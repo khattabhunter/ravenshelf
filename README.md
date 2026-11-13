@@ -4,13 +4,13 @@
 
 **A privacy-hardened game catalogue and batch download manager for Windows.** Browse the live FitGirl catalogue, build your own shelves of games, see what is installed on your PC and manage multipart downloads with pause, resume and up to four connections per file. No account or app telemetry, and every finished file can be checked by Microsoft Defender.
 
-**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.9.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
+**[Download for Windows](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.0)** · **[Security](#security)** · **[User guide](docs/USER-GUIDE.md)** · **[Privacy](docs/PRIVACY.md)** · **[Changelog](CHANGELOG.md)**
 
 > Ravenshelf was called **Atlas Library** up to version 0.2.5. Updating keeps your library, collections and download queue.
 
 ## Get started
 
-1. Open the [v0.9.0 prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.9.0) and download `Ravenshelf-0.9.0-Windows.exe` from **Assets**.
+1. Open the [v0.10.0 prerelease](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.0) and download `Ravenshelf-0.10.0-Windows.exe` from **Assets**.
 2. Optional but recommended: [verify the download](#verify-your-download).
 3. Open the executable. It is portable: no installer or administrator rights are needed.
 4. Browse **Discover**, open a game and choose a file host.
@@ -18,7 +18,7 @@
 
 The preview is not code-signed, so Windows may show a SmartScreen notice the first time. Do not turn off Windows security protections to use Ravenshelf. Only obtain files you have permission to download.
 
-Version 0.9.0 adds **Can you run it?**: a game's details compare its Steam requirement lists with this PC, line by line, and Ravenshelf warns before you queue files that won't fit on the download drive ([release notes](docs/RELEASE-0.9.0.md), [guide](docs/USER-GUIDE.md#can-you-run-it)). Version 0.8.0 added Arabic, chosen in **Settings → Language**, and a **Mods** page that lists the mod files you downloaded on Nexus Mods, by game ([release notes](docs/RELEASE-0.8.0.md), [Language](docs/USER-GUIDE.md#language), [Mods](docs/USER-GUIDE.md#the-mods-page)). Version 0.7.0 added a **PC specs** page that shows what is inside this PC without sending it anywhere, and files the mods you download on Nexus Mods by game ([release notes](docs/RELEASE-0.7.0.md)). Version 0.6.1 makes YouTube's one-time setup take about a minute and YouTube downloads faster ([release notes](docs/RELEASE-0.6.1.md)). Version 0.6.0 added YouTube downloads: a Ravenshelf button in YouTube's player with a choice of quality, and **Download with Ravenshelf** when you right-click a video. A one-time setup fetches the helper programs it needs from their official releases and checks every file ([release notes](docs/RELEASE-0.6.0.md), [guide](docs/USER-GUIDE.md#youtube-downloads)). Version 0.5.0 added a browser extension for Chrome, Edge, Brave and Firefox: downloads you start in the browser go to Ravenshelf to be checked before anything is saved, dangerous sites are blocked, and FuckingFast and FileKeeper pages can no longer redirect you or open pop-ups elsewhere. It is off until you connect it in **Settings → Browser extension**. See the [0.5.0 release notes](docs/RELEASE-0.5.0.md) and [the extension guide](docs/USER-GUIDE.md#browser-extension).
+Version 0.10.0 adds more ways to download: **torrents** from magnet links (off until you agree to what torrents share, with aria2 fetched once and checked), **PixelDrain** and **MultiUpload** links, and FitGirl's new paste address; ZippyShare, BayFiles and LetsUpload are named as closed instead of tried ([release notes](docs/RELEASE-0.10.0.md), [guide](docs/USER-GUIDE.md#torrent-downloads)). Version 0.9.0 added **Can you run it?**: a game's details compare its Steam requirement lists with this PC, line by line, and Ravenshelf warns before you queue files that won't fit on the download drive ([release notes](docs/RELEASE-0.9.0.md), [guide](docs/USER-GUIDE.md#can-you-run-it)). Version 0.8.0 added Arabic, chosen in **Settings → Language**, and a **Mods** page that lists the mod files you downloaded on Nexus Mods, by game ([release notes](docs/RELEASE-0.8.0.md), [Language](docs/USER-GUIDE.md#language), [Mods](docs/USER-GUIDE.md#the-mods-page)). Version 0.7.0 added a **PC specs** page that shows what is inside this PC without sending it anywhere, and files the mods you download on Nexus Mods by game ([release notes](docs/RELEASE-0.7.0.md)). Version 0.6.1 makes YouTube's one-time setup take about a minute and YouTube downloads faster ([release notes](docs/RELEASE-0.6.1.md)). Version 0.6.0 added YouTube downloads: a Ravenshelf button in YouTube's player with a choice of quality, and **Download with Ravenshelf** when you right-click a video. A one-time setup fetches the helper programs it needs from their official releases and checks every file ([release notes](docs/RELEASE-0.6.0.md), [guide](docs/USER-GUIDE.md#youtube-downloads)). Version 0.5.0 added a browser extension for Chrome, Edge, Brave and Firefox: downloads you start in the browser go to Ravenshelf to be checked before anything is saved, dangerous sites are blocked, and FuckingFast and FileKeeper pages can no longer redirect you or open pop-ups elsewhere. It is off until you connect it in **Settings → Browser extension**. See the [0.5.0 release notes](docs/RELEASE-0.5.0.md) and [the extension guide](docs/USER-GUIDE.md#browser-extension).
 
 ## Security
 
@@ -33,6 +33,7 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 | Browser downloads checked first | With the optional extension, a browser download goes to Ravenshelf, which follows its redirects without your cookies and compares the file name with its real type before you decide. Disguised programs and links through listed sites are blocked. |
 | Dangerous sites blocked | The extension blocks about 261,000 malware, phishing, scam and pop-up ad sites using public lists checked on your PC, and stops file-host pages from redirecting you or opening pop-ups. |
 | Checked YouTube helpers | YouTube downloads use yt-dlp, Deno and FFmpeg, fetched once at fixed versions from their publishers' GitHub releases. Every file must match the SHA-256 recorded in Ravenshelf and is checked again before use. yt-dlp gets only the video's address, without your cookies, configuration files or plugins. |
+| Torrents only if you agree | Torrent downloads are off until you read what torrents share (your IP address, uploading while downloading) and agree. aria2 is fetched once at a fixed version and must match its recorded SHA-256; it runs with a fixed set of options, answers only Ravenshelf on this PC with a new random secret, and stops uploading when a download finishes unless you choose to share for a while. You choose which files of a torrent to download; names Windows can't store safely, and names made to disguise a file, are refused. |
 | Microsoft Defender scan | Finished files are scanned one at a time. Only an explicitly recognized clean result is labeled as no threats found; unclear results need review. You can turn automatic scans off or scan again. |
 | Downloads never run by themselves | Ravenshelf never extracts archives or starts installers. Host windows only hand over archive file types. |
 | Home-network protection | File and cover-image requests check public addresses at connection time and after redirects. Protected host windows have separate domain restrictions; these controls are not a universal browser-security guarantee. |
@@ -41,20 +42,20 @@ Ravenshelf is built so that a bad web page, a bad link or a bad file has as litt
 | Hardened executable | Electron's run-as-Node, `NODE_OPTIONS`, debugger flags and extra `file://` privileges are switched off. App code loads only from its packaged archive, with embedded archive-integrity validation enabled. This is hardening, not a digital publisher signature. |
 | Automatic checks | Automated tests and dependency audits run on Windows for changes and releases. CodeQL's security-and-quality suite scans the code and workflows; Dependabot proposes dependency updates. A successful scan run does not mean there are no alerts. |
 
-**Limits, honestly stated:** a Defender scan and a working link do not prove a file is safe. Ravenshelf does not hide your IP address from the websites it connects to, and it is not an antivirus. See [PRIVACY.md](docs/PRIVACY.md) and [SECURITY.md](SECURITY.md) for details and how to report a problem privately.
+**Limits, honestly stated:** a Defender scan and a working link do not prove a file is safe. Ravenshelf does not hide your IP address from the websites it connects to, and with torrents everyone sharing the same torrent sees it. It is not an antivirus. See [PRIVACY.md](docs/PRIVACY.md) and [SECURITY.md](SECURITY.md) for details and how to report a problem privately.
 
 ### Verify your download
 
 Calculate the downloaded file's checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Ravenshelf-0.9.0-Windows.exe -Algorithm SHA256
+Get-FileHash .\Ravenshelf-0.10.0-Windows.exe -Algorithm SHA256
 ```
 
 The result must match `SHA256SUMS.txt` on the release page. With the [GitHub CLI](https://cli.github.com/) you can also verify its build-provenance attestation against this repository:
 
 ```powershell
-gh attestation verify .\Ravenshelf-0.9.0-Windows.exe --repo khattabhunter/ravenshelf
+gh attestation verify .\Ravenshelf-0.10.0-Windows.exe --repo khattabhunter/ravenshelf
 ```
 
 A matching checksum detects a mismatch with the published file; provenance records its build origin. From 0.4.2, the release's `.sigstore.json` file is the same signed record; you can pass it to the command with `--bundle .\Ravenshelf-0.7.0-Windows.exe.sigstore.json` instead of fetching it from GitHub. Neither certifies that software is malware-free, and the executable remains unsigned.
@@ -75,7 +76,8 @@ A matching checksum detects a mismatch with the published file; provenance recor
 | Queue cleanup | Select several entries or review completed downloads; keep files when removing entries, or explicitly confirm permanent file deletion. Storage checking separates queue-managed files, missing entries and other archives in the chosen folder; other archives are shown for reference only. Figures are estimates. |
 | Archive and checksum checks | Warn about recognizable missing/duplicate parts and inconsistent sizes; manually verify local SFV, MD5 or SHA-256 manifests. These checks do not certify file safety. |
 | Defender scans | Automatic Microsoft Defender scan of each finished file, with the result on its card and a **Scan again** button. |
-| Link handling | Supported host adapters, encrypted paste expansion, protected host windows, link export and JDownloader handoff. |
+| Link handling | Supported host adapters (including PixelDrain and MultiUpload), encrypted paste expansion, protected host windows, link export and JDownloader handoff. Hosts that have shut down are named instead of tried. |
+| Torrents | Optional, off by default. Magnet links from game pages, from fitgirl-repacks.site in your browser (with the extension) or pasted: Ravenshelf shows the torrent's files, you choose which to download, and they join your queue with pause, resume and a Defender scan. A chosen upload limit, and uploading stops at the end unless you choose to share for up to 15 minutes or an hour. |
 | Browser extension | Optional extension for Chrome, Edge, Brave and Firefox: browser downloads are checked by Ravenshelf before anything is saved, a right-click **Download with Ravenshelf** option, site blocking with public lists, a file-host pop-up and redirect guard, and optional VirusTotal checks with your own key. |
 | YouTube downloads | A Ravenshelf button in YouTube's player (it follows the player's size in normal, theater and full-screen views) with Best, 1080p, 720p, 480p, M4A or MP3, and right-click **Download with Ravenshelf** on videos and video links. Videos join your queue with pause, resume and Defender scans, in a **YouTube** folder. |
 | Nexus Mods downloads | With the browser extension, files you download on Nexus Mods are recognised, checked like any browser download, saved in `Mods\<game>` and downloaded over one connection. No Nexus Mods account, API key or browser cookies are used. |
@@ -90,11 +92,16 @@ A matching checksum detects a mismatch with the published file; provenance recor
 
 ## Host support
 
-| Source | Status in 0.9.0 |
+| Source | Status in 0.10.0 |
 | --- | --- |
 | FuckingFast | Normal host pages and download responses are checked through an isolated browser session without executing page scripts or clicking ads. Real verification challenges may still require a browser step. |
 | FileKeeper | Normal free-download form and countdown supported. Passwords and CAPTCHAs remain manual. |
 | DataNodes | Browser steps required; import a final direct HTTPS link or hand the set to JDownloader. |
+| PixelDrain | File links are checked through PixelDrain's public file information and downloaded over one connection; lists are expanded into their files. A browser check or a used-up free daily limit needs your browser or another mirror. |
+| MultiUpload | Mirror pages are read, and each file uses its copy on a supported host (FuckingFast, FileKeeper, PixelDrain or DataNodes). |
+| FitGirl pastes | Encrypted pastes at `paste.fitgirl-repacks.site` and the newer `pastefg.hermietkreeft.site` are decrypted on your PC. |
+| ZippyShare, BayFiles, LetsUpload | Closed (ZippyShare in March 2023, BayFiles in August 2023; LetsUpload has shut down too). Ravenshelf names them as shut down and never contacts them, not even through a redirect. |
+| Torrents (magnet links) | Optional, with aria2 1.37.0 (see [Torrent downloads](docs/USER-GUIDE.md#torrent-downloads)). Version 2 torrents are not supported yet. |
 | Direct HTTPS files | Supported, with resume and parallel connections when the server provides reliable range information. |
 
 ## Updating
@@ -108,7 +115,7 @@ For an older Atlas/Ravenshelf version or a manual update, close the older window
 ## Important limits
 
 - Catalogue refresh updates listings. It does not install games or apply game patches.
-- Ravenshelf handles direct HTTPS downloads; it does not include a torrent client.
+- Ravenshelf handles direct HTTPS downloads and, when you turn them on, torrents. Torrents share pieces with other people while they download, and everyone sharing the same torrent can see your IP address; only a VPN hides it, and Ravenshelf neither sets one up nor checks for one. A torrent nobody shares can't start.
 - A ready link means the host returned a file response. It is not proof that a multipart set is complete.
 - If the first file check omits its size, Ravenshelf tries a small range request. Some hosts still do not report a reliable total; the link can be ready while its size remains unknown.
 - Checksum matches show agreement with the manifest you chose; they do not establish its publisher or detect every malicious file.

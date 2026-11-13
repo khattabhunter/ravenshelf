@@ -2,6 +2,12 @@
 const {MESSAGES:TOOL_MESSAGES}=require('./media-tools.cjs');
 const {MESSAGES:MEDIA_MESSAGES}=require('./media-downloads.cjs');
 const {LINK_EXPIRED_NOTE:MOD_LINK_EXPIRED,LINK_MOVED_NOTE:MOD_LINK_MOVED,LINK_DROPPED_NOTE:MOD_LINK_DROPPED}=require('./mods.cjs');
+const {MESSAGES:PIXELDRAIN_MESSAGES}=require('./pixeldrain.cjs');
+const {MESSAGES:MULTIUP_MESSAGES}=require('./multiup.cjs');
+const {CLOSED_HOSTS}=require('./hosts.cjs');
+const {MESSAGES:MAGNET_MESSAGES}=require('./magnet.cjs');
+const {MESSAGES:ENGINE_MESSAGES}=require('./torrent-engine.cjs');
+const {TOOL_MESSAGES:TORRENT_TOOL_MESSAGES,MESSAGES:TORRENT_MESSAGES}=require('./torrent-messages.cjs');
 
 // Only developer-authored messages cross the main-process error boundary.
 // Do not redact arbitrary exception text: paths, credentials and response data
@@ -162,7 +168,12 @@ const MESSAGES=new Map([
   // Fixed messages of the YouTube helper programs and yt-dlp runner.
   ...Object.values(TOOL_MESSAGES),...Object.values(MEDIA_MESSAGES),
   // Fixed messages about a mod file's download link.
-  MOD_LINK_EXPIRED,MOD_LINK_MOVED,MOD_LINK_DROPPED
+  MOD_LINK_EXPIRED,MOD_LINK_MOVED,MOD_LINK_DROPPED,
+  // Fixed messages about PixelDrain, MultiUpload and hosts that have shut down.
+  ...Object.values(PIXELDRAIN_MESSAGES),...Object.values(MULTIUP_MESSAGES),...CLOSED_HOSTS.map(entry=>entry.message),
+  'Only the first 20 PixelDrain lists were expanded.','Only the first 500 MultiUpload files were looked up.',
+  // Fixed messages about magnet links, torrent files and the torrent engine.
+  ...Object.values(MAGNET_MESSAGES),...Object.values(ENGINE_MESSAGES),...Object.values(TORRENT_TOOL_MESSAGES),...Object.values(TORRENT_MESSAGES)
 ].map(message=>[message,message]));
 // The connector check failing means this copy of the app was altered or damaged.
 const CONNECTOR_CHANGED='The browser connector in this copy of Ravenshelf failed its integrity check. Download Ravenshelf again from its GitHub releases page.';
@@ -207,7 +218,15 @@ const ACTIONS=new Map([
   ['getDownloadSpace','Free space could not be checked.'],
   ['setLanguage','The language could not be changed. Try again.'],
   ['openModPage','The mod’s page could not be opened.'],
-  ['openModsFolder','The Mods folder could not be opened.']
+  ['openModsFolder','The Mods folder could not be opened.'],
+  ['torrent',ENGINE_MESSAGES.failed],
+  ['saveTorrentSettings','The torrent preference could not be saved. Try again.'],
+  ['setUpTorrents','Torrent downloads could not be set up. Try again later.'],
+  ['cancelTorrentSetup','The torrent setup could not be cancelled. Try again.'],
+  ['removeTorrentTools','The torrent downloader could not be removed. Pause your torrent downloads and try again.'],
+  ['openMagnet','This magnet link could not be opened. Check it and try again.'],
+  ['closeMagnet','This torrent could not be closed. Try again.'],
+  ['addTorrent','This torrent could not be added to your downloads. Try again.']
 ]);
 const SYSTEM_MESSAGES=new Map([
   ['ENOENT','The requested file or folder is unavailable. Check that it still exists and try again.'],

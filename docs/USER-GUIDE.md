@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide describes Ravenshelf 0.9.0 for Windows, a preview release. See the [0.9.0 release notes](RELEASE-0.9.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
+This guide describes Ravenshelf 0.10.0 for Windows, a preview release. See the [0.10.0 release notes](RELEASE-0.10.0.md) for what changed and the [0.4.1 bug review](BUG-REVIEW-0.4.1.md) for earlier fixes and known limits.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.9.0-Windows.exe` from the [v0.9.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.9.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.10.0-Windows.exe` from the [v0.10.0 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.0). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, close its window before opening the new executable. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
@@ -80,7 +80,7 @@ After this PC's specs have been read once, later games are compared as soon as y
 ## Download a file set
 
 1. Open a game and select **one host**. The available hosts usually offer alternative copies of the same archives; mixing mirrors can duplicate files.
-2. Choose **Check download links**. Ravenshelf expands supported paste links and checks the selected files.
+2. Choose **Check download links**. Ravenshelf expands supported paste links, PixelDrain lists and MultiUpload mirror pages, and checks the selected files.
 3. Read each result. **Ready** means a file response was found. **Needs a browser step** means the host requires interaction. **Not found** means the host explicitly reported a missing or deleted file. Other failures remain **Not verified** with an explanation.
 4. Read the archive-set warnings. Recognizable numbered archives are checked for earlier/internal gaps, duplicate part numbers and inconsistent known sizes among nonfinal parts. Errors require a fresh **Queue these ready files anyway** confirmation. An unknown final part is a warning: a gap-free selection does not prove the whole archive is present.
 5. Use **Download all** when the required set is ready. If the files need more room than the drive of your download folder has free (less what downloads already waiting there still need), Ravenshelf says so, and the button waits for a tick in **Queue them anyway**; free some space or choose another download folder in **Settings** first if you can. Files of unknown size, and files already in the queue, are not counted; downloads that failed count with what they still need. A check that cannot be made says **Free space could not be checked.** and holds the button for four seconds at most. The check is made when the results appear: after choosing another folder, choose **Check links again**. It covers file sets queued here; browser, YouTube and Nexus Mods downloads are not checked. If only some links are ready, the button clearly names how many files it can queue. Only those ready files enter the queue. If the archive check itself fails, check the links again first.
@@ -92,7 +92,7 @@ Check the source notes for required parts, optional languages, updates and separ
 
 ### Import, export and JDownloader
 
-**Import links** accepts a supported game page, encrypted FitGirl paste or several direct HTTPS links. When a page offers multiple mirrors, choose one host first. **Check links again** retries the original sources.
+**Import links** accepts a supported game page, encrypted FitGirl paste (at `paste.fitgirl-repacks.site` or its newer address `pastefg.hermietkreeft.site`), PixelDrain and MultiUpload links, or several direct HTTPS links. When a page offers multiple mirrors, choose one host first. **Check links again** retries the original sources. A magnet link pasted on its own opens its torrent review instead (see [Torrent downloads](#torrent-downloads)).
 
 **Copy links** and **Export link list** preserve the source addresses. **Send to JDownloader** sends them to a running JDownloader 2 instance through its local Click'n'Load interface. Check JDownloader's LinkGrabber after sending; acceptance does not prove every link is available.
 
@@ -103,8 +103,11 @@ Check the source notes for required parts, optional languages, updates and separ
 | FuckingFast | Ravenshelf reads supported pages and normal download responses through its isolated browser session, without running those pages' scripts or clicking ad controls. A real verification challenge may still require a protected window. |
 | FileKeeper | Supported free-download forms and short countdowns are handled automatically. CAPTCHA/password flows require a manual step. |
 | DataNodes | Complete its browser steps, import a final direct HTTPS URL, or use JDownloader. |
+| PixelDrain | A file link (`pixeldrain.com/u/…`) is checked with PixelDrain's public file information and downloaded over **one connection**, as PixelDrain allows. A file PixelDrain's own scan flagged as possibly harmful is shown as such and not offered. A list (`pixeldrain.com/l/…`) is expanded into its files when you check the links (up to 20 lists at a time); a list PixelDrain won't show right now stays, with **Open in browser**. When PixelDrain asks for a browser check, or your free daily download amount there is used up, the file says so: open it in your browser, or choose another mirror. |
+| MultiUpload | A MultiUpload link (`multiup.io/download/…` or `multiup.io/…/mirror/…`; `multiup.org` too) is read from its mirror page, for the copies it lists. For each file, Ravenshelf uses the copy on the first supported host in this order: FuckingFast, FileKeeper, PixelDrain, DataNodes. Up to 500 files are looked up at a time. A file with no supported copy, or whose mirror page can't be read, stays as its MultiUpload link with **Open in browser**; a file MultiUpload no longer has is left out with a note. When you import a game page that has several hosts, MultiUpload is its own host to choose, and its files are looked up only after you choose it; a page with only one host is expanded straight away. |
+| ZippyShare, BayFiles, LetsUpload | These hosts have shut down (ZippyShare in March 2023, BayFiles in August 2023), and their old names can belong to someone else now, so Ravenshelf never contacts them, not even through a redirect. A game page names them under **Not offered because these hosts have shut down**; links to them are left out of a link check, with a note that the host has shut down. Choose another mirror. |
 
-An **Open protected host** button is available for manual cases. That window blocks new popup windows and requests or navigation outside the chosen host family, apart from the verification domain it needs. FuckingFast captures also check the download endpoint and, when the original link supplies a filename, match the returned archive name. Executable bait and unrelated destinations are rejected.
+An **Open protected host** button is available for manual cases with FuckingFast, FileKeeper and DataNodes. PixelDrain and MultiUpload links that need a manual step (PixelDrain's browser check, a MultiUpload file with no supported copy) offer **Open in browser** instead, which opens the link in your ordinary browser; links on other hosts get no button. The protected window blocks new popup windows and requests or navigation outside the chosen host family, apart from the verification domain it needs. FuckingFast captures also check the download endpoint and, when the original link supplies a filename, match the returned archive name. Executable bait and unrelated destinations are rejected.
 
 These restrictions can prevent a host flow from working if it depends on other domains. **Source page** opens your ordinary browser, whose protections are separate. Popup blocking, filename checks and transfer checks do not establish that archive contents are safe. Ravenshelf does not change your antivirus settings.
 
@@ -213,7 +216,7 @@ Ravenshelf downloads four public lists of dangerous sites, about 261,000 entries
 
 On FuckingFast and FileKeeper pages, the page can't send you to another site. A redirect puts the download page back, pop-ups are closed (including blank ones the page fills with ads), and an ad frame that takes over the tab is undone. Opening a site yourself, by typing its address or from a bookmark, is never blocked by this rule.
 
-The toolbar button shows whether Ravenshelf is connected. It lets you turn each protection and each extra (the YouTube button, sorting Nexus Mods files by game) off, or pause both protections for 10 minutes.
+The toolbar button shows whether Ravenshelf is connected. It lets you turn each protection and each extra (the YouTube button, sorting Nexus Mods files by game, opening FitGirl magnet links in Ravenshelf) off, or pause both protections for 10 minutes.
 
 ### VirusTotal (optional)
 
@@ -286,6 +289,47 @@ Only the video's ID and your quality choice go from the browser to Ravenshelf. y
 - In Firefox, if the button doesn't appear, allow Ravenshelf on www.youtube.com from Firefox's extensions menu.
 - The Chrome Web Store doesn't allow YouTube downloaders, so this extension can't be published there. Loading it from Ravenshelf's folder is not affected.
 
+## Torrent downloads
+
+Some games are also offered as a torrent, through a magnet link. Ravenshelf can download those with **aria2**, a free torrent program. Torrent downloads are **off** until you turn them on.
+
+### Before you turn them on
+
+Torrents are shared between people, so they work differently from the other downloads:
+
+- **Everyone sharing the same torrent can see this PC's IP address**, from the moment Ravenshelf looks for the torrent's file list. Only a VPN hides it; Ravenshelf does not set one up or check for one.
+- **While a torrent downloads, Ravenshelf uploads pieces of it to other people**, up to the upload limit you choose. Uploading can't be switched off completely: torrents only work when people share pieces with each other.
+- **Downloading or sharing games you have no right to can be against the law where you live.**
+
+### Turn on and set up
+
+1. Open **Settings → Torrent downloads** and choose **Turn on torrent downloads**. Read **What torrents share**, tick **I understand what torrents share.** and choose **Turn on torrent downloads**.
+2. Choose **Set up torrent downloads**. Setup downloads aria2 1.37.0 once (about 2.4 MB) from its official GitHub release and keeps it in `%LOCALAPPDATA%\Ravenshelf\torrent-tools`. The download must match the size and SHA-256 recorded in Ravenshelf, or nothing is installed. Before aria2 starts, Ravenshelf checks it again: its size every time, and its SHA-256 the first time in each session and whenever the file has changed. aria2 never updates itself.
+3. Choose an **Upload speed limit** (10 KB/s, 50 KB/s, 100 KB/s, 500 KB/s or 1 MB/s; 100 KB/s unless you change it) and what happens **After a torrent finishes**: **Stop uploading right away** (the default), **Share for 15 more minutes** or **Share for an hour more**. Sharing also ends earlier once aria2 has uploaded as much as it downloaded.
+
+**Turn off torrent downloads** is refused while a torrent is waiting or downloading: pause them first. **Remove the torrent downloader** deletes aria2 again. Torrent downloads work on Windows only.
+
+### Download a torrent
+
+- **From a game page:** when a game's page also has a magnet link, its details say **This game also has a torrent (magnet link).** Choose **Download with torrent**.
+- **From your browser:** with the [browser extension](#browser-extension) connected, clicking a magnet link on fitgirl-repacks.site opens it in Ravenshelf. If torrent downloads are off, Ravenshelf is closed, or the tab is a private window, the browser opens the link as before (for example, in another torrent app). If they are on but not set up yet, Ravenshelf comes forward on **Settings**, and the link opens as soon as setup finishes (links wait in memory for up to an hour, five at most). The toolbar button's **Open FitGirl magnet links in Ravenshelf** switch turns this off. In Firefox, if nothing happens, allow Ravenshelf on fitgirl-repacks.site from Firefox's extensions menu. After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page.
+- **Pasted:** paste a magnet link on its own in **Import links**.
+
+Ravenshelf first finds the torrent's file list from the people sharing it, which can take a minute; nothing else is downloaded yet. Then **Choose the files to download** lists every file. All are ticked; you can untick optional files (such as FitGirl's `fg-optional` and `fg-selective` files). Choose **Download chosen files**. Ravenshelf refuses a torrent whose file names Windows can't store exactly as written, names made to look like something else (hidden text-direction or zero-width characters, a program disguised with a second ending such as `invoice.pdf.exe` or an ending pushed out of sight with spaces, names like Windows' short `~1` names, two names Windows would treat as one), one with more than 10,000 files, one whose paths would be too long for your download folder, and torrents in the newer version 2 format. File names inside a torrent are never changed to make them fit; only the torrent's top folder (or file) gets a number, such as `Name (1)`, when that name is already taken.
+
+A torrent joins **Downloads** like any other download, with pause, resume, retry and cancel. Its card shows how many people it is connected to and the upload speed instead of connections. The shared download speed limit in **Settings** also limits torrents, but separately: torrents and other downloads together can go above it. Torrents from a game page go to that game's folder; torrents from the browser or pasted go to a **Torrents** folder in your download folder. While it downloads, the files are in a working folder named `.atlas-torrent-…` next to where they will go; when every chosen file is complete, at its full size, the torrent's folder (or file) appears in one step. Each finished file gets Windows' downloaded-from-the-internet mark, and Microsoft Defender scans the torrent's folder as a whole when scans are on. If you chose to share afterwards, the card says that the download is complete and sharing with other people for up to 15 minutes (or an hour), and the files appear in their folder when sharing ends. Pausing or cancelling it then only ends sharing early: aria2 lets go of the torrent at once, the finished files still appear, and the download counts as complete. A torrent cancelled or failed before it finished keeps its working folder, with what it had downloaded, until you choose **Delete files** for it.
+
+### What aria2 is allowed to do
+
+aria2 runs only while torrents are being looked up or downloaded, and stops a minute after the last one, or when Ravenshelf closes (also if Ravenshelf crashes). Ravenshelf starts it with a fixed set of options: it reads no configuration file, keeps no log, listens for Ravenshelf only on this PC (127.0.0.1) with a new random secret each time, does not look for peers on your home network, uses IPv4 only, never follows web seeds or other links named in a torrent, and never overwrites or renames existing files. It finds people through the torrent's trackers (only `udp`, `http` and `https` trackers named in the magnet link, without passwords; trackers written as an address on this PC or your home network, or as a local name, are left out), the DHT network and peer exchange. aria2 gets a new random DHT identity every time it starts, so other computers can't recognise this PC from one session to the next by it. Like other torrent programs, it accepts connections from other people on a port between 6881 and 6999, so the first time Windows Firewall may ask whether to allow `aria2c.exe`; torrents still work, perhaps more slowly, if you don't allow it. aria2 does not ask your router to open ports. Text that aria2 sends back is never shown; only its error numbers are read.
+
+### Limits
+
+- A torrent with nobody sharing it can't start: its file list can't be found. Try again later.
+- Ravenshelf downloads torrents; it does not extract or install the games.
+- A finished torrent is not checked against a checksum file automatically: use **Settings → File integrity** with the torrent's own MD5 file if it has one. aria2 checks every piece against the torrent itself while downloading.
+- Torrent links from sites other than fitgirl-repacks.site are opened by your browser as before; paste them into **Import links** to use Ravenshelf.
+
 ## Microsoft Defender scans
 
 When a file finishes, Ravenshelf asks Microsoft Defender to scan it and shows the result on the download card:
@@ -295,7 +339,7 @@ When a file finishes, Ravenshelf asks Microsoft Defender to scan it and shows th
 - **Result needs review** — Defender finished, but Ravenshelf could not confidently interpret a clean result. Check **Windows Security → Virus & threat protection → Protection history**. Unrecognized language or output formats can produce this status.
 - **Not scanned** — Defender is unavailable (for example, another antivirus replaced it), the file was missing, or the scan could not finish. Scan the file with your antivirus before opening it.
 
-Scans run one at a time so the PC stays responsive; large archives can take a few minutes. Use the shield button on a finished download to scan it again. Turn automatic scans on or off in **Settings → Scan finished downloads**. Ravenshelf never changes Defender settings and never adds exclusions. A clean result lowers risk but cannot prove a file is safe.
+A torrent with several files is scanned as one folder; its result speaks of the download and its files. Scans run one at a time so the PC stays responsive; large archives can take a few minutes. Use the shield button on a finished download to scan it again. Turn automatic scans on or off in **Settings → Scan finished downloads**. Ravenshelf never changes Defender settings and never adds exclusions. A clean result lowers risk but cannot prove a file is safe.
 
 ## See installed games and reported versions
 
@@ -337,7 +381,7 @@ Paused or failed files keep the action waiting. New files join an armed queue; a
 
 ## Local data and troubleshooting
 
-The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. With the browser extension connected it also holds `browser-host` (the connector and its browser manifests), `browser-extension` (the folders your browsers load), `threat-lists` (the downloaded protection lists) and `virustotal.json` (your sealed VirusTotal key and options). Download files use the folder selected in **Settings**. The YouTube helper programs are kept separately in `%LOCALAPPDATA%\Ravenshelf\media-tools`, with yt-dlp's cache and temporary folders; a temporary folder is removed when its download ends.
+The app normally stores its profile under `%APPDATA%\atlas-repack-library` (the folder keeps its original name so updates from Atlas Library keep your data). It contains preferences, library entries, installed-game scan results, queue data and separate host-browser session data. With the browser extension connected it also holds `browser-host` (the connector and its browser manifests), `browser-extension` (the folders your browsers load), `threat-lists` (the downloaded protection lists) and `virustotal.json` (your sealed VirusTotal key and options). Download files use the folder selected in **Settings**. The YouTube helper programs are kept separately in `%LOCALAPPDATA%\Ravenshelf\media-tools`, with yt-dlp's cache and temporary folders; a temporary folder is removed when its download ends. aria2, the torrent program, is kept in `%LOCALAPPDATA%\Ravenshelf\torrent-tools`. The profile's `torrents` folder holds the checked file list of each torrent in your downloads (so a paused torrent can resume without asking other people again; lists of torrents no longer in your downloads are removed when Ravenshelf starts). aria2's DHT file there is deleted before aria2 starts and after it stops (also when it ends on its own).
 
 Close Ravenshelf before backing up its profile. Treat this backup as private: saved paths, URLs and host-session information can be sensitive. Do not attach the profile, `library.json`, cookies or signed download URLs to a public issue.
 
@@ -369,6 +413,10 @@ Read the [privacy notes](PRIVACY.md) for data flows and IP visibility. Catalogue
 | The Ravenshelf button doesn't appear on YouTube | After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the YouTube tab. Check the toolbar button's **YouTube download button** switch. The button hides in small players; right-click still works. |
 | A YouTube video fails | Read the message on its card: private, members-only, age-restricted and region-locked videos can't be downloaded. If many videos fail, update Ravenshelf for a newer yt-dlp. |
 | The YouTube helper programs are damaged | Choose **Set up again** in **Settings → YouTube downloads**. Ravenshelf downloads and checks them again. |
+| A torrent's review keeps saying it is finding the file list | Nobody is sharing it right now, or your network blocks torrents. Close the review and try again later. |
+| Clicking a magnet link on fitgirl-repacks.site does nothing in Ravenshelf | Check that torrent downloads are on in **Settings → Torrent downloads**, and the toolbar button's **Open FitGirl magnet links in Ravenshelf** switch. After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the tab. In Firefox, allow Ravenshelf on fitgirl-repacks.site. |
+| The torrent downloader is damaged | Choose **Set up again** in **Settings → Torrent downloads**. |
+| PixelDrain says its daily limit is used up | PixelDrain limits free downloads per day. Try again later, or choose another mirror. |
 | A Nexus Mods file went to **Browser downloads** instead of **Mods** | After updating Ravenshelf, choose **Reload** for Ravenshelf on the browser's extensions page and reload the Nexus Mods tab. Check the toolbar button's **Sort Nexus Mods files by game** switch. Start the download from the file's own page (**Manual download**). In Firefox, allow Ravenshelf on www.nexusmods.com from Firefox's extensions menu. A file that a mod's page links to on another site is not a Nexus Mods file. |
 | A mod download stopped and won't resume | Nexus Mods' download links expire. Start the download again from the mod's page; a failed or cancelled entry takes the new link and tries again. If the entry is paused, choose **Resume** first. |
 | Some text is still in English after choosing Arabic | Text from websites stays as the site wrote it. The browser extension changes language the next time it talks to Ravenshelf: open its toolbar menu. |

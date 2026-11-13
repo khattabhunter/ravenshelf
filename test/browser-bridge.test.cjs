@@ -69,11 +69,13 @@ test('extension manifests request only what the features need',()=>{
   assert.equal(firefox.browser_specific_settings.gecko.id,protocol.FIREFOX_EXTENSION_ID);assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions,{required:['browsingActivity','websiteContent']},'addresses, and the names a Nexus Mods page showed');
   for(const manifest of [chrome,firefox]){
     assert.equal(manifest.host_permissions,undefined,'no host permissions are requested');
-    // The two page scripts, top frame only: the download button in YouTube's
-    // player, and the reader that notes which mod a Nexus Mods page is about.
+    // The three page scripts, top frame only: the download button in YouTube's
+    // player, the reader that notes which mod a Nexus Mods page is about, and
+    // the one that passes on a magnet link clicked on fitgirl-repacks.site.
     assert.deepEqual(manifest.content_scripts,[
       {matches:['https://www.youtube.com/*'],js:['policy.js','text.js','youtube.js'],css:['youtube.css'],run_at:'document_idle',all_frames:false},
-      {matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false}]);
+      {matches:['https://www.nexusmods.com/*'],js:['policy.js','nexus.js'],run_at:'document_idle',all_frames:false},
+      {matches:['https://fitgirl-repacks.site/*'],js:['magnet.js'],run_at:'document_idle',all_frames:false}]);
     for(const script of manifest.content_scripts)for(const file of [...script.js,...(script.css||[])])assert.ok(setup.EXTENSION_FILES.includes(file),file);
     // The description comes from the extension's language files, in English and Arabic.
     assert.equal(manifest.description,'__MSG_extDescription__');assert.equal(manifest.default_locale,'en');
@@ -472,4 +474,21 @@ test('the extension is told the app language, and block reasons come in that lan
   // A failing translation keeps the English reason.
   bridge.localText=()=>{throw new Error('no');};assert.equal(bridge.localReason('Plain reason.'),'Plain reason.');
   bridge.localText=()=>'';assert.equal(bridge.localReason('Plain reason.'),'Plain reason.');
+});
+
+test('a magnet link from the extension is handed to the torrent review, or back to the browser when there is none',async t=>{
+  const received=[];
+  const bridge=new BrowserBridge({hostDir:temp(),threatLists:null,openExternal:async()=>{},receiveMagnet:async request=>{received.push(request);return {action:request.magnet.includes('dn=off')?'off':'review'};}});
+  t.after(()=>bridge.stop());
+  const link='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567';
+  assert.deepEqual(await bridge.respond('chromium',{v:1,type:'magnet',magnet:link}),{ok:true,action:'review'});
+  assert.deepEqual(await bridge.respond('firefox',{v:1,type:'magnet',magnet:link+'&dn=off'}),{ok:true,action:'off'});
+  assert.deepEqual(received,[{magnet:link,browser:'chromium'},{magnet:link+'&dn=off',browser:'firefox'}]);
+  assert.deepEqual(await bridge.respond('chromium',{v:1,type:'magnet',magnet:'https://x.example/'}),{ok:false,error:'invalid'});
+  const plain=new BrowserBridge({hostDir:temp(),threatLists:null,openExternal:async()=>{}});
+  t.after(()=>plain.stop());
+  assert.deepEqual(await plain.respond('chromium',{v:1,type:'magnet',magnet:link}),{ok:true,action:'off'});
+  const odd=new BrowserBridge({hostDir:temp(),threatLists:null,openExternal:async()=>{},receiveMagnet:async()=>({action:'surprise'})});
+  t.after(()=>odd.stop());
+  assert.deepEqual(await odd.respond('chromium',{v:1,type:'magnet',magnet:link}),{ok:false,error:'failed'});
 });

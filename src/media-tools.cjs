@@ -208,11 +208,13 @@ async function renameDirectory(from,to,{attempts=6,delayMs=250}={}){
 }
 
 class MediaTools{
-  constructor({root,fetcher=safeFetch,bandwidthLimiter=null,onChange=()=>{},onReady=()=>{},platform=process.platform,tools=TOOLS,stallMs=STALL_MS,
+  // `tools`, `roles` and `messages` let another feature (torrents) keep its own
+  // pinned programs, in its own folder, with its own wording.
+  constructor({root,fetcher=safeFetch,bandwidthLimiter=null,onChange=()=>{},onReady=()=>{},platform=process.platform,tools=TOOLS,roles=ROLES,messages=MESSAGES,stallMs=STALL_MS,
     partSize=PART_SIZE,connections=CONNECTIONS,partStallMs=PART_STALL_MS,raceAfterMs=RACE_AFTER_MS,partTries=PART_TRIES,retryDelayMs=RETRY_DELAY_MS,
     slowAfterMs=SLOW_AFTER_MS,slowRate=SLOW_RATE,slowRestarts=SLOW_RESTARTS}={}){
-    if(typeof root!=='string'||!path.isAbsolute(root))throw new Error(MESSAGES.unsupported);
-    Object.assign(this,{root,fetcher,bandwidthLimiter,onChange,onReady,platform,tools,stallMs,partSize,connections,partStallMs,raceAfterMs,partTries,retryDelayMs,slowAfterMs,slowRate,slowRestarts});
+    if(typeof root!=='string'||!path.isAbsolute(root))throw new Error(messages.unsupported);
+    Object.assign(this,{root,fetcher,bandwidthLimiter,onChange,onReady,platform,tools,roles,messages,stallMs,partSize,connections,partStallMs,raceAfterMs,partTries,retryDelayMs,slowAfterMs,slowRate,slowRestarts});
     this.files=allFiles(tools);this.setId=setName(tools);this.dir=path.join(root,this.setId);
     this.cache=path.join(root,'cache');this.temp=path.join(root,'tmp');
     this.state={phase:'missing',progress:0,message:''};
@@ -226,7 +228,7 @@ class MediaTools{
   update(patch){Object.assign(this.state,patch);try{this.onChange(this.snapshot());}catch{}}
   // Quick check of what is on disk; the full check runs before first use.
   refresh(){
-    if(this.platform!=='win32'){this.state={phase:'unsupported',progress:0,message:MESSAGES.unsupported};return this.state.phase;}
+    if(this.platform!=='win32'){this.state={phase:'unsupported',progress:0,message:this.messages.unsupported};return this.state.phase;}
     if(this.task||['damaged','error'].includes(this.state.phase))return this.state.phase;
     this.state={phase:this.installed()?'ready':'missing',progress:0,message:''};
     return this.state.phase;
@@ -239,7 +241,7 @@ class MediaTools{
     }catch{return false;}
   }
   install(){
-    if(this.platform!=='win32')throw new Error(MESSAGES.unsupported);
+    if(this.platform!=='win32')throw new Error(this.messages.unsupported);
     if(this.disposed)return this.snapshot();
     if(this.task)return this.snapshot();
     if(this.state.phase==='ready'&&this.installed())return this.snapshot();
@@ -250,7 +252,7 @@ class MediaTools{
       try{this.onReady();}catch{}
     },error=>{
       const cancelled=error?.name==='AbortError'||this.controller?.signal.aborted;
-      this.update({phase:cancelled?'missing':'error',progress:0,message:cancelled?MESSAGES.cancelled:(error?.code==='ENOSPC'?'There is not enough free disk space. Free some space and try again.':MESSAGES.failed)});
+      this.update({phase:cancelled?'missing':'error',progress:0,message:cancelled?this.messages.cancelled:(error?.code==='ENOSPC'?'There is not enough free disk space. Free some space and try again.':this.messages.failed)});
     }).finally(()=>{this.task=null;this.controller=null;});
     return this.snapshot();
   }
@@ -499,7 +501,7 @@ class MediaTools{
     for(const entry of entries)if((SET_NAME.test(entry.name)&&entry.name!==this.setId)||STAGING_NAME.test(entry.name))await removeDirectory(path.join(this.root,entry.name)).catch(()=>{});
   }
   async remove(){
-    if(this.task)throw new Error(MESSAGES.running);
+    if(this.task)throw new Error(this.messages.running);
     if(this.verifying)await this.verifying.catch(()=>{});
     let entries=[];try{entries=await fs.promises.readdir(this.root,{withFileTypes:true});}catch(error){if(error.code!=='ENOENT')throw error;}
     for(const entry of entries)if(SET_NAME.test(entry.name)||STAGING_NAME.test(entry.name)||['cache','tmp'].includes(entry.name))await removeDirectory(path.join(this.root,entry.name));
@@ -510,16 +512,16 @@ class MediaTools{
   // Paths to the programs after checking each one against its pinned size and
   // SHA-256. Files are hashed once per session and again if they change.
   async verified(){
-    if(this.platform!=='win32')throw new Error(MESSAGES.unsupported);
-    if(this.task)throw new Error(MESSAGES.running);
-    if(this.state.phase==='damaged')throw new Error(MESSAGES.damaged);
+    if(this.platform!=='win32')throw new Error(this.messages.unsupported);
+    if(this.task)throw new Error(this.messages.running);
+    if(this.state.phase==='damaged')throw new Error(this.messages.damaged);
     if(this.state.phase==='error')this.state.phase='missing';
-    if(this.refresh()!=='ready')throw new Error(MESSAGES.setup);
+    if(this.refresh()!=='ready')throw new Error(this.messages.setup);
     if(!this.verifying)this.verifying=this.performVerify().finally(()=>{this.verifying=null;});
     return this.verifying;
   }
   async performVerify(){
-    const damaged=()=>{this.verifiedKey=null;this.update({phase:'damaged',progress:0,message:MESSAGES.damaged});return new Error(MESSAGES.damaged);};
+    const damaged=()=>{this.verifiedKey=null;this.update({phase:'damaged',progress:0,message:this.messages.damaged});return new Error(this.messages.damaged);};
     try{
       const identities=[];
       for(const file of this.files){
@@ -533,16 +535,16 @@ class MediaTools{
         this.verifiedKey=key;
       }
     }catch(error){
-      if(error?.message===MESSAGES.damaged)throw error;
+      if(error?.message===this.messages.damaged)throw error;
       // A missing file is damage; a file that is only busy (for example while
       // antivirus scans it) can be checked again on the next try.
       if(error?.code==='ENOENT'||error?.code==='ENOTDIR')throw damaged();
       this.verifiedKey=null;
-      throw new Error(MESSAGES.unreadable);
+      throw new Error(this.messages.unreadable);
     }
     await fs.promises.mkdir(this.cache,{recursive:true});await fs.promises.mkdir(this.temp,{recursive:true});
     const paths={dir:this.dir,cache:this.cache,temp:this.temp};
-    for(const file of this.files)if(ROLES.includes(file.role))paths[file.role]=path.join(this.dir,file.name);
+    for(const file of this.files)if(this.roles.includes(file.role))paths[file.role]=path.join(this.dir,file.name);
     return paths;
   }
   async dispose(){this.disposed=true;this.controller?.abort();await Promise.allSettled([this.task,this.verifying].filter(Boolean));}

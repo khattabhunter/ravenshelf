@@ -15,15 +15,19 @@ const {inspectLink,assessDownload,nameReasons,nameFromURL}=require('./link-safet
 const {hashFile}=require('./virustotal.cjs');
 const {fromNexus,modFolder:gameFolder,MODS_FOLDER}=require('./mods.cjs');
 const {safeName,folderName}=require('./safe-name.cjs');
+const {PASTE_HOSTS,PIXELDRAIN_HOSTS,isPixeldrainHost}=require('./hosts.cjs');
 
-const PROVIDER_ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com','paste.fitgirl-repacks.site'];
+const PROVIDER_ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com',...PIXELDRAIN_HOSTS,...PASTE_HOSTS];
+// PixelDrain and the paste sites count only at their own addresses (PixelDrain also with www.),
+// as everywhere else in Ravenshelf; a subdomain of them is an ordinary download.
+const EXACT_ROOTS=new Set([...PIXELDRAIN_HOSTS,...PASTE_HOSTS]);
 const MAX_PENDING=50;
 const CAPTURE_TTL_MS=60*60*1000;
 const FINISHED_TTL_MS=10*60*1000;
 const ALLOW_ONCE_MS=2*60*1000;
 const REQUESTS_PER_MINUTE=240;
 const hostOf=value=>{try{return new URL(value).hostname.toLowerCase();}catch{return '';}};
-const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||host.endsWith('.'+root));};
+const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||(!EXACT_ROOTS.has(root)&&host.endsWith('.'+root)))||isPixeldrainHost(host);};
 const baseName=value=>String(value||'').split(/[\\/]/).filter(Boolean).at(-1)?.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240)||undefined;
 // The name a download is saved under. The queue cleans the name it is handed
 // once, with safeName(), before it saves the file. So the checks here judge,
@@ -44,10 +48,10 @@ async function writeJSONAtomic(file,value){
 }
 
 class BrowserBridge extends EventEmitter{
-  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},language=()=>({language:'en',digits:'latn'}),localText=text=>text,appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
+  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,receiveMagnet=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},language=()=>({language:'en',digits:'latn'}),localText=text=>text,appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
     super();
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
-    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
+    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,receiveMagnet,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
     this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
   }
@@ -127,6 +131,13 @@ class BrowserBridge extends EventEmitter{
         if(typeof this.queueMedia!=='function')return {ok:false,error:'invalid'};
         const result=await this.queueMedia({videoId:message.videoId,quality:message.quality,browser});
         return ['queued','duplicate','setup','busy'].includes(result?.action)?{ok:true,action:result.action}:{ok:false,error:'failed'};
+      }
+      // A magnet link waits in Ravenshelf for the user to see its files. 'off'
+      // lets the browser open it as before (in another torrent app, for example).
+      if(message.type==='magnet'){
+        if(typeof this.receiveMagnet!=='function')return {ok:true,action:'off'};
+        const result=await this.receiveMagnet({magnet:message.magnet,browser});
+        return ['review','setup','off','invalid','busy'].includes(result?.action)?{ok:true,action:result.action}:{ok:false,error:'failed'};
       }
       if(message.type==='threats')return {ok:true,manifest:this.threatLists?this.threatLists.browserManifest():{version:'',total:0,rules:[]}};
       if(message.type==='threatRule'){const rule=this.threatLists?.browserRule(message.id);return rule?{ok:true,rule}:{ok:false,error:'not-found'};}

@@ -13,7 +13,7 @@ const STATUS = Object.freeze({
   unavailable: { tone: 'warn', title: 'Ravenshelf did not respond', text: () => tr.t('Try again in a moment.') },
   unknown: { tone: 'muted', title: 'Checking…', text: () => '' }
 });
-const SWITCHES = Object.freeze(['capture', 'protection', 'guard', 'youtube', 'nexus']);
+const SWITCHES = Object.freeze(['capture', 'protection', 'guard', 'youtube', 'nexus', 'magnets']);
 let activeTab = null;
 let current = null;
 

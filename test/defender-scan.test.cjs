@@ -226,3 +226,37 @@ test('an unexpected scanner failure is recorded as a scan error', async t => {
   await until(() => manager.downloads[0]?.scan?.status === 'error', 'scan error');
   assert.match(manager.downloads[0].scan.message, /could not finish/);
 });
+
+test('a torrent folder is scanned as a whole, and links are never followed', async () => {
+  const DIR = 'C:\\Games\\Torrents\\Example';
+  const kinds = new Map([[DIR, 'dir'], ['C:\\Games\\Torrents\\Link', 'link'], [FILE, 'file']]);
+  const stat = file => {
+    const kind = kinds.get(file); if (!kind) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return { isFile: () => kind === 'file', isDirectory: () => kind === 'dir' || kind === 'link', isSymbolicLink: () => kind === 'link' };
+  };
+  const fsApi = { statSync: stat, lstatSync: stat };
+  const calls = [];
+  const scan = createDefenderScanner({ platform: 'win32', fsApi, findTool: () => inboxTool,
+    execFileImpl(tool, args, _options, done) { calls.push(args); done(null, `Scan starting...\nScan finished.\nScanning ${args[4]} found no threats.`); } });
+  const clean = await scan(DIR, { folder: true });
+  assert.equal(clean.status, 'clean');
+  assert.deepEqual(calls[0], ['-Scan', '-ScanType', '3', '-File', DIR]);
+  // A folder is scanned only when one is expected; a file is not taken for a folder.
+  assert.equal((await scan(DIR)).status, 'missing');
+  const notFolder = await scan(FILE, { folder: true });
+  assert.equal(notFolder.status, 'missing'); assert.match(notFolder.message, /folder was not found/);
+  // A junction or symbolic link could lead anywhere, so it is not scanned.
+  assert.equal((await scan('C:\\Games\\Torrents\\Link', { folder: true })).status, 'missing');
+  assert.equal(calls.length, 1);
+  // Only `true` asks for a folder.
+  assert.equal((await scan(DIR, { folder: 'yes' })).status, 'missing');
+  // Folder results speak of the download and its files.
+  const found = interpretScan({ code: 2, stdout: 'Threat : Trojan:Win32/Fixture', fileExists: true, folder: true });
+  assert.equal(found.status, 'threat'); assert.match(found.message, /in this download\. Do not open its files/);
+  assert.match(interpretScan({ code: 0, stdout: 'Found 1 threats.', fileExists: false, folder: true }).message, /removed or quarantined this download/);
+  assert.match(interpretScan({ code: 0, stdout: '', fileExists: false, folder: true }).message, /folder disappeared/);
+  assert.match(interpretScan({ code: 0, stdout: '', fileExists: true, folder: true }).message, /before opening the files/);
+  assert.match(interpretScan({ code: null, timedOut: true, fileExists: true, folder: true }).message, /Scan the download again/);
+  assert.match(interpretScan({ code: 2, stdout: 'failed', fileExists: true, folder: true }).message, /download’s folder there/);
+  assert.equal(interpretScan({ code: 0, stdout: `Scanning ${DIR} found no threats.`, file: DIR, fileExists: true, folder: true }).message, 'Microsoft Defender found no threats.');
+});

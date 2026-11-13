@@ -32,7 +32,28 @@ function findMpCmdRun({env=process.env,fsApi=fs}={}){
 // "found and not remediated", "user action required" or a scan error. Human-
 // readable output can be localized or incomplete, so ambiguous success must
 // remain a review result. Never infer "no threats" from the exit code alone.
-function interpretScan({code,stdout='',stderr='',timedOut=false,fileExists=true,file=''}){
+// The same results for a folder (a torrent with several files).
+const FOLDER={
+  found:'Microsoft Defender found a threat in this download. Do not open its files. Check Windows Security → Protection history.',
+  removed:'Microsoft Defender found a threat and removed or quarantined this download. Check Windows Security → Protection history.',
+  slow:'The Microsoft Defender scan took too long and was stopped. Scan the download again later.',
+  gone:'The download’s folder disappeared during the scan; Microsoft Defender may have removed it. Check Windows Security → Protection history.',
+  review:'Microsoft Defender finished, but its result needs review. Check Windows Security → Protection history before opening the files.',
+  failed:'Microsoft Defender could not finish this scan. If you use another antivirus, scan the download’s folder there.',
+  missing:'The download’s folder was not found, so it was not scanned.'
+};
+function interpretScan({code,stdout='',stderr='',timedOut=false,fileExists=true,file='',folder=false}){
+  const result=interpretFileScan({code,stdout,stderr,timedOut,fileExists,file});
+  if(!folder)return result;
+  const key={'Microsoft Defender found a threat in this file. Do not open it. Check Windows Security → Protection history.':'found',
+    'Microsoft Defender found a threat and removed or quarantined this file. Check Windows Security → Protection history.':'removed',
+    'The Microsoft Defender scan took too long and was stopped. Scan the file again later.':'slow',
+    'The file disappeared during the scan; Microsoft Defender may have removed it. Check Windows Security → Protection history.':'gone',
+    'Microsoft Defender finished, but its result needs review. Check Windows Security → Protection history before opening the file.':'review',
+    'Microsoft Defender could not finish this scan. If you use another antivirus, scan the file there.':'failed'}[result.message];
+  return key?{...result,message:FOLDER[key]}:result;
+}
+function interpretFileScan({code,stdout='',stderr='',timedOut=false,fileExists=true,file=''}){
   // Do not let a phrase inside the echoed filename become scan evidence.
   const normalize=value=>{
     const text=String(value).toLowerCase();
@@ -60,11 +81,14 @@ function interpretScan({code,stdout='',stderr='',timedOut=false,fileExists=true,
   return {status:'error',message:'Microsoft Defender could not finish this scan. If you use another antivirus, scan the file there.'};
 }
 function createDefenderScanner({execFileImpl=execFile,findTool=findMpCmdRun,fsApi=fs,platform=process.platform,timeoutMs=SCAN_TIMEOUT_MS,now=()=>new Date()}={}){
-  const exists=file=>{try{return fsApi.statSync(file).isFile();}catch{return false;}};
-  return async function scanFile(file){
+  // A folder is scanned only when the caller expects one (a torrent's folder);
+  // links (junctions, symbolic links) are never followed into another place.
+  const exists=(file,folder)=>{try{if(!folder)return fsApi.statSync(file).isFile();const stat=fsApi.lstatSync(file);return stat.isDirectory()&&!stat.isSymbolicLink();}catch{return false;}};
+  return async function scanFile(file,{folder=false}={}){
+    folder=folder===true;
     const stamp=()=>now().toISOString();
     if(platform!=='win32')return {status:'unavailable',message:'Microsoft Defender scanning is available on Windows only.',scannedAt:stamp()};
-    if(typeof file!=='string'||!path.win32.isAbsolute(file)||!exists(file))return {status:'missing',message:'The file was not found, so it was not scanned.',scannedAt:stamp()};
+    if(typeof file!=='string'||!path.win32.isAbsolute(file)||!exists(file,folder))return {status:'missing',message:folder?FOLDER.missing:'The file was not found, so it was not scanned.',scannedAt:stamp()};
     let tool=null;try{tool=findTool();}catch{}
     if(!tool)return {status:'unavailable',message:'Microsoft Defender was not found. Scan the file with your antivirus before opening it.',scannedAt:stamp()};
     const result=await new Promise(resolve=>{
@@ -76,7 +100,7 @@ function createDefenderScanner({execFileImpl=execFile,findTool=findMpCmdRun,fsAp
         });
       }catch{resolve({code:null,stdout:'',timedOut:false});}
     });
-    return {...interpretScan({...result,file,fileExists:exists(file)}),scannedAt:stamp()};
+    return {...interpretScan({...result,file,folder,fileExists:exists(file,folder)}),scannedAt:stamp()};
   };
 }
 module.exports={createDefenderScanner,findMpCmdRun,interpretScan,compareVersions,SCAN_TIMEOUT_MS};

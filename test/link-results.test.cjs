@@ -178,3 +178,15 @@ test('a free-space check that cannot be made is said quietly, and files already 
   await settle();await settle();
   assert.equal(h.withClass('space-warning').length,1);
 });
+
+test('Open in browser is offered only for PixelDrain and MultiUpload links that need a manual step',()=>{
+  const f=fixture({openExternal:async()=>{}});
+  f.render([
+    {sourceUrl:'https://pixeldrain.com/u/abcd1234',url:'https://pixeldrain.com/u/abcd1234',filename:'a.rar',host:'PixelDrain',status:'manual',message:'PixelDrain asks for a quick browser check. Open the link in your browser, complete it, then try again.'},
+    {sourceUrl:'https://multiup.io/download/'+'a'.repeat(32)+'/b.rar',url:'https://multiup.io/download/'+'a'.repeat(32)+'/b.rar',filename:'b.rar',host:'MultiUpload',status:'manual',message:'Ravenshelf can’t download this MultiUpload file itself. Open it in your browser.'},
+    {sourceUrl:'https://files.example/c.rar',url:'https://files.example/c.rar',filename:'c.rar',host:'files.example',status:'manual',message:'Host returned HTTP 403.'}
+  ]);
+  const rows=f.withClass('link-row');
+  const buttons=row=>f.nodes(row).filter(node=>node.tagName==='button').map(node=>node.textContent);
+  assert.deepEqual(rows.map(buttons),[['Open in browser'],['Open in browser'],[]]);
+});

@@ -35,6 +35,10 @@ When the user sets up YouTube downloads, Ravenshelf downloads these programs fro
 
 Ravenshelf is not affiliated with YouTube, Google, the yt-dlp project, Deno Land or the FFmpeg project. YouTube's terms allow downloading only where YouTube offers it or with permission.
 
+## Torrent program (downloaded at the user's request)
+
+When the user turns on and sets up torrent downloads, Ravenshelf downloads [aria2](https://github.com/aria2/aria2) 1.37.0 from its GitHub release for use on the user's PC. aria2 is licensed GPL-2.0-or-later (with an OpenSSL linking exception); its source is available from that repository. It is not bundled with or redistributed by Ravenshelf; **Settings → Torrent downloads** names its version, license and source. Ravenshelf is not affiliated with the aria2 project, PixelDrain, MultiUpload or any tracker.
+
 [VirusTotal](https://www.virustotal.com/) is optional and used only with the user's own API key; VirusTotal's terms apply to that key. Ravenshelf is not affiliated with VirusTotal, abuse.ch, malware-filter, HaGeZi, or the makers of the supported browsers.
 
 The encrypted-paste reader implements the [PrivateBin](https://github.com/PrivateBin/PrivateBin) version 2 message format using Node.js crypto and zlib. PrivateBin's application code is not bundled as part of that implementation.

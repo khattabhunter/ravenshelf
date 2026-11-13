@@ -6,6 +6,7 @@ const {workspaceFor}=require('./parallel-download.cjs');
 const {scanConfiguredArchives}=require('./download-storage.cjs');
 const {MEDIA_FOLDER,MEDIA_EXTENSIONS,WORKSPACE_FILE:MEDIA_WORKSPACE_FILE}=require('./youtube.cjs');
 const {SITE:MOD_SITE,MODS_FOLDER}=require('./mods.cjs');
+const crypto2=require('node:crypto');
 const TTL_MS=5*60*1000;
 const MAX_SELECTION=500;
 const ARCHIVE=/\.(?:rar|bin|zip|7z|iso|\d{3})$/i;
@@ -59,8 +60,37 @@ function mediaFile(download,folder){
 function modFile(download,folder){
   return download.origin==='browser'&&download.mod?.site===MOD_SITE&&pathKey(path.basename(path.dirname(folder)))===pathKey(MODS_FOLDER);
 }
+// A torrent's files: only the files it listed, at their places inside its own
+// folder. A finished torrent owns its published folder (or file); one that is
+// not finished owns only its hidden working folder, never a published place
+// that another download of the same name may use.
+const torrentWorkspaceOf=download=>path.join(download.folder,'.atlas-torrent-'+crypto2.createHash('sha256').update(String(download.id)).digest('hex').slice(0,24));
+function torrentSelection(download){
+  const t=download.torrent;
+  if(!t||typeof t.name!=='string'||!filename(t.name)||!Array.isArray(t.files)||!t.files.length||t.files.length>10000)bad();
+  const folder=local(download.folder),workspace=torrentWorkspaceOf({...download,folder}),completed=download.status==='completed';
+  if(path.dirname(workspace)!==folder)bad();
+  const top=path.join(folder,download.name),files=[],folders=new Set();
+  const add=(base,parts,kind)=>{
+    const target=path.join(base,...parts);if(!within(folder,target))bad();
+    files.push([target,kind]);
+    for(let i=parts.length-1;i>0;i--)folders.add(path.join(base,...parts.slice(0,i)));
+  };
+  for(const file of t.files){
+    if(!file||typeof file.path!=='string'||!(file.path===t.name||file.path.startsWith(t.name+'/')))bad();
+    const parts=file.path.split('/').slice(1);if(parts.some(part=>!filename(part)))bad();
+    if(completed&&file.selected)add(top,parts,'completed');
+    add(path.join(workspace,t.name),parts,'partial');
+  }
+  files.push([path.join(workspace,t.name+'.aria2'),'partial']);
+  folders.add(path.join(workspace,t.name));
+  // Deepest folders first, so each is empty when its turn comes.
+  const order=[...folders].sort((a,b)=>b.length-a.length);
+  return {id:download.id,name:download.name,folder,torrent:true,top,completed,workspace,files,folders:order,owned:completed?top:workspace,final:top,partial:workspace};
+}
 function selection(download){
   if(!download||typeof download.id!=='string'||!download.id||download.id.length>200||!filename(download.name))bad();
+  if(download.kind==='torrent')return torrentSelection(download);
   const folder=local(download.folder),media=mediaFile(download,folder);
   if(!ARCHIVE.test(download.name)&&!browserFile(download,folder)&&!modFile(download,folder)&&!media)bad();
   const final=path.join(folder,download.name),partial=final+'.atlas-part',workspace=workspaceFor(partial,download.id);
@@ -68,9 +98,23 @@ function selection(download){
   return {id:download.id,name:download.name,folder,final,partial,workspace,media};
 }
 function isStopped(download){return !['queued','downloading'].includes(download.status)&&!['queued','scanning'].includes(download.scan?.status);}
+async function captureTorrent(item,summary){
+  item.issues=false;item.files=[];item.directory=null;item.entries=[];item.parents=[];
+  if(summary&&!await maybeStat(item.folder)){item.missing=true;return item;}
+  for(const [file,kind] of item.selected.files){
+    try{item.files.push(await captureFile(file,kind,summary));}
+    catch(error){
+      // A folder of the torrent that is not there yet is not a problem.
+      if(error?.code==='ENOENT'){item.files.push({path:file,kind,stat:null,parents:[],bytes:0,absent:true});continue;}
+      if(!summary)throw error;item.issues=true;
+    }
+  }
+  return item;
+}
 async function capture(download,{summary=false}={}){
   const item=selection(download);
   if(!summary&&!isStopped(download))bad();
+  if(item.torrent){const selected=item;return captureTorrent({...item,selected},summary);}
   item.issues=false;item.files=[];
   // A missing parent is useful information for storage checks. Never relax
   // cleanup's stricter requirement that its original parents still exist.
@@ -96,6 +140,7 @@ async function capture(download,{summary=false}={}){
   return item;
 }
 async function verifyItem(item){
+  if(item.torrent){for(const file of item.files)if(!file.absent)await verifyFile(file);else if(await maybeStat(file.path))bad();return;}
   await checkAncestors(item.parents);
   const directory=await maybeStat(item.workspace);
   if(!item.directory){if(directory)bad();}
@@ -106,7 +151,10 @@ async function verifyItem(item){
   }
   for(const file of item.files)await verifyFile(file);
 }
-function sameSelection(a,download){try{const b=selection(download);return a.id===b.id&&a.name===b.name&&a.folder===b.folder&&isStopped(download);}catch{return false;}}
+function sameSelection(a,download){try{const b=selection(download);return a.id===b.id&&a.name===b.name&&a.folder===b.folder&&Boolean(a.torrent)===Boolean(b.torrent)&&(!a.torrent||a.owned===b.owned)&&isStopped(download);}catch{return false;}}
+// The place a download's files are known by: an ordinary file's partial file,
+// a torrent's published folder or working folder.
+function ownerKey(record){return pathKey(record.torrent?record.owned:record.partial);}
 function totals(files,seenPaths=new Set(),seenFiles=new Set()){
   let completedBytes=0,partialBytes=0;
   for(const file of files){if(!file.stat)continue;const key=pathKey(file.path),inode=identity(file.stat);if(seenPaths.has(key)||seenFiles.has(inode))continue;seenPaths.add(key);seenFiles.add(inode);if(file.kind==='completed')completedBytes+=file.bytes;else partialBytes+=file.bytes;}
@@ -118,7 +166,7 @@ function createDownloadCleanup({getDownloads,getDownloadDir,now=Date.now,scanLim
   const pending=new Map();
   const downloads=()=>{const list=getDownloads();if(!Array.isArray(list)||list.length>10000)throw new Error('The download inventory could not be checked.');return list;};
   const expire=()=>{for(const [token,entry]of pending)if(entry.expires<=now())pending.delete(token);};
-  const otherOwner=(list,chosen,record)=>list.some(other=>!chosen.includes(other.id)&&(()=>{try{return pathKey(selection(other).partial)===pathKey(record.partial);}catch{return false;}})());
+  const otherOwner=(list,chosen,record)=>list.some(other=>!chosen.includes(other.id)&&(()=>{try{return ownerKey(selection(other))===ownerKey(record);}catch{return false;}})());
   async function preview(ids){
     const chosen=idsOf(ids),list=downloads(),records=new Map(),warnings=[],items=[],seenPaths=new Set(),seenFiles=new Set();
     let totalBytes=0;
@@ -162,6 +210,13 @@ function createDownloadCleanup({getDownloads,getDownloadDir,now=Date.now,scanLim
           assertOwnership();
           if(file.stat){await fs.promises.unlink(file.path);bytesFreed+=file.bytes;}
           seenPaths.add(pathKey(file.path));
+        }
+        // A torrent's folders are removed only when nothing is left in them.
+        if(item.torrent){
+          for(const folder of [...item.folders,...(item.completed?[item.top]:[]),item.workspace]){
+            const current=await maybeStat(folder);
+            if(current&&current.isDirectory()&&!current.isSymbolicLink())await fs.promises.rmdir(folder).catch(()=>{});
+          }
         }
         if(item.directory){
           await checkAncestors(item.parents);

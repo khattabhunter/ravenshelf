@@ -9,11 +9,17 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { safeFetch } = require('./net.cjs');
 const {publicErrorMessage}=require('./public-errors.cjs');
 const {fastRoot,isFastFileURL,assertFastFile}=require('./ff-policy.cjs');
+const {isPasteHost,isPixeldrainHost,isMultiupHost,closedHost,closedByLabel,CLOSED_HOSTS}=require('./hosts.cjs');
+const pixeldrain=require('./pixeldrain.cjs');
+const multiup=require('./multiup.cjs');
+const {parseMagnet}=require('./magnet.cjs');
 const pbkdf2 = promisify(crypto.pbkdf2);
 const BASE = 'https://fitgirl-repacks.site';
 const MAX_TEXT = 6 * 1024 * 1024;
 const cache = new Map();
-const HOSTS = { 'fuckingfast.co': 'FuckingFast', 'fuckingfast.net': 'FuckingFast', 'datanodes.to': 'DataNodes', 'filekeeper.net': 'FileKeeper' };
+const HOSTS = { 'fuckingfast.co': 'FuckingFast', 'fuckingfast.net': 'FuckingFast', 'datanodes.to': 'DataNodes', 'filekeeper.net': 'FileKeeper', 'pixeldrain.com': 'PixelDrain', 'pixeldrain.net': 'PixelDrain', 'multiup.io': 'MultiUpload', 'multiup.org': 'MultiUpload' };
+// The host chosen when a MultiUpload file has copies on several hosts Ravenshelf can download from.
+const MIRROR_ORDER = ['FuckingFast', 'FileKeeper', 'PixelDrain', 'DataNodes'];
 const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
 
 function validUrl(value, base) {
@@ -29,7 +35,9 @@ function imageUrl(value) {
 function hostName(value) {
   const h = validUrl(value).hostname.toLowerCase();
   for (const [domain, name] of Object.entries(HOSTS)) if (h === domain || h.endsWith('.' + domain)) return name;
-  if (h === 'paste.fitgirl-repacks.site') return 'FitGirl paste';
+  if (isPasteHost(h)) return 'FitGirl paste';
+  const closed = closedHost(h);
+  if (closed) return closed.name;
   return h;
 }
 function readableName(value) {
@@ -122,10 +130,12 @@ function parseDetail(html, url) {
   const game = parseGame($,article,url);
   if (!game) throw new Error('This page is not a recognizable game listing.');
   const content = article.find('.entry-content').first();
-  const groups = new Map();
+  const groups = new Map(), closed = new Set();
   content.find('a[href]').each((_,el) => {
     const a = $(el); let href, host;
     try { href=validUrl(a.attr('href'),BASE).href; host=hostName(href); } catch { return; }
+    const gone = closedHost(new URL(href).hostname);
+    if (gone) { closed.add(gone.name); return; }
     if (Object.values(HOSTS).includes(host)) {
       if (!groups.has(host)) groups.set(host,{host,label:host,urls:[]});
       if (!groups.get(host).urls.includes(href)) groups.get(host).urls.push(href);
@@ -135,8 +145,10 @@ function parseDetail(html, url) {
   content.find('a[href]').each((_,el) => {
     const a=$(el); let href;
     try { href=validUrl(a.attr('href'),BASE); } catch { return; }
-    if (href.hostname !== 'paste.fitgirl-repacks.site' || !href.hash) return;
+    if (!isPasteHost(href.hostname) || !href.hash) return;
     const label=clean(a.text());
+    const gone=closedByLabel(label);
+    if (gone) { closed.add(gone.name); return; }
     const host=Object.values(HOSTS).find(name => label.toLowerCase().includes(name.toLowerCase()));
     if (host && !groups.has(host)) groups.set(host,{host,label:host,urls:[href.href]});
   });
@@ -156,7 +168,14 @@ function parseDetail(html, url) {
   const sourceNotes=[...new Set(installation)].slice(0,20);
   if(/Only updated files for a new non-HV repack/i.test(content.text()) && /unpack them OVER setup files/i.test(content.text())) sourceNotes.unshift('This mirror includes a separate replacement setup archive for the newer non-HV repack. The source says to unpack that archive over the main setup files, with overwriting. Keep it separate from the numbered multipart sequence.');
   if(/turn off AV|disable.{0,30}(?:antivirus|defender)|installation folders to exclusions/i.test(content.text())) sourceNotes.push('The source page also contains instructions to weaken antivirus protection. Ravenshelf does not apply those instructions.');
-  return {...game,screenshots:screenshots.slice(0,12),groups:[...groups.values()],installation:sourceNotes.length?'Source-reported installation notes (not independently verified):\n'+sourceNotes.join('\n'):''};
+  const closedMirrors=CLOSED_HOSTS.map(entry=>entry.name).filter(name=>closed.has(name));
+  // The page's magnet links, one per torrent (a page often links the same torrent twice).
+  const torrents=[];
+  content.find('a[href^="magnet:"]').each((_,el)=>{
+    if(torrents.length>=3)return false;
+    try{const parsed=parseMagnet(String($(el).attr('href')||''));if(!torrents.some(item=>item.infoHash===parsed.infoHash))torrents.push({infoHash:parsed.infoHash,name:parsed.name,magnet:parsed.magnet});}catch{}
+  });
+  return {...game,screenshots:screenshots.slice(0,12),groups:[...groups.values()],closedMirrors,torrents,installation:sourceNotes.length?'Source-reported installation notes (not independently verified):\n'+sourceNotes.join('\n'):''};
 }
 async function listGames({page=1,search='',letter=''}={}) {
   page=Math.max(1,Math.min(2000,Number.parseInt(page,10)||1));
@@ -213,33 +232,103 @@ async function decryptPaste(data,key) {
 function extractUrls(text) {
   return [...new Set((String(text).match(/https:\/\/[^\s<>"\x00-\x1f]+/gi)||[]).map(x=>x.replace(/[),.;\]]+$/,'')))].slice(0,1000);
 }
+// Runs `fn` over `items` with at most `limit` at once, keeping their order.
+async function mapLimit(items,limit,fn){
+  const results=new Array(items.length);let next=0;
+  await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;results[i]=await fn(items[i]);}}));
+  return results;
+}
+// A MultiUpload file's copy on the first host in MIRROR_ORDER that has one,
+// as a link to one file (not a PixelDrain list, not another MultiUp page).
+function preferredMirror(mirrors){
+  const usable=url=>{try{const host=new URL(url).hostname;return !closedHost(host)&&!(isPixeldrainHost(host)&&!pixeldrain.pixeldrainLink(url))&&!pixeldrain.isPixeldrainList(url)&&!isMultiupHost(host);}catch{return false;}};
+  for(const host of MIRROR_ORDER){const found=mirrors.find(url=>{try{return hostName(url)===host&&usable(url);}catch{return false;}});if(found)return found;}
+  return null;
+}
+const readText=(response,cap)=>limitedText(response,cap);
 async function expandLinks(text) {
   if(typeof text!=='string' || text.length>1024*1024) throw new Error('Paste up to 1 MB of links.');
-  const links=[],warnings=[],seen=new Set(),pastes=new Set();
-  const append=url=>{ if(!seen.has(url)){seen.add(url);links.push({url,host:hostName(url),name:readableName(url)});} };
-  for(const raw of extractUrls(text)) {
+  const found=[],warnings=[],seen=new Set(),pastes=new Set(),notices=new Set(),fromPage=new Set(),pageHost=new Map();
+  const collect=url=>{ if(!seen.has(url)){seen.add(url);found.push(url);} };
+  const notice=message=>{ if(!notices.has(message)){notices.add(message);warnings.push(message);} };
+  // One pasted link: a paste is decrypted, a game page gives its hosts' links.
+  // A page with one host is expanded as if that host had been chosen.
+  const take=async(raw,{page=true}={})=>{
     const url=validUrl(raw);
-    if(url.hostname==='paste.fitgirl-repacks.site') {
-      if(pastes.has(url.href)) continue;
+    if(isPasteHost(url.hostname)) {
+      if(pastes.has(url.href)) return true;
       pastes.add(url.href);
-      if(pastes.size>20) {warnings.push('Only the first 20 paste pages were expanded.');break;}
+      if(pastes.size>20) {warnings.push('Only the first 20 paste pages were expanded.');return false;}
       try {
         if(!/^[a-f0-9]{16}$/i.test(url.search.slice(1)) || !url.hash) throw new Error('A paste link needs its complete # decryption key.');
         const key=url.hash.slice(1); url.hash='';
         const {response,html}=await requestText(url.href,{headers:{'X-Requested-With':'JSONHttpRequest'}});
         if(!response.ok) throw new Error(`Paste returned HTTP ${response.status}.`);
         const decrypted=await decryptPaste(JSON.parse(html),key);
-        for(const found of extractUrls(decrypted)) { try{append(validUrl(found).href);}catch{} }
+        for(const link of extractUrls(decrypted)) { try{collect(validUrl(link).href);}catch{} }
         const notes=decrypted.split(/\r?\n/).filter(line=>line.trim()&&!/https?:\/\//i.test(line)).join('\n').replace(/^#+\s*/gm,'').trim();
         if(notes) warnings.push(`Source notes: ${notes.slice(0,2000)}`);
       } catch(error) { warnings.push(`Could not expand paste: ${publicErrorMessage(error,'paste')}`); }
-    } else if(url.hostname==='fitgirl-repacks.site') {
-      try { const game=await getGame(url.href); for(const group of game.groups) for(const link of group.urls) append(link); warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.'); }
+    } else if(page&&url.hostname==='fitgirl-repacks.site') {
+      try {
+        const game=await getGame(url.href);
+        if(game.groups.length===1){
+          for(const link of game.groups[0].urls){ try{ if(!await take(link,{page:false})) break; }catch{} if(found.length>=1000) break; }
+          return true;
+        }
+        // With several hosts to choose from, MultiUpload and PixelDrain-list links
+        // are looked up only after the user picks that host, so that their copies
+        // do not join another host's group (and nothing is requested before then).
+        // Each link keeps its host group's name (a paste link under "PixelDrain" is PixelDrain's).
+        for(const group of game.groups) for(const link of group.urls) { collect(link); if(!pageHost.has(link)) pageHost.set(link,group.host); fromPage.add(link); }
+        if(game.groups.length>1) warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.');
+      }
       catch(error){warnings.push(publicErrorMessage(error,'getGame'));}
-    } else append(url.href);
-    if(links.length>=1000) break;
+    } else collect(url.href);
+    return true;
+  };
+  for(const raw of extractUrls(text)) {
+    if(!await take(raw)) break;
+    if(found.length>=1000) break;
   }
-  return {links:links.slice(0,1000),warnings};
+  // Links that stand for other links: a closed host's (dropped with a note),
+  // a PixelDrain list (its files) and a MultiUpload file (one copy of it).
+  // Each link's note is added in the links' order, whichever lookup finishes first.
+  let lists=0,mirrorPages=0;
+  const expanded=await mapLimit(found.slice(0,1000),4,async url=>{
+    const host=new URL(url).hostname;
+    const gone=closedHost(host);
+    if(gone)return {urls:[],note:gone.message};
+    if(fromPage.has(url))return {urls:[url]};
+    if(isPixeldrainHost(host)&&pixeldrain.isPixeldrainList(url)){
+      if(++lists>20)return {urls:[],note:'Only the first 20 PixelDrain lists were expanded.'};
+      try{return {urls:await pixeldrain.listFiles(url,{fetcher:safeFetch,readText})};}
+      catch(error){
+        const message=Object.values(pixeldrain.MESSAGES).includes(error?.message)?error.message:pixeldrain.MESSAGES.failed;
+        // A list that is gone is left out; one PixelDrain would not show now stays, to open in the browser.
+        const gone=[pixeldrain.MESSAGES.missing,pixeldrain.MESSAGES.removed,pixeldrain.MESSAGES.virus].includes(message);
+        return {urls:gone?[]:[url],note:message};
+      }
+    }
+    if(isMultiupHost(host)&&multiup.multiupLink(url)){
+      if(++mirrorPages>500)return {urls:[],note:'Only the first 500 MultiUpload files were looked up.'};
+      try{
+        const list=await multiup.mirrorList(url,{fetcher:safeFetch,readText});
+        if(list.missing)return {urls:[],note:multiup.MESSAGES.missing};
+        if(list.unreadable)return {urls:[url],note:multiup.MESSAGES.failed};
+        const chosen=preferredMirror(list.mirrors);
+        // Without a copy Ravenshelf can use, the MultiUpload link stays in the list, to open in the browser.
+        return chosen?{urls:[chosen]}:{urls:[url],note:multiup.MESSAGES.none};
+      }catch{return {urls:[url],note:multiup.MESSAGES.failed};}
+    }
+    return {urls:[url]};
+  });
+  const links=[],kept=new Set();
+  for(const {urls,note} of expanded){
+    if(note)notice(note);
+    for(const url of urls){ if(links.length<1000&&!kept.has(url)){kept.add(url);links.push({url,host:(fromPage.has(url)&&pageHost.get(url))||hostName(url),name:readableName(url)});} }
+  }
+  return {links,warnings};
 }
 
 function filenameFromHeaders(response,fallback) {
@@ -399,8 +488,13 @@ async function resolveFileKeeper(url) {
   return manual(url,'FileKeeper did not return a direct file link. Continue in your browser.');
 }
 async function resolveLink(value,{fastFetch}={}) {
-  const url=validUrl(value).href,host=hostName(url);
+  const url=validUrl(value).href,host=hostName(url),hostname=new URL(url).hostname;
+  // A closed host is never contacted.
+  const gone=closedHost(hostname);
+  if(gone) return {url,filename:readableName(url),size:0,host:gone.name,status:'unavailable',message:gone.message};
   try {
+    if(isPixeldrainHost(hostname)) return {url,filename:readableName(url),size:0,host:'PixelDrain',...await pixeldrain.resolvePixeldrain(url,{fetcher:safeFetch,readText})};
+    if(isMultiupHost(hostname)) return manual(url,multiup.MESSAGES.expand,'MultiUpload');
     if(host==='FuckingFast'){
       const fetcher=typeof fastFetch==='function'?fastFetch:safeFetch;
       if(!isFastFileURL(url))return await resolveFast(url,fetcher);
