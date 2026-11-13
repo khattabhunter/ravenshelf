@@ -49,13 +49,16 @@ function copyJSON(value,depth=0){
 const game=value=>object(value)&&address(value.url)&&text(value.title,500);
 // A local folder that is not a whole drive, as the installed-games scan requires.
 function gameFolder(value){
-  if(!localPath(value))return false;
+  if(!localPath(value)||value.length>2048)return false;
+  // Windows drops a trailing dot or space, so C:\Games\. and C:\. name other folders.
+  if(value.split(/[\\/]/).some(part=>/[. ]$/.test(part)))return false;
   const resolved=path.win32.resolve(value);return resolved!==path.win32.parse(resolved).root;
 }
 function listItems(key,list){
   if(key==='favorites')return list.filter(game);
   // Installed games are scanned only in local folders (see installed-games.cjs).
-  if(key==='gameFolders')return list.filter(gameFolder);
+  // A folder the scan can't use (such as a whole drive) is kept and skipped there with a note.
+  if(key==='gameFolders')return list.filter(folder=>localPath(folder));
   return list.filter(collection=>object(collection)&&text(collection.id,100)&&text(collection.name,80)&&Array.isArray(collection.games))
     .map(collection=>({...collection,games:collection.games.filter(game).slice(0,500)}));
 }
@@ -115,7 +118,7 @@ function downloadFrom(value){
     if(!valid){
       delete d.mod;
       // As for a valid mod link, a finished or cancelled entry keeps no signed link or request details.
-      if(['completed','cancelled'].includes(d.status)){d.url=plainAddress(d.url);if(d.sourceUrl!==undefined)d.sourceUrl=plainAddress(d.sourceUrl);d.headers={};delete d.sealedHeaders;}
+      if(!d.kind&&['completed','cancelled'].includes(d.status)){d.url=plainAddress(d.url);if(d.sourceUrl!==undefined)d.sourceUrl=plainAddress(d.sourceUrl);d.headers={};delete d.sealedHeaders;}
     }
   }
   if(d.gameTitle!==undefined&&!text(d.gameTitle,2000))return null;
@@ -263,13 +266,22 @@ function loadLibrary(file,{io=fs,wait}={}){
   pruneRecoveryCopies(file,recoveryFile,io);
   return {data:parsed.data,canSave:true,warning:RECOVERED,recoveryFile,file};
 }
-// An earlier copy of exactly these bytes: a plain file, not a link.
+// An earlier copy of exactly these bytes: a plain file, not a link, checked
+// and read through one open handle.
 function sameCopy(copy,bytes,io){
+  let fd;
   try{
-    const stat=io.lstatSync(copy,{bigint:true});
-    if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1n||stat.size!==BigInt(bytes.length))return false;
-    return Buffer.from(io.readFileSync(copy)).equals(bytes);
+    fd=io.openSync(copy,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
+    const stat=io.fstatSync(fd,{bigint:true});
+    if(!stat.isFile()||stat.nlink!==1n||stat.ino===0n||stat.size!==BigInt(bytes.length))return false;
+    // Windows opens through a link without O_NOFOLLOW: the name must be the file itself.
+    const named=io.lstatSync(copy,{bigint:true});
+    if(named.isSymbolicLink()||named.ino!==stat.ino||named.dev!==stat.dev)return false;
+    const read=Buffer.alloc(bytes.length);let position=0;
+    while(position<read.length){const count=io.readSync(fd,read,position,read.length-position,position);if(!count)return false;position+=count;}
+    return read.equals(bytes);
   }catch{return false;}
+  finally{if(fd!==undefined)try{io.closeSync(fd);}catch{}}
 }
 // Recovery copies keep old links and paths. Keep the oldest (often the list as
 // it was before anything went wrong) and the newest, never the one just made or

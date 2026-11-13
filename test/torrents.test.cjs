@@ -867,7 +867,7 @@ test('Delete files removes only a torrent’s own files, and never a folder anot
 
 // 0.10.2
 
-test('tracker DNS checks use IPv4 answers only, and hanging lookups cannot hold up the healthy ones',async()=>{
+test('tracker DNS checks use IPv4 answers only, and a check ends on time even when lookups hang',async()=>{
   const hash='b'.repeat(40),signals=[],options=[];
   const trackers=['udp://healthy.example:80/a','udp://dual.example:80/a','udp://v6only.example:80/a',...[1,2,3,4,5,6].map(n=>`udp://dead${n}.example:80/a`),'udp://8.8.8.8:80/a'];
   const lookup=(host,option)=>{
@@ -1005,7 +1005,8 @@ test('system DNS lookups run at most two at a time, and a place is freed only wh
 
 test('a stop that arrives while aria2 answers its first check still ends that start',async t=>{
   const fake=fakeAria2(),{engine}=engineFor(t,fake,{idleMs:60000});
-  engine.rpcFetch=async(url,init)=>{const response=await fake.fetch(url,init);if(JSON.parse(init.body).method==='aria2.getVersion')engine.stop().catch(()=>{});return response;};
+  // The stop comes in after aria2 has answered: the answer itself is not aborted.
+  engine.rpcFetch=async(url,init)=>{const response=await fake.fetch(url,init);if(JSON.parse(init.body).method==='aria2.getVersion')engine.stops++;return response;};
   await assert.rejects(engine.start(),{message:engineModule.MESSAGES.start});
   assert.equal(fake.spawned.length,1);for(let i=0;i<100&&engine.running;i++)await tick(5);assert.equal(engine.running,false);
 });
@@ -1028,4 +1029,34 @@ test('removing a torrent from an aria2 that has already gone touches no newer ar
   const before=fake.calls.length;
   assert.equal(await engine.drop('0000000000000001',true,old),undefined);
   assert.equal(fake.calls.length,before,'no request reached the new aria2');assert.equal(engine.running,true);
+});
+
+test('a name already being looked up is joined, not asked again; failures and ended checks free their place',async()=>{
+  let calls=0;const pending=[];
+  const lookupImpl=host=>{calls++;if(host==='throws.example')throw new Error('fixture');if(host==='plain.example')return [{address:'93.184.216.34',family:4}];return new Promise(resolve=>pending.push(resolve));};
+  const lookup=engineModule.createSystemLookup({lookupImpl});
+  // Two names that hang hold both places; a later check for the same name joins it.
+  const first=lookup('slow1.example',{}),second=lookup('slow2.example',{}),joined=lookup('slow1.example',{});
+  await tick(5);assert.equal(calls,2);assert.equal(lookup.busy(),2);
+  // A check that ends while waiting for a place never starts its lookup.
+  const ended=new AbortController(),waiting=lookup('queued.example',{signal:ended.signal}).catch(error=>error);ended.abort();
+  pending.shift()([{address:'93.184.216.34',family:4}]);
+  assert.deepEqual(await first,await joined);assert.equal((await waiting).name,'AbortError');await tick(5);assert.equal(calls,2,'the ended check started nothing');
+  await assert.rejects(lookup('throws.example',{}),{message:'fixture'});assert.deepEqual(await lookup('plain.example',{}),[{address:'93.184.216.34',family:4}]);
+  pending.shift()([]);await second;assert.equal(lookup.busy(),0);
+});
+
+test('if its aria2 leaves while a job is being removed, a newer aria2 is left alone',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake,{idleMs:60000});
+  await engine.start();const owner=engine.child;let removing=0,restarted;
+  engine.rpcFetch=async(url,init)=>{
+    if(JSON.parse(init.body).method==='aria2.removeDownloadResult'){
+      if(++removing===1){owner.exitCode=1;owner.emit('exit',1);restarted=engine.start();}
+      return new Response(JSON.stringify({jsonrpc:'2.0',id:'1',error:{code:1,message:'still active'}}),{status:400,headers:{'content-type':'application/json'}});
+    }
+    return fake.fetch(url,init);
+  };
+  assert.equal(await engine.drop('0000000000000001',true,owner),false);
+  await restarted;assert.equal(removing,1,'nothing more was sent once its aria2 had gone');
+  assert.equal(engine.running,true);assert.notEqual(engine.child,owner);assert.equal(fake.spawned.length,2);
 });

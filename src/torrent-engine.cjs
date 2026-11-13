@@ -112,22 +112,30 @@ function abortable(promise,signal){
 // exact child directly instead of waiting on taskkill's separate 15s timeout.
 async function killEngine(child){if(child&&child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');}
 // Tracker names are looked up with Windows' own resolver (its hosts file,
-// cache, encrypted DNS and VPN rules), as aria2 does, for IPv4 addresses only:
-// aria2 runs without IPv6. Those lookups use the small thread pool that file
+// cache, encrypted DNS and VPN rules), for IPv4 addresses only: aria2 runs
+// without IPv6. (aria2 then makes its own lookups.) Those lookups use the small thread pool that file
 // reads and writes share, so at most two run at a time, across all checks, and
 // a place is given back only when its lookup has really ended.
 function createSystemLookup({lookupImpl=dns.promises.lookup,slots=LOOKUP_SLOTS}={}){
-  let free=slots;const queue=[];
+  let free=slots;const queue=[],inflight=new Map();
   const take=()=>free>0?(free--,Promise.resolve()):new Promise(resolve=>queue.push(resolve));
   const give=()=>{const next=queue.shift();if(next)next();else free++;};
-  const lookup=async(host,{signal}={})=>{
-    if(signal?.aborted)throw abortError(signal);
-    await take();
-    if(signal?.aborted){give();throw abortError(signal);}
-    let pending;
-    try{pending=Promise.resolve(lookupImpl(host,{all:true,family:4,verbatim:true}));}catch(error){give();throw error;}
-    pending.then(give,give);
-    return pending;
+  const lookup=(host,{signal}={})=>{
+    if(signal?.aborted)return Promise.reject(abortError(signal));
+    // A name already being looked up, or waiting for a place, for this or
+    // another check, is joined rather than asked again.
+    if(inflight.has(host))return inflight.get(host);
+    const job=(async()=>{
+      await take();
+      try{
+        if(signal?.aborted)throw abortError(signal);
+        return await lookupImpl(host,{all:true,family:4,verbatim:true});
+      }finally{give();}
+    })();
+    inflight.set(host,job);
+    const forget=()=>{if(inflight.get(host)===job)inflight.delete(host);};
+    job.then(forget,forget);
+    return job;
   };
   lookup.busy=()=>slots-free;
   return lookup;
@@ -290,18 +298,21 @@ class TorrentEngine{
   // `owner` is the aria2 that holds `gid`. After it has gone, nothing is left
   // to remove, and a newer aria2 (perhaps still starting for someone else) is not touched.
   async drop(gid,stop,owner=this.child){
-    if(!this.running||this.child!==owner)return;
+    const mine=()=>this.running&&this.child===owner;
+    if(!mine())return;
     // One total deadline includes fallback shutdown, process termination and
     // cleanup. Reserve time for those instead of starting another 15s RPC.
     const deadline=Date.now()+DROP_MS,removeUntil=deadline-STOP_RESERVE_MS,quick=()=>AbortSignal.timeout(Math.max(1,Math.min(1000,removeUntil-Date.now())));
     if(stop)await until(this.rpc('forceRemove',[gid],quick()),Math.min(removeUntil,Date.now()+1000)).catch(()=>{});
+    // Checked before every request: if this aria2 leaves meanwhile, the job went with it.
     while(Date.now()<removeUntil){
+      if(!mine())return false;
       try{await until(this.rpc('removeDownloadResult',[gid],quick()),Math.min(removeUntil,Date.now()+1000));return true;}
-      catch(error){if(!Number.isInteger(error?.rpcCode)||!this.running)break;await delay(100);}
+      catch(error){if(!Number.isInteger(error?.rpcCode)||!mine())break;await delay(100);}
     }
     // aria2 would not let go of it (still downloading or sharing): stopping
     // aria2 itself is the only sure way to end the uploading.
-    if(stop)await this.stop(deadline);
+    if(stop&&mine())await this.stop(deadline);
     return false;
   }
   // The .torrent file for a magnet link, fetched from other people. Only the

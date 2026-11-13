@@ -295,7 +295,35 @@ test('a full list refuses new downloads instead of growing past what Ravenshelf 
 test('game folders are local folders that are not a whole drive',()=>{
   const local=process.platform==='win32'?'C:\\Games\\Library':path.resolve(base,'Games');
   assert.equal(gameFolder(local),true);
-  for(const folder of ['C:\\','D:\\','\\\\nas\\Games','relative\\Games','C:\\Games\\..\\x'])assert.equal(gameFolder(folder),false,folder);
+  for(const folder of ['C:\\','D:\\','D:/','C:','\\\\nas\\Games','\\\\?\\C:\\Games','relative\\Games','C:\\Games\\..\\x','C:\\Games\\.','C:\\Games\\ ',local+'\\Library.',(process.platform==='win32'?'C:\\':'/')+'x'.repeat(2050)])assert.equal(gameFolder(folder),false,folder.slice(0,40));
   const kept=settingsFrom({gameFolders:[local]});assert.equal(kept.changed,false,'valid folders cause no repair');assert.deepEqual(kept.settings.gameFolders,[local]);
-  if(process.platform==='win32')assert.deepEqual(settingsFrom({gameFolders:[local,'D:\\']}).settings.gameFolders,[local]);
+  // A whole drive saved by an older version is kept (the scan skips it with a note), so it causes no repair either.
+  if(process.platform==='win32'){const older=settingsFrom({gameFolders:[local,'D:\\']});assert.deepEqual(older.settings.gameFolders,[local,'D:\\']);assert.equal(older.changed,false);}
+});
+
+test('a link or hard link named like the copy of the same bytes is never taken as that copy',t=>{
+  const crypto=require('node:crypto'),bytes='{"downloads":[null]}',name='library.json.recovery-'+crypto.createHash('sha256').update(bytes).digest('hex').slice(0,32)+'.json';
+  for(const kind of ['symlink','hardlink']){
+    const w=fixture(t),elsewhere=path.join(w.root,'elsewhere.json'),planted=path.join(w.root,name);
+    fs.writeFileSync(elsewhere,bytes);kind==='symlink'?fs.symlinkSync(elsewhere,planted):fs.linkSync(elsewhere,planted);fs.writeFileSync(w.file,bytes);
+    const result=loadLibrary(w.file);assert.equal(result.warning,RECOVERED,kind);assert.notEqual(path.basename(result.recoveryFile),name,kind);
+    assert.equal(fs.readFileSync(result.recoveryFile,'utf8'),bytes,kind);
+  }
+});
+
+test('at a full list, links already in it and videos already in it are no error',async t=>{
+  const w=fixture(t),manager=w.open(),link={status:'ready',url:'https://files.example.com/a.zip',filename:'a.zip'};
+  manager.stopping=true;manager.add({links:[link],gameTitle:'Game'});const quality=Object.keys(require('../src/youtube.cjs').QUALITIES)[0];manager.addMedia({videoId:'abcdefghijk',quality});
+  for(let i=manager.downloads.length;i<MAX_DOWNLOADS;i++)manager.downloads.push({id:'x'+i,status:'completed',name:'x'+i+'.bin',folder:w.folder,url:'https://files.example.com/x'+i});
+  assert.equal(manager.add({links:[link],gameTitle:'Game'}).added,0);assert.equal(manager.addMedia({videoId:'abcdefghijk',quality}).added,0);
+  assert.throws(()=>manager.add({links:[link,{status:'ready',url:'https://files.example.com/b.zip',filename:'b.zip'}],gameTitle:'Game'}),{message:LIST_FULL});
+  assert.equal(manager.downloads.length,MAX_DOWNLOADS);
+});
+
+test('an invalid label on a torrent or video entry keeps its link',()=>{
+  const folder=path.resolve(base,'labels','Game'),infoHash='c'.repeat(40),magnet='magnet:?xt=urn:btih:'+infoHash,videoId='abcdefghijk',quality=Object.keys(require('../src/youtube.cjs').QUALITIES)[0];
+  const torrent=downloadFrom(job(folder,{id:'t',kind:'torrent',status:'completed',url:magnet,sourceUrl:magnet,name:'Game',torrent:{infoHash,name:'Game',files:[{index:1,path:'Game',length:1,selected:true,padding:false}]},mod:{site:'elsewhere'}}));
+  assert.equal(torrent.url,magnet);assert.equal(Object.hasOwn(torrent,'mod'),false);
+  const video=downloadFrom(job(folder,{id:'v',kind:'media',status:'cancelled',url:canonicalUrl(videoId),sourceUrl:canonicalUrl(videoId),name:'video.mp4',media:{videoId,quality},mod:{site:'elsewhere'}}));
+  assert.equal(video.url,canonicalUrl(videoId));assert.equal(Object.hasOwn(video,'mod'),false);
 });
