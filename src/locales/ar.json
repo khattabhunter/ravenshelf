@@ -389,7 +389,7 @@
  "Epic manifest AppVersionString": "AppVersionString في ملف Epic",
  "Every part, one place. Close and reopen Ravenshelf to resume later.": "كل الأجزاء في مكان واحد. أغلق Ravenshelf وأعد فتحه للاستئناف لاحقًا.",
  "Everyone downloading the same torrent can see this PC’s IP address. Only a VPN hides it.": "يستطيع كل من ينزّل التورنت نفسه رؤية عنوان IP لهذا الحاسوب. لا يخفيه إلا VPN.",
- "Everyone downloading this torrent can see this PC’s IP address while it downloads.": "يستطيع كل من ينزّل هذا التورنت رؤية عنوان IP لهذا الحاسوب أثناء التنزيل.",
+ "Everyone sharing this torrent can see this PC’s IP address, also while Ravenshelf looks for its file list.": "يستطيع كل من يشارك هذا التورنت رؤية عنوان IP لهذا الحاسوب، حتى أثناء بحث Ravenshelf عن قائمة ملفاته.",
  "Executable FileVersion": "FileVersion في الملف التنفيذي",
  "Executable ProductVersion": "ProductVersion في الملف التنفيذي",
  "Executable found in selected/known game folder: {path}": "عُثر على الملف التنفيذي في مجلد ألعاب محدد أو معروف: {path}",

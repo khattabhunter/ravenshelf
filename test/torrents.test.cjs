@@ -35,15 +35,16 @@ function torrentFile(info,extra={}){
 const multi=(files=[[['setup.exe'],10],[['fg-01.bin'],20],[['fg-optional-bonus.bin'],5],[['MD5','fitgirl-bins.md5'],3]],name='Game [FitGirl Repack]')=>({name,'piece length':16384,pieces:Buffer.alloc(20),files:files.map(([p,length])=>({length,path:p}))});
 
 test('magnet links are read strictly, and only the hash, name and trackers are kept',()=>{
-  const read=magnet.parseMagnet('magnet:?xt=urn:btih:1A7168B2475E6DAD602526A093C8E75A5EA0A27A&dn=Police+Stories%3A+Bundle%0A&tr=udp%3A%2F%2Fopentor.org%3A2710&tr=http%3A%2F%2Ftracker.example%2Fannounce&tr=wss%3A%2F%2Fpeers.example&tr=https%3A%2F%2Fuser%3Apass%40t.example%2Fa&ws=https%3A%2F%2Fseed.example%2Ff&x.pe=10.0.0.1%3A6881&xs=https%3A%2F%2Fevil.example%2Fx.torrent');
-  assert.equal(read.infoHash,'1a7168b2475e6dad602526a093c8e75a5ea0a27a');
-  assert.equal(read.name,'Police Stories: Bundle');
-  assert.deepEqual(read.trackers,['udp://opentor.org:2710','http://tracker.example/announce']);
-  assert.equal(read.magnet,'magnet:?xt=urn:btih:1a7168b2475e6dad602526a093c8e75a5ea0a27a&dn=Police%20Stories%3A%20Bundle&tr=udp%3A%2F%2Fopentor.org%3A2710&tr=http%3A%2F%2Ftracker.example%2Fannounce');
+  const read=magnet.parseMagnet('magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&dn=Example+Game%3A+Bundle%0A&tr=udp%3A%2F%2Ftracker.example.org%3A2710&tr=http%3A%2F%2Ftracker.example%2Fannounce&tr=wss%3A%2F%2Fpeers.example&tr=https%3A%2F%2Fuser%3Apass%40t.example%2Fa&ws=https%3A%2F%2Fseed.example%2Ff&x.pe=10.0.0.1%3A6881&xs=https%3A%2F%2Fevil.example%2Fx.torrent');
+  assert.equal(read.infoHash,'0123456789abcdef0123456789abcdef01234567');
+  assert.equal(read.name,'Example Game: Bundle');
+  assert.deepEqual(read.trackers,['udp://tracker.example.org:2710','http://tracker.example/announce']);
+  assert.equal(read.magnet,'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example%20Game%3A%20Bundle&tr=udp%3A%2F%2Ftracker.example.org%3A2710&tr=http%3A%2F%2Ftracker.example%2Fannounce');
   for(const dropped of ['seed.example','10.0.0.1','evil.example','peers.example','user'])assert.equal(read.magnet.includes(dropped),false,dropped);
   // The same torrent written in base 32.
-  const hex='1a7168b2475e6dad602526a093c8e75a5ea0a27a',b32=magnet.base32Hex('DJYWRMSHLZWWWAJFE2QJHSHHLJPKBITX');
-  assert.equal(magnet.parseMagnet('magnet:?xt=urn:btih:DJYWRMSHLZWWWAJFE2QJHSHHLJPKBITX').infoHash,b32);
+  const hex='0123456789abcdef0123456789abcdef01234567',b32='AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH';
+  assert.equal(magnet.base32Hex(b32),hex);
+  assert.equal(magnet.parseMagnet(`magnet:?xt=urn:btih:${b32}`).infoHash,hex);
   assert.equal(magnet.base32Hex('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'),'0'.repeat(40));
   assert.equal(magnet.parseMagnet(`magnet:?xt=urn:btih:${hex}&xt=urn:btih:${hex.toUpperCase()}`).infoHash,hex);
   assert.throws(()=>magnet.parseMagnet('magnet:?xt=urn:btmh:1220'+'a'.repeat(64)),{message:magnet.MESSAGES.version2});

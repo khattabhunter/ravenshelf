@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0 — More ways to download: torrents, PixelDrain and MultiUpload
+
+- **Torrent downloads**, off until you turn them on. **Settings → Torrent downloads** first shows **What torrents share**: everyone sharing the same torrent can see this PC's IP address (only a VPN hides it), Ravenshelf uploads pieces of a torrent to other people while it downloads, and downloading or sharing games you have no right to can be against the law. They turn on only after you tick **I understand what torrents share.**
+- **Set up torrent downloads** fetches aria2 1.37.0, a free torrent program, once (about 2.4 MB) from its official GitHub release. The zip must match the size and SHA-256 recorded in Ravenshelf (the same value as Scoop's and winget's records of that file), and only `aria2c.exe` is kept, in `%LOCALAPPDATA%\Ravenshelf\torrent-tools`, checked again before it starts. **Remove the torrent downloader** deletes it.
+- Magnet links come from a game page (**This game also has a torrent (magnet link).** → **Download with torrent**), from **Import links** (a magnet link pasted on its own), or, with the browser extension, from a magnet link you click on fitgirl-repacks.site (new toolbar switch **Open FitGirl magnet links in Ravenshelf**; when torrents are off, Ravenshelf is closed or the window is private, the browser opens the link as before). A link from the browser that arrives before setup waits in memory, for an hour at most, and opens when setup finishes.
+- Ravenshelf first finds the torrent's file list, then **Choose the files to download** lets you untick files you don't want (such as `fg-optional` and `fg-selective` files). The file list must match the magnet link exactly. Torrents with names Windows can't store exactly as written, more than 10,000 files, paths too long for the download folder, or the newer version 2 format are refused, never renamed.
+- A torrent joins **Downloads** with pause, resume, retry and cancel; its card shows the people it is connected to and the upload speed. It downloads into a working folder and appears in its place in one step when every chosen file is complete; files you did not choose are removed. Each file gets Windows' downloaded-from-the-internet mark, and Microsoft Defender scans the torrent's folder as a whole. Torrents from a game page go to the game's folder, others to **Torrents**.
+- **Upload speed limit**: 10 KB/s to 1 MB/s (100 KB/s unless you change it); the shared download speed limit applies to torrents too. **After a torrent finishes**: **Stop uploading right away** (the default), **Share for 15 more minutes** or **Share for an hour more**.
+- aria2 runs with a fixed set of options: no configuration file, no log, control only from this PC (127.0.0.1) with a new random secret each time, no peer search on your home network, IPv4 only, no following of links named in a torrent, no overwriting or renaming of files, and it exits with Ravenshelf. It stops a minute after the last torrent. Saved file lists of torrents no longer in your downloads are removed when Ravenshelf starts.
+- **PixelDrain**: file links are checked through PixelDrain's public file information and downloaded over one connection, as PixelDrain allows; lists are expanded into their files (up to 20 lists at a time). PixelDrain's browser check, its free daily limit and removed files each give a plain message.
+- **MultiUpload**: mirror pages are read, and each file uses its copy on the first supported host (FuckingFast, FileKeeper, PixelDrain, DataNodes). Up to 500 files are looked up at a time. Files with no supported copy offer **Open in browser**.
+- FitGirl's encrypted pastes are read at their newer address, `pastefg.hermietkreeft.site`, as well as the old one.
+- **ZippyShare**, **BayFiles** and **LetsUpload** have shut down. Ravenshelf no longer tries them: a game page names them under **Not offered because these hosts have shut down**, and their links say so.
+- Links that need a manual step on hosts without a protected window now offer **Open in browser**.
+- Copied PixelDrain, MultiUpload and newer-address paste links are recognised by **Notice copied download links**.
+- Microsoft Defender can scan a folder: a torrent with several files is scanned as one, with messages about the download and its files. A folder reached through a link is not scanned.
+- All new texts are in Arabic too.
+
+See [the release notes](docs/RELEASE-0.10.0.md).
+
 ## 0.9.0 — Can you run it?
 
 - New **Can you run it?** panel in a game's details, above its Steam requirement lists. **Compare with this PC** sets each line it recognises in the **Minimum** and **Recommended** lists (Windows, 64-bit, processor, memory, graphics, graphics memory, DirectX, storage) beside this PC's specs and says **Meets**, **Below** or **Can’t tell**, with a sentence for each list. After this PC's specs have been read once (here or on the **PC specs** page), later games are compared as soon as they open.

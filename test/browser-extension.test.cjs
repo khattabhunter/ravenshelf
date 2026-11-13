@@ -804,7 +804,7 @@ test('a program that a page made itself is blocked with a text that can be shown
 });
 
 // ---- magnet links on fitgirl-repacks.site ----
-const MAGNET_LINK='magnet:?xt=urn:btih:1a7168b2475e6dad602526a093c8e75a5ea0a27a&dn=Game';
+const MAGNET_LINK='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Game';
 test('a magnet link clicked on FitGirl goes to Ravenshelf only from its own page script, in a normal window',async()=>{
   const answers=[];
   const b=fakeBrowser({native:message=>{answers.push(message);return message.type==='magnet'?{ok:true,action:'review'}:{ok:false,error:'invalid'};}});

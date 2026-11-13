@@ -480,7 +480,7 @@ test('a magnet link from the extension is handed to the torrent review, or back 
   const received=[];
   const bridge=new BrowserBridge({hostDir:temp(),threatLists:null,openExternal:async()=>{},receiveMagnet:async request=>{received.push(request);return {action:request.magnet.includes('dn=off')?'off':'review'};}});
   t.after(()=>bridge.stop());
-  const link='magnet:?xt=urn:btih:1a7168b2475e6dad602526a093c8e75a5ea0a27a';
+  const link='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567';
   assert.deepEqual(await bridge.respond('chromium',{v:1,type:'magnet',magnet:link}),{ok:true,action:'review'});
   assert.deepEqual(await bridge.respond('firefox',{v:1,type:'magnet',magnet:link+'&dn=off'}),{ok:true,action:'off'});
   assert.deepEqual(received,[{magnet:link,browser:'chromium'},{magnet:link+'&dn=off',browser:'firefox'}]);
