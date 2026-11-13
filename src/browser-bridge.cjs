@@ -45,10 +45,10 @@ async function writeJSONAtomic(file,value){
 }
 
 class BrowserBridge extends EventEmitter{
-  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},language=()=>({language:'en',digits:'latn'}),localText=text=>text,appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
+  constructor({hostDir,threatLists=null,virusTotal=null,resolveProvider=null,inspect=inspectLink,fetcher,queueDownload,modTitle=gameFolder,queueMedia=null,receiveMagnet=null,openExternal,reveal=()=>{},notify=()=>{},setReputation=()=>{},language=()=>({language:'en',digits:'latn'}),localText=text=>text,appVersion='0.0.0',now=Date.now,platform=process.platform,listenPath=null}={}){
     super();
     if(typeof hostDir!=='string'||!path.isAbsolute(hostDir))throw new Error('Invalid connector location.');
-    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
+    Object.assign(this,{hostDir,threatLists,virusTotal,resolveProvider,inspectImpl:inspect,fetcher,queueDownload,modTitle,queueMedia,receiveMagnet,openExternal,reveal,notify,setReputation,language,localText,appVersion,now,platform,listenPath});
     this.server=null;this.token=null;this.sockets=new Set();this.captures=new Map();this.allowed=[];
     this.queue=[];this.active=0;this.requests=[];this.contact=null;this.controller=new AbortController();
   }
@@ -128,6 +128,13 @@ class BrowserBridge extends EventEmitter{
         if(typeof this.queueMedia!=='function')return {ok:false,error:'invalid'};
         const result=await this.queueMedia({videoId:message.videoId,quality:message.quality,browser});
         return ['queued','duplicate','setup','busy'].includes(result?.action)?{ok:true,action:result.action}:{ok:false,error:'failed'};
+      }
+      // A magnet link waits in Ravenshelf for the user to see its files. 'off'
+      // lets the browser open it as before (in another torrent app, for example).
+      if(message.type==='magnet'){
+        if(typeof this.receiveMagnet!=='function')return {ok:true,action:'off'};
+        const result=await this.receiveMagnet({magnet:message.magnet,browser});
+        return ['review','setup','off','invalid','busy'].includes(result?.action)?{ok:true,action:result.action}:{ok:false,error:'failed'};
       }
       if(message.type==='threats')return {ok:true,manifest:this.threatLists?this.threatLists.browserManifest():{version:'',total:0,rules:[]}};
       if(message.type==='threatRule'){const rule=this.threatLists?.browserRule(message.id);return rule?{ok:true,rule}:{ok:false,error:'not-found'};}

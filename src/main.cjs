@@ -19,12 +19,13 @@ const {publicErrorMessage,publicError,ERROR_RESPONSE_HEADERS}=require('./public-
 const {createFeatureServices,featureSettings}=require('./feature-services.cjs');
 const {createBrowserIntegration}=require('./browser-integration.cjs');
 const {createMediaIntegration}=require('./media-integration.cjs');
+const {createTorrentIntegration}=require('./torrent-integration.cjs');
 const {markFromInternet}=require('./motw.cjs');
 const {createHardwareService}=require('./hardware.cjs');
 const i18n=require('./i18n.cjs');
 const {modContext,MODS_FOLDER}=require('./mods.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'atlas',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
-let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media;
+let win,manager,completion,catalogRefresh,installedCache,scanPromise,features,browserIntegration,media,torrents;
 // The app's language outside the window: notifications, file dialogs, window
 // titles and the menu. Every part of the app writes English; it is translated
 // here, as it is shown. If anything about the language fails, English is used.
@@ -89,7 +90,7 @@ function handle(name,fn){ipcMain.handle('atlas:'+name,async(event,value)=>{
   try{return await fn(value);}catch(error){throw publicError(error,name);}
 });}
 let updateSequence=0;
-function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,...features?.snapshot(),browser:browserIntegration?.snapshot()||null,media:media?.snapshot()||null,updateSequence:++updateSequence};}
+function appState(){return {...manager.state(),completionAction:completion?.snapshot()||{mode:'none',phase:'idle'},catalogRefresh:catalogRefresh?.snapshot()||null,...features?.snapshot(),browser:browserIntegration?.snapshot()||null,media:media?.snapshot()||null,torrents:torrents?.snapshot()||null,updateSequence:++updateSequence};}
 function publishState(){if(win&&!win.isDestroyed())win.webContents.send('atlas:state',appState());}
 function publishProgress(downloads){if(win&&!win.isDestroyed())win.webContents.send('atlas:progress',{updateSequence:++updateSequence,downloads});}
 function compactGame(value){
@@ -218,7 +219,8 @@ app.whenReady().then(async()=>{
   const hardware=createHardwareService();
   features=createFeatureServices({app,win,manager,completion,dialog:localDialog,clipboard,Notification:LocalNotification,register:handle,publish:publishState,providers,checked,hardware,isTest:Boolean(isTest)});
   media=createMediaIntegration({app,win,manager,Notification:LocalNotification,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
-  browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),isTest:Boolean(isTest)});
+  torrents=createTorrentIntegration({app,win,manager,register:handle,publish:publishState,assertQueueAvailable,isTest:Boolean(isTest)});
+  browserIntegration=createBrowserIntegration({app,win,manager,shell,safeStorage,Notification:LocalNotification,local,register:handle,publish:publishState,resolveProvider:resolveAppLink,assertQueueAvailable,queueMedia:request=>media.queue(request),receiveMagnet:request=>torrents.receive(request),isTest:Boolean(isTest)});
   // This timer lives in the main process so minimizing Ravenshelf cannot throttle it.
   // A short interval is available only to isolated validation profiles.
   const testInterval=Number(process.env.ATLAS_CATALOG_INTERVAL_MS);
@@ -348,5 +350,5 @@ app.on('before-quit',event=>{
   catalogRefresh?.stop();
   for(const browser of hostWindows)browser.destroy();
   for(const browser of mediaWindows)browser.destroy();
-  manager.stop().then(()=>browserIntegration?.beforeQuit()).then(()=>media?.beforeQuit()).then(()=>features?.beforeQuit()).catch(()=>console.error('Ravenshelf could not finish the pending update. The current app was kept.')).finally(()=>app.quit());
+  manager.stop().then(()=>browserIntegration?.beforeQuit()).then(()=>media?.beforeQuit()).then(()=>torrents?.beforeQuit()).then(()=>features?.beforeQuit()).catch(()=>console.error('Ravenshelf could not finish the pending update. The current app was kept.')).finally(()=>app.quit());
 });

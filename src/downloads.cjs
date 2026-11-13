@@ -17,12 +17,27 @@ const {SITE:MOD_SITE,MODS_FOLDER,modFolder,ONE_CONNECTION_NOTE,LINK_REFUSED:MOD_
 const {safeName,folderName:safeFolderName}=require('./safe-name.cjs');
 const {oneConnection}=require('./hosts.cjs');
 const {MESSAGES:PIXELDRAIN,downloadRefusal}=require('./pixeldrain.cjs');
+const {MESSAGES:MAGNET}=require('./magnet.cjs');
+const {MESSAGES:ENGINE}=require('./torrent-engine.cjs');
 const APP_VERSION=require('../package.json').version;
 // YouTube jobs waiting or running at once; more are refused until some finish.
 const MAX_MEDIA_JOBS=50;
 const MEDIA_SETUP='Set up YouTube downloads in Settings first, then retry.';
 const MEDIA_INVALID='Only YouTube video addresses can be downloaded this way.';
 const MEDIA_FULL='Too many YouTube downloads are waiting. Let some finish first.';
+// Torrents waiting or running at once, and the folder for torrents from the browser.
+const MAX_TORRENT_JOBS=50,TORRENTS_FOLDER='Torrents',MAX_TORRENT_PATH=250;
+const {TORRENT_SETUP,MESSAGES:TORRENT}=require('./torrent-messages.cjs');
+const TORRENT_FULL=TORRENT.full,TORRENT_INVALID=TORRENT.choose;
+const INFO_HASH=/^[0-9a-f]{40}$/;
+// A torrent downloads into a hidden working folder beside its final place,
+// and moves there in one step when every chosen file is complete.
+const torrentWorkspace=d=>path.join(d.folder,'.atlas-torrent-'+crypto.createHash('sha256').update(String(d.id)).digest('hex').slice(0,24));
+// A torrent's files as the window needs them: counts, not the whole list.
+function torrentSummary(t){
+  const files=Array.isArray(t?.files)?t.files:[];
+  return {infoHash:t?.infoHash||'',name:t?.name||'',fileCount:files.length,selectedCount:files.filter(file=>file.selected).length,peers:t?.peers||0,uploadSpeed:t?.uploadSpeed||0,uploaded:t?.uploaded||0,sharing:t?.sharing===true};
+}
 const LONE_SURROGATE=/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 // Connection failures that usually pass on their own are retried automatically:
 // at most twice in a row, waiting longer each time. A retry that received more
@@ -70,8 +85,8 @@ function atomicJSON(file,data) {
 }
 function loadJSON(file,fallback) { try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;} }
 class DownloadManager extends EventEmitter {
-  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null,media=null}) {
-    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted; this.media=media;
+  constructor({stateFile,downloadDir,fetcher=safeFetch,resolveLink,vault=null,scanFile=null,markFile=null,onCompleted=null,now=Date.now,bandwidthLimiter=null,hostBackoff=null,media=null,torrent=null}) {
+    super(); this.stateFile=stateFile; this.fetcher=fetcher; this.resolveLink=resolveLink; this.vault=vault; this.scanFile=scanFile; this.markFile=markFile; this.onCompleted=onCompleted; this.media=media; this.torrent=torrent;
     this.running=new Map(); this.tasks=new Set(); this.progressMeters=new Map(); this.stopping=false; this.scanQueue=[]; this.scanning=null; this.headerStorageWarning='';
     this.now=now;this.taskById=new Map();this.scanTasks=new Map();this.quiescing=new Set();this.hostBackoff=hostBackoff||new HostBackoff({now});
     const stored=loadJSON(stateFile,{});
@@ -120,7 +135,7 @@ class DownloadManager extends EventEmitter {
     this.scheduleTimer=setInterval(()=>{this.checkSchedule();this.pump();},1000);this.scheduleTimer.unref();
     Promise.resolve().then(()=>{if(!this.stopping){this.checkSchedule();this.pump();}});
   }
-  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>({...d})),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
+  state(){ return {downloads:this.downloads.map(({headers,sealedHeaders,...d})=>d.kind==='torrent'?{...d,torrent:torrentSummary(d.torrent)}:{...d}),settings:{...this.settings},version:APP_VERSION,headerStorageWarning:this.headerStorageWarning,downloadSchedule:{...scheduleSnapshot(this.settings.downloadSchedule,new Date(this.now())),pausedCount:this.downloads.filter(d=>d.pauseReason==='schedule').length}}; }
   persisted(d){
     const {headers,sealedHeaders,headersNeedRefresh,...rest}=d;
     if(!headers||!Object.keys(headers).length)return {...rest,headers:{},...(headersNeedRefresh?{headersNeedRefresh:true}:{})};
@@ -142,7 +157,9 @@ class DownloadManager extends EventEmitter {
       if(d.status!=='downloading')continue;
       d.speed=rateMeter.sample(d.received);
       // Explicit allowlist: no credentials, paths, URLs, settings or scan results.
-      downloads.push({id:d.id,received:d.received,total:d.total,speed:d.speed,activeConnections:d.activeConnections});
+      const update={id:d.id,received:d.received,total:d.total,speed:d.speed,activeConnections:d.activeConnections};
+      if(d.kind==='torrent'){update.peers=d.torrent?.peers||0;update.uploadSpeed=d.torrent?.uploadSpeed||0;}
+      downloads.push(update);
     }
     if(downloads.length)this.emit('progress',downloads);
   }
@@ -274,6 +291,35 @@ class DownloadManager extends EventEmitter {
     this.downloads.push(d);this.save();this.changed();this.pump();
     return {added:1,ids:[d.id]};
   }
+  // A torrent whose file list was checked and shown. `files` is the whole list,
+  // in the torrent's order, with the files chosen to download marked.
+  addTorrent({infoHash,magnet,name,files,gameTitle}={}){
+    if(typeof infoHash!=='string'||!INFO_HASH.test(infoHash)||typeof magnet!=='string'||!magnet.startsWith('magnet:?xt=urn:btih:'+infoHash)||magnet.length>8192)throw new Error(MAGNET.invalid);
+    if(typeof name!=='string'||!name||safeName(name,'')!==name)throw new Error(MAGNET.names);
+    if(!Array.isArray(files)||!files.length||files.length>10000)throw new Error(MAGNET.tooMany);
+    const list=files.map((file,i)=>{
+      if(!file||file.index!==i+1||typeof file.path!=='string'||!(file.path===name||file.path.startsWith(name+'/'))||!Number.isSafeInteger(file.length)||file.length<0)throw new Error(MAGNET.damaged);
+      // Each part of the path is one Windows stores exactly as written, so no file can land outside the folder.
+      if(file.path.split('/').some(part=>!part||part!==safeName(part,'')||part==='.'||part==='..'))throw new Error(MAGNET.names);
+      return {index:file.index,path:file.path,length:file.length,selected:file.selected===true&&file.padding!==true,padding:file.padding===true};
+    });
+    const chosen=list.filter(file=>file.selected);
+    if(!chosen.length)throw new Error(TORRENT_INVALID);
+    const browser=typeof gameTitle!=='string'||!gameTitle.trim();
+    const folder=path.join(this.settings.downloadDir,safeFolderName(browser?TORRENTS_FOLDER:gameTitle));
+    const existing=this.downloads.find(d=>d.kind==='torrent'&&d.torrent?.infoHash===infoHash&&d.status!=='cancelled'&&d.folder.toLowerCase()===folder.toLowerCase());
+    if(existing)return {added:0,ids:[existing.id]};
+    if(this.downloads.filter(d=>d.kind==='torrent'&&['queued','downloading','paused'].includes(d.status)).length>=MAX_TORRENT_JOBS)throw new Error(TORRENT_FULL);
+    const d={id:crypto.randomUUID(),kind:'torrent',url:magnet,sourceUrl:magnet,name,gameTitle:browser?TORRENTS_FOLDER:String(gameTitle).slice(0,200),folder,status:'queued',
+      received:0,total:chosen.reduce((sum,file)=>sum+file.length,0),speed:0,error:'',etag:null,lastModified:null,headers:{},connectionMode:'torrent',activeConnections:0,connectionNote:'',
+      createdAt:new Date().toISOString(),origin:'torrent',markOfTheWeb:true,torrent:{infoHash,name,files:list,peers:0,uploadSpeed:0,uploaded:0}};
+    // Windows paths are kept under 250 characters, counted from the working folder, the longer of the two places.
+    const longest=list.reduce((max,file)=>Math.max(max,file.path.length),0);
+    if(torrentWorkspace(d).length+1+longest>MAX_TORRENT_PATH)throw new Error(MAGNET.tooLong);
+    fs.mkdirSync(folder,{recursive:true});
+    this.downloads.push(d);this.save();this.changed();this.pump();
+    return {added:1,ids:[d.id]};
+  }
   action(id,action){
     const d=this.downloads.find(x=>x.id===id);if(!d)throw new Error('Download not found.');
     if(this.quiescing.has(id))throw new Error('This download is being removed. Wait for the operation to finish.');
@@ -305,7 +351,7 @@ class DownloadManager extends EventEmitter {
         return !policy.limited||![...this.running.keys()].some(id=>hostKey(this.downloads.find(item=>item.id===id).url)===policy.key);
       });if(!d)break;
       const controller=new AbortController();this.running.set(d.id,controller);
-      const task=(d.kind==='media'?this.runMedia(d,controller):this.run(d,controller)).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,d.kind==='media'?'media':'download');}}).finally(()=>{
+      const task=(d.kind==='media'?this.runMedia(d,controller):d.kind==='torrent'?this.runTorrent(d,controller):this.run(d,controller)).catch(err=>{if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,d.kind==='media'?'media':d.kind==='torrent'?'torrent':'download');}}).finally(()=>{
         this.running.delete(d.id);this.taskById.delete(d.id);d.speed=0;d.activeConnections=0;this.save();this.changed();this.pump();
       });
       this.tasks.add(task);this.taskById.set(d.id,task);task.finally(()=>this.tasks.delete(task));
@@ -560,6 +606,62 @@ class DownloadManager extends EventEmitter {
     if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
     try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
   }
+  // A torrent job: the torrent engine downloads the chosen files into the job's
+  // working folder, and they are published together when all are complete.
+  async runTorrent(d,controller){
+    d.status='downloading';d.error='';d.speed=0;d.connectionMode='torrent';d.activeConnections=0;d.connectionNote='';
+    d.torrent={...d.torrent,peers:0,uploadSpeed:0,sharing:false};this.changed();
+    const rateMeter=new RateMeter({windowMs:5000,sampleMs:500});rateMeter.reset(d.received);
+    this.progressMeters.set(d.id,{download:d,rateMeter});
+    const workspace=torrentWorkspace(d);
+    try{
+      if(!this.torrent)throw new Error(TORRENT_SETUP);
+      await fs.promises.mkdir(workspace,{recursive:true});
+      const resume=(await fs.promises.readdir(workspace)).length>0;
+      const result=await this.torrent.download(d,{signal:controller.signal,workspace,resume,
+        onProgress:progress=>{
+          if(d.status!=='downloading')return;
+          d.received=Math.max(0,progress.received);if(progress.total>0)d.total=progress.total;
+          d.torrent.peers=progress.peers;d.torrent.uploadSpeed=progress.uploadSpeed;d.torrent.uploaded=progress.uploaded;
+        },
+        onSharing:minutes=>{if(d.status!=='downloading')return;d.torrent.sharing=true;d.connectionNote=minutes>=60?'Download complete. Sharing with other people for up to an hour.':'Download complete. Sharing with other people for up to 15 minutes.';this.changed();}});
+      if(!result?.complete)throw new Error(ENGINE.failed);
+      // Stopping while sharing only stops sharing: every chosen file is complete.
+      if(!result.interrupted)controller.signal.throwIfAborted();
+      await this.publishTorrent(d,workspace);
+    }catch(err){
+      if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'torrent');}
+    }finally{this.progressMeters.delete(d.id);d.activeConnections=0;if(d.torrent){d.torrent.peers=0;d.torrent.uploadSpeed=0;d.torrent.sharing=false;}}
+  }
+  async publishTorrent(d,workspace){
+    const files=d.torrent.files,source=path.join(workspace,d.torrent.name);
+    // Every chosen file must be there at its full size; parts of files that were
+    // not chosen (they can share pieces with chosen ones) are removed first.
+    for(const file of files){
+      const target=path.join(workspace,file.path);
+      if(file.selected){
+        const stat=await fs.promises.lstat(target).catch(()=>null);
+        if(!stat?.isFile()||stat.size!==file.length)throw new Error(ENGINE.changed);
+      }else await fs.promises.rm(target,{force:true}).catch(()=>{});
+    }
+    const sourceStat=await fs.promises.lstat(source);
+    if(sourceStat.isSymbolicLink())throw new Error(ENGINE.changed);
+    d.name=this.availableName(d.folder,d.torrent.name,d.id);
+    const final=path.join(d.folder,d.name);
+    await fs.promises.rename(source,final);
+    await removeEmptyFolders(final).catch(()=>{});
+    d.connectionNote='';
+    await fs.promises.rm(workspace,{recursive:true,force:true,maxRetries:2}).catch(()=>{d.connectionNote='Download complete. Some temporary files could not be removed.';});
+    // The published place of each chosen file: the torrent's own name may have become "Name (1)".
+    const published=file=>path.join(d.folder,d.name+file.path.slice(d.torrent.name.length));
+    d.total=files.filter(file=>file.selected).reduce((sum,file)=>sum+file.length,0);d.received=d.total;
+    if(this.markFile)for(const file of files.filter(item=>item.selected)){
+      try{await this.markFile(published(file));}catch{d.connectionNote='Download complete. Windows’ downloaded-from-the-internet mark could not be added to some files.';}
+    }
+    d.status='completed';d.completedAt=new Date().toISOString();
+    if(this.scanFile&&this.settings.defenderScan)this.queueScan(d);
+    try{this.onCompleted?.(d);}catch{/* A follow-up check must not undo a finished download. */}
+  }
   // Stores a reputation lookup result shown on the download's card.
   setReputation(id,reputation){
     const d=this.downloads.find(x=>x.id===id);if(!d)return false;
@@ -596,4 +698,17 @@ class DownloadManager extends EventEmitter {
   // and resumed on next launch; automatic completion waits for scans beforehand.
   async stop(){this.stopping=true;clearInterval(this.timer);clearInterval(this.progressTimer);clearInterval(this.scheduleTimer);for(const d of this.downloads)if(d.status==='queued')d.status='paused';for(const [id,c]of this.running){const d=this.downloads.find(x=>x.id===id);d.status='paused';c.abort();}this.bandwidthLimiter.stop();await Promise.allSettled([...this.tasks]);this.progressMeters.clear();this.save();}
 }
-module.exports={DownloadManager,safeName,atomicJSON,loadJSON,MAX_MEDIA_JOBS};
+// Removes folders left empty inside a published torrent (files that were not chosen).
+async function removeEmptyFolders(root){
+  const stat=await fs.promises.lstat(root);if(!stat.isDirectory()||stat.isSymbolicLink())return;
+  const walk=async dir=>{
+    let empty=true;
+    for(const entry of await fs.promises.readdir(dir,{withFileTypes:true})){
+      if(entry.isDirectory()&&!entry.isSymbolicLink()){if(!await walk(path.join(dir,entry.name)))empty=false;}else empty=false;
+    }
+    if(empty&&dir!==root){await fs.promises.rmdir(dir).catch(()=>{empty=false;});}
+    return empty;
+  };
+  await walk(root);
+}
+module.exports={DownloadManager,safeName,atomicJSON,loadJSON,MAX_MEDIA_JOBS,MAX_TORRENT_JOBS,TORRENTS_FOLDER,TORRENT_SETUP,torrentWorkspace,torrentSummary};

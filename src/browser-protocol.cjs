@@ -101,6 +101,12 @@ function validateRequest(message){
       if(!videoId)invalid();
       return {type:'media',videoId,quality:message.quality};
     }
+    // A magnet link the user clicked, or chose from the right-click menu. Only
+    // the link goes further; the app reads it strictly before using any of it.
+    case 'magnet':
+      exactKeys(message,['magnet']);
+      if(typeof message.magnet!=='string'||message.magnet.length>8192||!/^magnet:\?/i.test(message.magnet)||/[\x00-\x1f\x7f]/.test(message.magnet))invalid();
+      return {type:'magnet',magnet:message.magnet};
     case 'lookup':
       exactKeys(message,['host']);
       if(typeof message.host!=='string'||!message.host||message.host.length>253||!/^[a-z0-9._-]+$/i.test(message.host))invalid();

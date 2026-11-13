@@ -16,7 +16,7 @@ const {MODS_FOLDER}=require('./mods.cjs');
 const EXTENSION_BROWSERS=Object.freeze(['chromium','firefox']);
 const FOLDER_NOT_UPDATED='The extension folder could not be updated, so your browser keeps the previous version. Restart Ravenshelf to try again.';
 
-function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,queueMedia=null,local=null,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
+function createBrowserIntegration({app,win,manager,shell,safeStorage,Notification,register,publish,resolveProvider,assertQueueAvailable,queueMedia=null,receiveMagnet=null,local=null,isTest=false,platform=process.platform,setup=browserSetup,bridgeOptions={},listOptions={},virusTotalOptions={}}){
   manager.settings={browserIntegrationEnabled:false,...manager.settings};
   const profile=app.getPath('userData'),version=app.getVersion();
   const hostDir=path.join(profile,'browser-host'),extensionRoot=path.join(profile,'browser-extension');
@@ -40,7 +40,7 @@ function createBrowserIntegration({app,win,manager,shell,safeStorage,Notificatio
     // Mod files of one game stay together: the queue says which title the game's folder goes by.
     queueDownload:entry=>{assertQueueAvailable();return entry.mod?manager.add({links:[entry],gameTitle:manager.modTitle(entry.mod),group:MODS_FOLDER}):manager.add({links:[entry],gameTitle:BROWSER_FOLDER});},
     modTitle:mod=>manager.modTitle(mod),
-    queueMedia,
+    queueMedia,receiveMagnet,
     openExternal:url=>shell.openExternal(safeURL(url).href),
     reveal,notify,setReputation:(id,value)=>manager.setReputation(id,value),...bridgeOptions});
   bridge.on('change',()=>publish());
