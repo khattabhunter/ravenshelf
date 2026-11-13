@@ -60,6 +60,20 @@ function engineArgs({port,secret,appPid,stateDir,uploadLimit,downloadLimit}){
     '--allow-overwrite=false','--auto-file-renaming=false','--file-allocation=none','--auto-save-interval=30','--max-concurrent-downloads=8'
   ]);
 }
+// A plain file of at most `cap` bytes, checked and read through one open
+// handle, so what is checked is what is read.
+const MAX_METADATA=10*1024*1024;
+async function readSmallFile(file,cap){
+  let handle;
+  try{handle=await fs.promises.open(file,'r');}catch{throw new Error(MESSAGES.stopped);}
+  try{
+    const stat=await handle.stat();
+    if(!stat.isFile()||stat.size>cap)throw new Error(MESSAGES.stopped);
+    const buffer=Buffer.alloc(cap+1);let length=0;
+    for(;;){const {bytesRead}=await handle.read(buffer,length,buffer.length-length,length);if(!bytesRead)break;length+=bytesRead;if(length>cap)throw new Error(MESSAGES.stopped);}
+    return buffer.subarray(0,length);
+  }finally{await handle.close().catch(()=>{});}
+}
 // The fixed message for an aria2 error number.
 function errorMessage(code){
   const value=String(code??'');
@@ -205,10 +219,7 @@ class TorrentEngine{
           if(Date.now()>deadline)throw new Error(MESSAGES.noPeers);
           await this.wait(signal);
         }
-        const file=path.join(dir,parsed.infoHash+'.torrent');
-        const stat=await fs.promises.lstat(file).catch(()=>null);
-        if(!stat?.isFile()||stat.size>10*1024*1024)throw new Error(MESSAGES.stopped);
-        const buffer=await fs.promises.readFile(file);
+        const buffer=await readSmallFile(path.join(dir,parsed.infoHash+'.torrent'),MAX_METADATA);
         readTorrent(buffer,parsed.infoHash);
         return buffer;
       }finally{

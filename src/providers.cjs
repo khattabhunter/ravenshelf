@@ -235,7 +235,7 @@ function extractUrls(text) {
 // Runs `fn` over `items` with at most `limit` at once, keeping their order.
 async function mapLimit(items,limit,fn){
   const results=new Array(items.length);let next=0;
-  await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;results[i]=await fn(items[i],i);}}));
+  await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;results[i]=await fn(items[i]);}}));
   return results;
 }
 // A MultiUpload file's copy on the first host in MIRROR_ORDER that has one,

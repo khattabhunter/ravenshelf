@@ -266,6 +266,9 @@ test('the engine starts aria2 with a fresh secret, finds a file list, and checks
   const other=torrentFile(multi([[['other.bin'],1]]));
   const wrong=fakeAria2({torrents:{[infoHash]:other.buffer}}),second=engineFor(t,wrong);
   await assert.rejects(second.engine.metadata(parsed),{message:magnet.MESSAGES.damaged});
+  // A file list larger than 10 MB is not read.
+  const huge=fakeAria2({torrents:{[infoHash]:Buffer.alloc(10*1024*1024+1)}}),third=engineFor(t,huge);
+  await assert.rejects(third.engine.metadata(parsed),{message:'The torrent downloader stopped unexpectedly. Retry to resume.'});
   // Requests without the secret are refused by aria2 (the stand-in does the same).
   const answer=await fake.fetch(`http://127.0.0.1:${fake.port}/jsonrpc`,{body:JSON.stringify({jsonrpc:'2.0',id:'x',method:'aria2.getVersion',params:['token:wrong']})});
   assert.equal((await answer.json()).error.message,'Unauthorized');
@@ -522,11 +525,11 @@ test('at start, saved file lists of torrents no longer in the downloads are remo
   const kept='a'.repeat(40),gone='b'.repeat(40);
   const s=integrationFor(t,{before:(root,manager)=>{
     const store=path.join(root,'store');fs.mkdirSync(path.join(store,'folder.torrent'),{recursive:true});
-    for(const name of [kept+'.torrent',gone+'.torrent',gone+'.torrent.0f1e2d3c-4b5a-4968-8776-655443322110.tmp','notes.txt','B'.repeat(40)+'.torrent'])fs.writeFileSync(path.join(store,name),'x');
+    for(const name of [kept+'.torrent',gone+'.torrent',gone+'.torrent.0f1e2d3c-4b5a-4968-8776-655443322110.tmp','notes.txt','C'.repeat(40)+'.torrent'])fs.writeFileSync(path.join(store,name),'x');
     manager.downloads.push({id:'job',kind:'torrent',status:'paused',folder:root,name:'Game',headers:{},torrent:{infoHash:kept,name:'Game',files:[]}});
   }});
   await s.integration.pruned;
-  assert.deepEqual(fs.readdirSync(path.join(s.root,'store')).sort(),['B'.repeat(40)+'.torrent',kept+'.torrent','folder.torrent','notes.txt']);
+  assert.deepEqual(fs.readdirSync(path.join(s.root,'store')).sort(),['C'.repeat(40)+'.torrent',kept+'.torrent','folder.torrent','notes.txt']);
   // No saved file lists at all is fine too.
   const empty=integrationFor(t);await empty.integration.pruned;
   assert.equal(fs.existsSync(path.join(empty.root,'store')),false);
