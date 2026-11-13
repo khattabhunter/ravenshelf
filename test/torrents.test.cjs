@@ -97,6 +97,31 @@ test('a torrent with any name Windows cannot store exactly as written is refused
   assert.throws(()=>magnet.readTorrent(tooMany.buffer,tooMany.infoHash),{message:magnet.MESSAGES.tooMany});
 });
 
+test('torrent names made to look like something else are refused: hidden text, disguised endings, short-name look-alikes, upper-case twins',()=>{
+  for(const [parts,message] of [
+    [['Readme\u202etxt.exe'],magnet.MESSAGES.deceptive],[['a\u200bb.bin'],magnet.MESSAGES.deceptive],[['Folder\u2066x','a.bin'],magnet.MESSAGES.deceptive],
+    [['invoice.pdf.exe'],magnet.MESSAGES.deceptive],[['photo.jpg      .exe'],magnet.MESSAGES.deceptive],[['notes.txt.bat'],magnet.MESSAGES.deceptive],
+    [['SETUPP~1.EXE'],magnet.MESSAGES.names],[['data~2'],magnet.MESSAGES.names]
+  ]){
+    const {buffer,infoHash}=torrentFile(multi([[parts,1]]));
+    assert.throws(()=>magnet.readTorrent(buffer,infoHash),{message},JSON.stringify(parts));
+  }
+  // Windows compares names in upper case: σ and ς are the same file there.
+  const sigma=torrentFile(multi([[['\u03c3.bin'],1],[['\u03c2.bin'],1]]));
+  assert.throws(()=>magnet.readTorrent(sigma.buffer,sigma.infoHash),{message:magnet.MESSAGES.names});
+  // Ordinary game files are fine, programs included.
+  const fine=torrentFile(multi([[['setup.exe'],1],[['fg-01.bin'],1],[['Redist','vc_redist.x64.exe'],1],[['Name with  two spaces.txt'],1],[['\u0627\u0644\u0644\u0639\u0628\u0629.bin'],1]]));
+  assert.equal(magnet.readTorrent(fine.buffer,fine.infoHash).files.length,5);
+});
+
+test('magnet trackers on this PC or the home network are left out; hidden text is taken out of the name',()=>{
+  const hash='0123456789abcdef0123456789abcdef01234567';
+  const trackers=['udp://127.0.0.1:53','http://192.168.1.1/cgi?x=1','http://[::1]/a','udp://10.1.2.3:6969','http://169.254.1.1/','http://localhost/a','http://router/a','http://nas.local/a','http://box.lan/a','http://printer.home.arpa/a','http://tracker.localhost/a','udp://tracker.example.org:1337/announce','http://93.184.216.34/announce'];
+  const read=magnet.parseMagnet(`magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent('Game\u202e\u200b Name')}`+trackers.map(tracker=>'&tr='+encodeURIComponent(tracker)).join(''));
+  assert.deepEqual(read.trackers,['udp://tracker.example.org:1337/announce','http://93.184.216.34/announce']);
+  assert.equal(read.name,'Game Name');
+});
+
 test('the torrent reader refuses malformed data',()=>{
   const bad=['','i01e','i-0e','d1:ai1e1:ai2ee','d1:ai1e','l'+'l'.repeat(70)+'e'.repeat(71),'d1:ai1ee extra','4:abc','d3:keyi1e','d9999999999999999999999:x','x'];
   for(const text of bad)assert.throws(()=>magnet.decode(Buffer.from(text)),{message:magnet.MESSAGES.damaged},JSON.stringify(text));
@@ -137,7 +162,7 @@ test('file choices are written as aria2 ranges, and aria2’s file list must mat
 });
 
 // A stand-in for aria2: a JSON-RPC answerer with downloads that progress on each status call.
-function fakeAria2({torrents={},share=0,failStatus=null,badFiles=false,startFails=0,metadataPolls=2}={}){
+function fakeAria2({torrents={},share=0,failStatus=null,badFiles=false,startFails=0,metadataPolls=2,linger=0}={}){
   const fake={spawned:[],calls:[],secret:'',downloads:new Map(),seq:0,startFails,exits:0};
   fake.spawn=(file,args,options)=>{
     const child=new EventEmitter();child.exitCode=null;child.signalCode=null;child.pid=4242;
@@ -192,13 +217,20 @@ function fakeAria2({torrents={},share=0,failStatus=null,badFiles=false,startFail
             const target=path.join(d.dir,...file.path.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});
             if(d.chosen.has(file.index))fs.writeFileSync(target,Buffer.alloc(file.length,1));else fs.writeFileSync(target,Buffer.alloc(1,2));
           }
+          // aria2 can still say it is sharing for a moment after a download with no sharing time ends.
+          if(d.options['seed-time']==='0'&&(d.lingered||0)<linger){d.lingered=(d.lingered||0)+1;return reply({status:'active',seeder:'true',totalLength:String(total),completedLength:String(total),downloadSpeed:'0',uploadSpeed:'0',uploadLength:'0',connections:'1',numSeeders:'1',errorCode:'0'});}
           if(d.options['seed-time']!=='0'&&d.shared<share){d.shared++;return reply({status:'active',seeder:'true',totalLength:String(total),completedLength:String(total),downloadSpeed:'0',uploadSpeed:'700',uploadLength:'9',connections:'2',numSeeders:'1',errorCode:'0'});}
           d.status='complete';
         }
         return reply({status:d.status,seeder:'false',totalLength:String(total),completedLength:String(done),downloadSpeed:'1000',uploadSpeed:'50',uploadLength:'3',connections:'5',numSeeders:'2',errorCode:'0'});
       }
       case 'forceRemove':{const d=fake.downloads.get(params[0]);if(d)d.status='removed';return reply(params[0]);}
-      case 'removeDownloadResult':{fake.downloads.delete(params[0]);return reply('OK');}
+      case 'removeDownloadResult':{
+        // aria2 refuses to forget a download that is still running or sharing.
+        const d=fake.downloads.get(params[0]);
+        if(d&&['active','paused','waiting'].includes(d.status))return new Response(JSON.stringify({jsonrpc:'2.0',id:body.id,error:{code:1,message:'Could not remove download result'}}),{status:400,headers:{'content-type':'application/json'}});
+        fake.downloads.delete(params[0]);return reply('OK');
+      }
       case 'changeGlobalOption':return reply('OK');
       case 'shutdown':{setImmediate(()=>{fake.child.exitCode=0;fake.child.emit('exit',0);});return reply('OK');}
       default:return new Response(JSON.stringify({jsonrpc:'2.0',id:body.id,error:{code:1,message:'No such method'}}),{status:400,headers:{'content-type':'application/json'}});
@@ -237,6 +269,37 @@ test('the engine starts aria2 with a fresh secret, finds a file list, and checks
   // Requests without the secret are refused by aria2 (the stand-in does the same).
   const answer=await fake.fetch(`http://127.0.0.1:${fake.port}/jsonrpc`,{body:JSON.stringify({jsonrpc:'2.0',id:'x',method:'aria2.getVersion',params:['token:wrong']})});
   assert.equal((await answer.json()).error.message,'Unauthorized');
+});
+
+test('aria2 gets a new DHT node ID each time it starts: its DHT file is removed before a start and after a stop',async t=>{
+  const fake=fakeAria2(),{engine,root}=engineFor(t,fake);
+  const state=path.join(root,'state');fs.mkdirSync(state,{recursive:true});
+  for(const name of ['dht.dat','dht.dat__temp','keep.txt'])fs.writeFileSync(path.join(state,name),'x');
+  await engine.start();
+  assert.deepEqual(fs.readdirSync(state).filter(name=>name.startsWith('dht')),[],'removed before aria2 starts');
+  assert.equal(fs.existsSync(path.join(state,'keep.txt')),true,'nothing else is touched');
+  fs.writeFileSync(path.join(state,'dht.dat'),'written by aria2');
+  await engine.stop();
+  assert.equal(fs.existsSync(path.join(state,'dht.dat')),false,'removed after aria2 stops');
+});
+
+test('with no sharing time, a moment of aria2 still sharing is not reported as sharing',async t=>{
+  const {buffer,infoHash}=torrentFile(multi());
+  const read=magnet.readTorrent(buffer,infoHash);
+  const fake=fakeAria2({linger:3}),{engine,root}=engineFor(t,fake);
+  const shared=[];
+  assert.deepEqual(await engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir:path.join(root,'w'),shareMinutes:0},{onSharing:minutes=>shared.push(minutes)}),{complete:true,interrupted:false});
+  assert.deepEqual(shared,[]);
+});
+
+test('a start while aria2 is stopping waits for the stop, then starts aria2 again',async t=>{
+  const fake=fakeAria2(),{engine}=engineFor(t,fake);
+  await engine.start();assert.equal(fake.spawned.length,1);
+  const stopping=engine.stop();
+  await engine.start();
+  await stopping;
+  assert.equal(engine.running,true,'aria2 runs after the start');
+  assert.equal(fake.spawned.length,2,'it was started again after the stop');
 });
 
 test('the engine stops a magnet lookup when asked, and stops aria2 when nothing uses it',async t=>{
@@ -293,6 +356,17 @@ test('sharing after a download can be stopped without losing the finished files,
   const running=engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir,shareMinutes:15},{signal:controller.signal,onSharing:minutes=>{sharingFor=minutes;controller.abort();}});
   assert.deepEqual(await running,{complete:true,interrupted:true});assert.equal(sharingFor,15);
   assert.equal(fake.calls.find(call=>call.method==='addTorrent').params[2]['seed-time'],'15');
+  // Stopping while sharing really ends the sharing: aria2 removes the torrent before the call returns.
+  assert.ok(fake.calls.some(call=>call.method==='forceRemove'),'the sharing torrent is removed from aria2');
+  assert.equal(fake.downloads.size,0,'aria2 no longer holds it');
+  // If aria2 will not let go, aria2 itself is stopped.
+  const stubborn=fakeAria2({share:1e9}),held=engineFor(t,stubborn),dir2=path.join(held.root,'work');fs.mkdirSync(dir2);
+  const original=stubborn.fetch;let refused=0;
+  stubborn.fetch=async(url,init)=>{const body=JSON.parse(init.body);if(body.method==='aria2.forceRemove'){refused++;return new Response(JSON.stringify({jsonrpc:'2.0',id:body.id,result:'OK'}),{headers:{'content-type':'application/json'}});}return original(url,init);};
+  held.engine.rpcFetch=stubborn.fetch;
+  const ctl=new AbortController();
+  assert.deepEqual(await held.engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir:dir2,shareMinutes:60},{signal:ctl.signal,onSharing:()=>ctl.abort()}),{complete:true,interrupted:true});
+  assert.equal(refused,1);assert.equal(held.engine.running,false,'aria2 was stopped');
   // Only the offered sharing times are used.
   const odd=fakeAria2(),second=engineFor(t,odd);
   await second.engine.download({torrent:buffer,infoHash,files:read.files,selected:[1],dir:path.join(root,'w2'),shareMinutes:999});

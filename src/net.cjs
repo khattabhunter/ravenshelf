@@ -3,6 +3,10 @@ const dns = require('node:dns');
 const net = require('node:net');
 const { Agent, fetch } = require('undici');
 const {assertFastRedirect}=require('./ff-policy.cjs');
+const {closedHost}=require('./hosts.cjs');
+// Hosts that have shut down are never contacted, also through a redirect:
+// their expired names can belong to someone else now.
+function assertOpenHost(url){const gone=closedHost(url.hostname);if(gone)throw new Error(gone.message);}
 
 function isPublicIP(address) {
   if (net.isIP(address) === 4) {
@@ -47,6 +51,7 @@ const dispatcher = new Agent({ connect });
 const fileDispatcher = new Agent({ connect, allowH2:false });
 async function safeFetch(value, options={}) {
   let url=safeURL(String(value));
+  assertOpenHost(url);
   const originalUrl=url.href;
   let {timeoutMs=30000,maxBytes,http1=false,checkRedirect, ...init}=options;
   const signal = timeoutMs>0 ? (init.signal ? AbortSignal.any([init.signal,AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)) : init.signal;
@@ -60,6 +65,7 @@ async function safeFetch(value, options={}) {
     await res.body?.cancel();
     if(!location) throw new Error('Host returned a redirect without a destination.');
     const next=safeURL(new URL(location,url).href);
+    assertOpenHost(next);
     assertFastRedirect(originalUrl,next.href);
     // The caller can refuse a destination, such as one outside a site's own file servers.
     if(checkRedirect) checkRedirect(next.href);

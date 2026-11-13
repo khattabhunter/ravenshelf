@@ -13,7 +13,7 @@ const MESSAGES=Object.freeze({
   none:'MultiUpload lists some files only on hosts Ravenshelf can’t download from. Open those MultiUpload links in your browser.',
   failed:'MultiUpload’s mirror list could not be read. Open it in your browser.',
   missing:'MultiUpload no longer has some of these files. Choose another mirror.',
-  expand:'Import this MultiUpload link to see its mirrors first.'
+  expand:'Ravenshelf can’t download this MultiUpload file itself. Open it in your browser.'
 });
 
 // A MultiUp download or mirror page for one file: /download/<id>/<name>,
@@ -30,23 +30,29 @@ function multiupLink(value){
 // The copies listed on a mirror page. Each is a link MultiUp marks on its
 // buttons; copies it reports as invalid, and its own paid "fast" links, are left out.
 function parseMirrors(html){
-  const $=cheerio.load(String(html||'')),mirrors=[],seen=new Set();
+  const $=cheerio.load(String(html||'')),mirrors=[],seen=new Set();let copies=0,invalid=0;
   $('[link]').each((_,element)=>{
     if(mirrors.length>=MAX_MIRRORS)return false;
     const node=$(element),raw=String(node.attr('link')||'').trim();
-    if(!raw||raw.length>2048||String(node.attr('validity')||'').toLowerCase()==='invalid')return;
+    if(!raw||raw.length>2048)return;
     let u;try{u=new URL(raw);}catch{return;}
-    if(u.protocol!=='https:'||u.username||u.password||u.port||isMultiupHost(u.hostname)||seen.has(u.href))return;
+    if(u.protocol!=='https:'||u.username||u.password||u.port||isMultiupHost(u.hostname))return;
+    // A copy on another host: counted, then kept unless MultiUp marks it invalid.
+    copies++;
+    if(String(node.attr('validity')||'').toLowerCase()==='invalid'){invalid++;return;}
+    if(seen.has(u.href))return;
     seen.add(u.href);mirrors.push(u.href);
   });
-  const missing=!mirrors.length&&/\bFile Not Found\b/i.test($('title').text()+' '+$('body').text().slice(0,20000));
-  return {mirrors,missing};
+  // MultiUp's own "File Not Found" page, or every copy marked invalid: the file is gone.
+  const missing=!mirrors.length&&(/\bFile Not Found\b/i.test($('title').text()+' '+$('body').text().slice(0,20000))||(copies>0&&invalid===copies));
+  // No copies listed at all: the page was not the mirror list Ravenshelf knows.
+  return {mirrors,missing,unreadable:!copies&&!missing};
 }
 async function mirrorList(value,{fetcher,readText}){
   const link=multiupLink(value);
   if(!link)throw new Error(MESSAGES.failed);
   const response=await fetcher(link.page);
-  if(response.status===404||response.status===410){try{await response.body?.cancel();}catch{}return {mirrors:[],missing:true};}
+  if(response.status===404||response.status===410){try{await response.body?.cancel();}catch{}return {mirrors:[],missing:true,unreadable:false};}
   if(!response.ok){try{await response.body?.cancel();}catch{}throw new Error(MESSAGES.failed);}
   return parseMirrors(await readText(response,MAX_PAGE));
 }

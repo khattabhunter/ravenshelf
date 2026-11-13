@@ -15,16 +15,19 @@ const {inspectLink,assessDownload,nameReasons,nameFromURL}=require('./link-safet
 const {hashFile}=require('./virustotal.cjs');
 const {fromNexus,modFolder:gameFolder,MODS_FOLDER}=require('./mods.cjs');
 const {safeName,folderName}=require('./safe-name.cjs');
-const {PASTE_HOSTS,PIXELDRAIN_HOSTS}=require('./hosts.cjs');
+const {PASTE_HOSTS,PIXELDRAIN_HOSTS,isPixeldrainHost}=require('./hosts.cjs');
 
 const PROVIDER_ROOTS=['fuckingfast.co','fuckingfast.net','filekeeper.net','datanodes.to','datanodes.in','datanodes.com',...PIXELDRAIN_HOSTS,...PASTE_HOSTS];
+// PixelDrain and the paste sites count only at their own addresses (PixelDrain also with www.),
+// as everywhere else in Ravenshelf; a subdomain of them is an ordinary download.
+const EXACT_ROOTS=new Set([...PIXELDRAIN_HOSTS,...PASTE_HOSTS]);
 const MAX_PENDING=50;
 const CAPTURE_TTL_MS=60*60*1000;
 const FINISHED_TTL_MS=10*60*1000;
 const ALLOW_ONCE_MS=2*60*1000;
 const REQUESTS_PER_MINUTE=240;
 const hostOf=value=>{try{return new URL(value).hostname.toLowerCase();}catch{return '';}};
-const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||host.endsWith('.'+root));};
+const isProvider=value=>{const host=hostOf(value);return PROVIDER_ROOTS.some(root=>host===root||(!EXACT_ROOTS.has(root)&&host.endsWith('.'+root)))||isPixeldrainHost(host);};
 const baseName=value=>String(value||'').split(/[\\/]/).filter(Boolean).at(-1)?.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240)||undefined;
 // The name a download is saved under. The queue cleans the name it is handed
 // once, with safeName(), before it saves the file. So the checks here judge,

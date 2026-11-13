@@ -158,3 +158,29 @@ test('several magnet links from the browser open one after another, each once',a
   await f.get('#torrent-dialog-cancel').emit('click');
   assert.equal(f.get('#torrent-dialog').open,false);
 });
+
+test('a pasted magnet link opens its review even with https trackers in it; with other links the link check runs',()=>{
+  const f=fixture({openMagnet:async()=>({})});
+  const hash='0123456789abcdef0123456789abcdef01234567';
+  f.context.text=`magnet:?xt=urn:btih:${hash}&tr=https://t.example/announce`;
+  assert.equal(f.run('pastedMagnet(text)'),f.context.text);
+  f.context.text=`  magnet:?xt=urn:btih:${hash}  `;
+  assert.equal(f.run('pastedMagnet(text)'),`magnet:?xt=urn:btih:${hash}`);
+  f.context.text=`magnet:?xt=urn:btih:${hash}\nhttps://fuckingfast.co/abc`;
+  assert.equal(f.run('pastedMagnet(text)'),null);
+  f.context.text='https://fuckingfast.co/abc';
+  assert.equal(f.run('pastedMagnet(text)'),null);
+});
+
+test('closing the review in any way closes its request',async()=>{
+  const closed=[];
+  const f=fixture({openMagnet:async()=>({}),saveTorrentSettings:async()=>torrentState(),closeMagnet:async id=>{closed.push(id);return torrentState({enabled:true,accepted:true},{phase:'ready'});},addTorrent:async()=>({}),setUpTorrents:async()=>torrentState(),cancelTorrentSetup:async()=>torrentState(),removeTorrentTools:async()=>torrentState()});
+  f.run('wireTorrentEvents()');
+  setTorrents(f,torrentState({enabled:true,accepted:true,requests:[{id:'r1',status:'finding',name:'Game',peers:0,source:'app'}]},{phase:'ready'}));
+  f.run("openTorrentDialog('r1')");
+  assert.equal(f.get('#torrent-dialog').open,true);
+  // A click outside the dialog closes it without its own buttons.
+  f.get('#torrent-dialog').close();await f.get('#torrent-dialog').emit('close');
+  assert.deepEqual(closed,['r1']);
+  assert.equal(f.run('torrentShownRequest'),null);
+});

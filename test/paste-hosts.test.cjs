@@ -70,3 +70,12 @@ test('the moved paste is opened without sending its key, and its links are liste
   assert.deepEqual([...result.links.map(link=>link.url)],['https://datanodes.to/abc/part1.rar','https://datanodes.to/def/part2.rar']);
   assert.deepEqual([...result.warnings],['Source notes: Part 1']);
 });
+
+test('PixelDrain and the paste sites count only at their own addresses, in the browser bridge and the copied-links tray',()=>{
+  const {isProvider}=require('../src/browser-bridge.cjs');
+  for(const ok of ['https://pixeldrain.com/u/abcd1234','https://www.pixeldrain.com/u/abcd1234','https://pixeldrain.net/u/abcd1234','https://pastefg.hermietkreeft.site/?a','https://files4.fuckingfast.co/dl/x'])assert.equal(isProvider(ok),true,ok);
+  for(const no of ['https://x.pixeldrain.com/f.exe','https://evil.pastefg.hermietkreeft.site/x','https://cdn.paste.fitgirl-repacks.site/x','https://pixeldrain.com.evil.example/u/a'])assert.equal(isProvider(no),false,no);
+  const {recognizedLinks}=require('../src/clipboard-inbox.cjs');
+  const text=['https://evil.pastefg.hermietkreeft.site/?0123456789abcdef#key','https://x.pixeldrain.com/u/abcd1234','https://www.multiup.io/download/'+'a'.repeat(32)+'/x','https://pixeldrain.com/u/abcd1234','https://pastefg.hermietkreeft.site/?0123456789abcdef#key'].join(' ');
+  assert.deepEqual(recognizedLinks(text),['https://www.multiup.io/download/'+'a'.repeat(32)+'/x','https://pixeldrain.com/u/abcd1234','https://pastefg.hermietkreeft.site/?0123456789abcdef#key']);
+});

@@ -5,6 +5,8 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const api = window.atlas;
 // Hosts whose manual steps open in Ravenshelf's protected window.
 const PROTECTED_HOSTS = ['FuckingFast', 'DataNodes', 'FileKeeper'];
+// Hosts whose manual steps happen in your own browser (PixelDrain's check, MultiUpload's other hosts). Links on other hosts get no button.
+const BROWSER_HOSTS = ['PixelDrain', 'MultiUpload'];
 // The window's language, English or Arabic, with the texts of that language
 // (see i18n.js). The main process serves both with the page.
 const i18n = globalThis.RavenshelfI18n.createTranslator(globalThis.RAVENSHELF_LOCALE);
@@ -557,9 +559,9 @@ function renderCheckedLinks(container, links, warnings, title, preflight = null)
     copy.append(name, el('div', 'link-message', link.message ? localMessage(link.message) : status === 'ready' ? (localMessage(link.host) || t('Direct link')) + ' · ' + t('Ready') : status === 'manual' ? t('Open the protected host window to continue.') : t('This link could not be verified.')));
     row.append(marker, copy);
     if (link.size) row.append(el('span', 'link-size', formatBytes(link.size)));
-    // FuckingFast, DataNodes and FileKeeper open in Ravenshelf's protected window; other hosts, such as PixelDrain, in your browser.
+    // FuckingFast, DataNodes and FileKeeper open in Ravenshelf's protected window; PixelDrain and MultiUpload in your browser.
     if (status === 'manual' && PROTECTED_HOSTS.includes(link.host)) row.append(button(t('Open protected host'), 'text-button', 'external', () => attempt(() => api.openHost({ url: link.sourceUrl || link.url, gameTitle: title }))));
-    else if (status === 'manual') row.append(button(t('Open in browser'), 'text-button', 'external', () => attempt(() => api.openExternal(link.sourceUrl || link.url))));
+    else if (status === 'manual' && BROWSER_HOSTS.includes(link.host)) row.append(button(t('Open in browser'), 'text-button', 'external', () => attempt(() => api.openExternal(link.sourceUrl || link.url))));
     list.append(row);
   });
   wrapper.append(list);
@@ -1554,8 +1556,8 @@ function wireEvents() {
     const text = $('#import-links').value.trim();
     if (!text) { $('#import-links').focus(); toast(t('Paste a game page, paste URL, or file links first.'), true); return; }
     // A pasted magnet link opens the torrent review instead of the link check.
-    const magnet = /(?:^|\s)(magnet:\?\S+)/i.exec(text)?.[1];
-    if (magnet && torrentFeatureAvailable() && !/https:\/\//i.test(text)) { $('#import-dialog').close(); await startMagnet(magnet); return; }
+    const magnet = pastedMagnet(text);
+    if (magnet && torrentFeatureAvailable()) { $('#import-dialog').close(); await startMagnet(magnet); return; }
     importBusy = true; $('#check-import').disabled = true;
     try { await inspectLinks(text, $('#import-results')); }
     finally { importBusy = false; $('#check-import').disabled = false; }
@@ -2008,6 +2010,11 @@ function wireMediaEvents() {
 let torrentState = null, torrentBusy = false, torrentShownRequest = null, torrentAutoOpened = new Set(), lastTorrentPhase = null, torrentBoxes = [], torrentLocalView = null, torrentWaitingSeen = 0;
 const UPLOAD_LABELS = { 10240: later('10 KB/s'), 51200: later('50 KB/s'), 102400: later('100 KB/s'), 512000: later('500 KB/s'), 1048576: later('1 MB/s') };
 const SHARE_LABELS = { 0: later('Stop uploading right away'), 15: later('Share for 15 more minutes'), 60: later('Share for an hour more') };
+// A magnet link pasted on its own (its own trackers may be https addresses); with other links, the link check runs.
+function pastedMagnet(text) {
+  const magnet = /(?:^|\s)(magnet:\?\S+)/i.exec(String(text || ''))?.[1];
+  return magnet && !/https:\/\//i.test(String(text).replace(magnet, '')) ? magnet : null;
+}
 function torrentFeatureAvailable() { return typeof api?.openMagnet === 'function'; }
 function torrentTools() { return torrentState?.tools || {}; }
 function torrentRequests() { return Array.isArray(torrentState?.requests) ? torrentState.requests : []; }
@@ -2160,6 +2167,9 @@ function wireTorrentEvents() {
   $('#torrent-share').addEventListener('change', event => torrentTask(() => api.saveTorrentSettings({ shareMinutes: Number(event.target.value) }), t('Preference saved.')));
   for (const id of ['torrent-dialog-close', 'torrent-dialog-cancel']) $('#' + id).addEventListener('click', () => closeTorrentDialog());
   $('#torrent-dialog').addEventListener('cancel', event => { event.preventDefault(); closeTorrentDialog(); });
+  // However the review closes (a click outside it, for example), its request is closed too,
+  // and the next magnet link from the browser can open.
+  $('#torrent-dialog').addEventListener('close', () => { if (torrentShownRequest) closeTorrentDialog(); else setTimeout(afterTorrentState, 0); });
   $('#torrent-download').addEventListener('click', async () => {
     const id = torrentShownRequest, selected = torrentChosen();
     if (!id || !selected.length) return;

@@ -40,6 +40,7 @@ function harness(fetcher,addresses=[{address:'93.184.216.34',family:4}]) {
    if(name==='node:dns')return {lookup(host,opts,cb){cb(null,addresses);}};
    if(name==='undici')return {Agent:class {constructor(options){agentOptions=options;}},fetch:fetcher};
    if(name==='./ff-policy.cjs')return require('../src/ff-policy.cjs');
+   if(name==='./hosts.cjs')return require('../src/hosts.cjs');
    throw Error('Unexpected dependency: '+name);
  }};
  vm.runInNewContext(source,sandbox,{filename:'net.cjs'});
@@ -96,4 +97,16 @@ test('a caller can refuse where a request is sent on to, before that address is 
  const manual=harness(async()=>new Response(null,{status:302,headers:{location:'https://example.net/next'}}));
  assert.equal((await manual.safeFetch('https://example.org/file',{redirect:'manual',checkRedirect:()=>{asked++;}})).status,302);
  assert.equal(asked,0);
+});
+
+test('hosts that have shut down are never contacted, also through a redirect',async()=>{
+ const calls=[];
+ const h=harness(async url=>{calls.push(url);return url.includes('short.example')?new Response(null,{status:302,headers:{location:'https://www.zippyshare.com/v/x/file.html'}}):new Response('ok');});
+ await assert.rejects(h.safeFetch('https://letsupload.io/file/abc'),/^Error: LetsUpload has shut down/);
+ await assert.rejects(h.safeFetch('https://cdn.bayfiles.com/x'),/^Error: BayFiles closed in August 2023/);
+ assert.deepEqual(calls,[],'nothing is requested from a closed host');
+ await assert.rejects(h.safeFetch('https://short.example/abc'),/^Error: ZippyShare closed in March 2023/);
+ assert.deepEqual(calls,['https://short.example/abc'],'the redirect to a closed host is not followed');
+ // A look-alike name is not a closed host.
+ assert.equal(await (await h.safeFetch('https://zippyshare.com.example/x')).text(),'ok');
 });

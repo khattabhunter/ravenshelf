@@ -102,10 +102,13 @@ class TorrentEngine{
     randomPort=()=>crypto.randomInt(49152,65535),pollMs=POLL_MS,idleMs=IDLE_MS,startTimeoutMs=START_TIMEOUT_MS,metadataTimeoutMs=METADATA_TIMEOUT_MS}={}){
     if(typeof stateDir!=='string'||!path.isAbsolute(stateDir))throw new Error(MESSAGES.start);
     Object.assign(this,{tools,stateDir,settings,spawnImpl,rpcFetch,kill,appPid,env,randomPort,pollMs,idleMs,startTimeoutMs,metadataTimeoutMs});
-    this.child=null;this.port=0;this.secret='';this.starting=null;this.users=0;this.idleTimer=null;this.seq=0;this.closed=false;
+    this.child=null;this.port=0;this.secret='';this.starting=null;this.stopping=null;this.users=0;this.idleTimer=null;this.seq=0;this.closed=false;
   }
   get running(){return Boolean(this.child&&this.child.exitCode===null&&this.child.signalCode===null);}
   async start(){
+    if(this.closed)throw new Error(MESSAGES.start);
+    // A stop under way (the idle stop, for example) finishes first; aria2 then starts again.
+    if(this.stopping)await this.stopping;
     if(this.closed)throw new Error(MESSAGES.start);
     if(this.running&&this.port)return;
     if(!this.starting)this.starting=this.launch().finally(()=>{this.starting=null;});
@@ -115,6 +118,9 @@ class TorrentEngine{
     const paths=await this.tools.verified();
     await fs.promises.mkdir(this.stateDir,{recursive:true});
     const temp=path.join(this.stateDir,'tmp');await fs.promises.mkdir(temp,{recursive:true});
+    // aria2 keeps its own DHT node ID in this file. A new one each time it
+    // starts keeps other computers from linking this PC across IP addresses.
+    await this.forgetDht();
     const {uploadLimit,downloadLimit}=this.settings();
     for(let attempt=0;attempt<3;attempt++){
       const port=this.randomPort(),secret=crypto.randomBytes(32).toString('hex');
@@ -171,9 +177,13 @@ class TorrentEngine{
   async drop(gid,stop){
     if(!this.running)return;
     if(stop)await this.rpc('forceRemove',[gid]).catch(()=>{});
-    for(let i=0;i<20;i++){
-      try{await this.rpc('removeDownloadResult',[gid]);return;}catch{await delay(100);}
+    for(let i=0;i<50;i++){
+      try{await this.rpc('removeDownloadResult',[gid]);return true;}catch{await delay(100);}
     }
+    // aria2 would not let go of it (still downloading or sharing): stopping
+    // aria2 itself is the only sure way to end the uploading.
+    if(stop)await this.stop();
+    return false;
   }
   // The .torrent file for a magnet link, fetched from other people. Only the
   // file list is fetched here; nothing of the torrent's contents.
@@ -223,33 +233,46 @@ class TorrentEngine{
         'bt-remove-unselected-file':'false','allow-overwrite':'false','auto-file-renaming':'false','follow-torrent':'false'};
       const gid=await this.rpc('addTorrent',[torrent.toString('base64'),[],options],signal);
       if(typeof gid!=='string'||!/^[0-9a-f]{16}$/i.test(gid))throw new Error(MESSAGES.stopped);
-      let finished=false,sharing=false;
+      let finished=false,sharing=false,interrupted=false;
       try{
         // Nothing is written before aria2's file list is checked.
         if(!sameFiles(await this.rpc('getFiles',[gid],signal),files,dir,selected))throw new Error(MESSAGES.changed);
         await this.rpc('unpause',[gid],signal);
         for(;;){
           let status;
-          try{status=await this.status(gid,signal);}catch(error){if(sharing&&signal?.aborted){finished=true;return {complete:true,interrupted:true};}throw error;}
+          try{status=await this.status(gid,signal);}catch(error){if(sharing&&signal?.aborted){finished=interrupted=true;return {complete:true,interrupted:true};}throw error;}
           if(status.status==='complete'){finished=true;return {complete:true,interrupted:false};}
           if(status.status==='error')throw new Error(errorMessage(status.errorCode));
           if(status.status==='removed')throw new Error(MESSAGES.stopped);
           const total=number(status.totalLength),done=number(status.completedLength);
           try{onProgress({received:done,total,speed:number(status.downloadSpeed),uploadSpeed:number(status.uploadSpeed),uploaded:number(status.uploadLength),peers:number(status.connections)});}catch{}
-          if(!sharing&&status.seeder==='true'&&total>0&&done===total){sharing=true;try{onSharing(minutes);}catch{}}
+          if(!sharing&&minutes>0&&status.seeder==='true'&&total>0&&done===total){sharing=true;try{onSharing(minutes);}catch{}}
           try{await this.wait(signal);}
-          catch(error){if(sharing){finished=true;return {complete:true,interrupted:true};}throw error;}
+          catch(error){if(sharing){finished=interrupted=true;return {complete:true,interrupted:true};}throw error;}
         }
-      }finally{await this.drop(gid,!finished);}
+      // Stopped while sharing: aria2 still shares the torrent, so it is removed
+      // (which ends the uploading and closes its files) before anything else.
+      }finally{await this.drop(gid,!finished||interrupted);}
     });
   }
   async stop(){
     clearTimeout(this.idleTimer);this.idleTimer=null;
+    if(this.stopping)return this.stopping;
+    this.stopping=this.performStop().finally(()=>{this.stopping=null;});
+    return this.stopping;
+  }
+  async performStop(){
     const child=this.child;if(!child)return;
     try{await this.rpc('shutdown');}catch{}
     for(let i=0;i<30&&this.child===child&&child.exitCode===null&&child.signalCode===null;i++)await delay(100);
     if(child.exitCode===null&&child.signalCode===null)await this.kill(child).catch(()=>{});
     if(this.child===child){this.child=null;this.port=0;this.secret='';}
+    if(!this.child)await this.forgetDht();
+  }
+  async forgetDht(){
+    let names=[];try{names=await fs.promises.readdir(this.stateDir);}catch{return;}
+    // dht.dat and the temporary copy aria2 writes before replacing it.
+    for(const name of names)if(name.startsWith('dht.dat'))await fs.promises.rm(path.join(this.stateDir,name),{force:true}).catch(()=>{});
   }
   async dispose(){this.closed=true;await this.starting?.catch(()=>{});await this.stop();}
 }

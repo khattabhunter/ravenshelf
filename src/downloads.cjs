@@ -624,12 +624,14 @@ class DownloadManager extends EventEmitter {
           d.received=Math.max(0,progress.received);if(progress.total>0)d.total=progress.total;
           d.torrent.peers=progress.peers;d.torrent.uploadSpeed=progress.uploadSpeed;d.torrent.uploaded=progress.uploaded;
         },
-        onSharing:minutes=>{if(d.status!=='downloading')return;d.torrent.sharing=true;d.connectionNote=minutes>=60?'Download complete. Sharing with other people for up to an hour.':'Download complete. Sharing with other people for up to 15 minutes.';this.changed();}});
+        onSharing:minutes=>{if(d.status!=='downloading'||![15,60].includes(minutes))return;d.torrent.sharing=true;d.connectionNote=minutes===60?'Download complete. Sharing with other people for up to an hour.':'Download complete. Sharing with other people for up to 15 minutes.';this.changed();}});
       if(!result?.complete)throw new Error(ENGINE.failed);
       // Stopping while sharing only stops sharing: every chosen file is complete.
       if(!result.interrupted)controller.signal.throwIfAborted();
       await this.publishTorrent(d,workspace);
     }catch(err){
+      // A sharing note must not stay on a card that is no longer sharing.
+      if(/^Download complete\. Sharing/.test(d.connectionNote||''))d.connectionNote='';
       if(d.status==='downloading'){d.status='error';d.error=publicErrorMessage(err,'torrent');}
     }finally{this.progressMeters.delete(d.id);d.activeConnections=0;if(d.torrent){d.torrent.peers=0;d.torrent.uploadSpeed=0;d.torrent.sharing=false;}}
   }

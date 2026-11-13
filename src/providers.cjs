@@ -238,15 +238,17 @@ async function mapLimit(items,limit,fn){
   await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;results[i]=await fn(items[i],i);}}));
   return results;
 }
-// A MultiUpload file's copy on the first host in MIRROR_ORDER that has one.
+// A MultiUpload file's copy on the first host in MIRROR_ORDER that has one,
+// as a link to one file (not a PixelDrain list, not another MultiUp page).
 function preferredMirror(mirrors){
-  for(const host of MIRROR_ORDER){const found=mirrors.find(url=>{try{return hostName(url)===host;}catch{return false;}});if(found)return found;}
+  const usable=url=>{try{const host=new URL(url).hostname;return !closedHost(host)&&!(isPixeldrainHost(host)&&!pixeldrain.pixeldrainLink(url))&&!pixeldrain.isPixeldrainList(url)&&!isMultiupHost(host);}catch{return false;}};
+  for(const host of MIRROR_ORDER){const found=mirrors.find(url=>{try{return hostName(url)===host&&usable(url);}catch{return false;}});if(found)return found;}
   return null;
 }
 const readText=(response,cap)=>limitedText(response,cap);
 async function expandLinks(text) {
   if(typeof text!=='string' || text.length>1024*1024) throw new Error('Paste up to 1 MB of links.');
-  const found=[],warnings=[],seen=new Set(),pastes=new Set(),notices=new Set();
+  const found=[],warnings=[],seen=new Set(),pastes=new Set(),notices=new Set(),fromPage=new Set(),pageHost=new Map();
   const collect=url=>{ if(!seen.has(url)){seen.add(url);found.push(url);} };
   const notice=message=>{ if(!notices.has(message)){notices.add(message);warnings.push(message);} };
   for(const raw of extractUrls(text)) {
@@ -266,7 +268,15 @@ async function expandLinks(text) {
         if(notes) warnings.push(`Source notes: ${notes.slice(0,2000)}`);
       } catch(error) { warnings.push(`Could not expand paste: ${publicErrorMessage(error,'paste')}`); }
     } else if(url.hostname==='fitgirl-repacks.site') {
-      try { const game=await getGame(url.href); for(const group of game.groups) for(const link of group.urls) collect(link); warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.'); }
+      try {
+        const game=await getGame(url.href);
+        // With several hosts to choose from, MultiUpload and PixelDrain-list links
+        // are looked up only after the user picks that host, so that their copies
+        // do not join another host's group (and nothing is requested before then).
+        // Each link keeps its host group's name (a paste link under "PixelDrain" is PixelDrain's).
+        for(const group of game.groups) for(const link of group.urls) { collect(link); if(!pageHost.has(link)) pageHost.set(link,group.host); if(game.groups.length>1) fromPage.add(link); }
+        warnings.push('This game page contains alternative mirrors. Choose one host to avoid downloading duplicate archives.');
+      }
       catch(error){warnings.push(publicErrorMessage(error,'getGame'));}
     } else collect(url.href);
     if(found.length>=1000) break;
@@ -279,26 +289,29 @@ async function expandLinks(text) {
     const host=new URL(url).hostname;
     const gone=closedHost(host);
     if(gone)return {urls:[],note:gone.message};
+    if(fromPage.has(url))return {urls:[url]};
     if(isPixeldrainHost(host)&&pixeldrain.isPixeldrainList(url)){
       if(++lists>20)return {urls:[],note:'Only the first 20 PixelDrain lists were expanded.'};
       try{return {urls:await pixeldrain.listFiles(url,{fetcher:safeFetch,readText})};}
-      catch(error){return {urls:[],note:publicErrorMessage(error,'paste')};}
+      catch(error){return {urls:[],note:Object.values(pixeldrain.MESSAGES).includes(error?.message)?error.message:pixeldrain.MESSAGES.failed};}
     }
     if(isMultiupHost(host)&&multiup.multiupLink(url)){
       if(++mirrorPages>500)return {urls:[],note:'Only the first 500 MultiUpload files were looked up.'};
       try{
         const list=await multiup.mirrorList(url,{fetcher:safeFetch,readText});
         if(list.missing)return {urls:[],note:multiup.MESSAGES.missing};
+        if(list.unreadable)return {urls:[url],note:multiup.MESSAGES.failed};
         const chosen=preferredMirror(list.mirrors);
-        return chosen?{urls:[chosen]}:{urls:[],note:multiup.MESSAGES.none};
-      }catch{return {urls:[],note:multiup.MESSAGES.failed};}
+        // Without a copy Ravenshelf can use, the MultiUpload link stays in the list, to open in the browser.
+        return chosen?{urls:[chosen]}:{urls:[url],note:multiup.MESSAGES.none};
+      }catch{return {urls:[url],note:multiup.MESSAGES.failed};}
     }
     return {urls:[url]};
   });
   const links=[],kept=new Set();
   for(const {urls,note} of expanded){
     if(note)notice(note);
-    for(const url of urls){ if(links.length<1000&&!kept.has(url)){kept.add(url);links.push({url,host:hostName(url),name:readableName(url)});} }
+    for(const url of urls){ if(links.length<1000&&!kept.has(url)){kept.add(url);links.push({url,host:(fromPage.has(url)&&pageHost.get(url))||hostName(url),name:readableName(url)});} }
   }
   return {links,warnings};
 }

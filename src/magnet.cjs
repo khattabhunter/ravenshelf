@@ -6,6 +6,8 @@
 // download's own folder; a torrent with any other name is refused, never
 // renamed, so the files on disk are the ones that were shown and checked.
 const crypto=require('node:crypto');
+const net=require('node:net');
+const {isPublicIP}=require('./net.cjs');
 const {safeName}=require('./safe-name.cjs');
 
 const MESSAGES=Object.freeze({
@@ -14,12 +16,17 @@ const MESSAGES=Object.freeze({
   damaged:'The torrent’s file list is damaged or does not match its magnet link.',
   names:'This torrent has file names that Windows can’t store safely, so Ravenshelf won’t download it.',
   tooMany:'This torrent has too many files for Ravenshelf to download.',
-  tooLong:'This torrent’s file names are too long for your download folder. Choose a shorter download folder in Settings.'
+  tooLong:'This torrent’s file names are too long for your download folder. Choose a shorter download folder in Settings.',
+  deceptive:'This torrent has a file name made to hide its real type, so Ravenshelf won’t download it.'
 });
 const MAX_MAGNET=8192,MAX_TRACKERS=30,MAX_TRACKER=512,MAX_META=10*1024*1024,MAX_FILES=10000,MAX_DEPTH=64,MAX_PART=180;
 const BASE32='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const TRACKER_SCHEMES=new Set(['udp:','http:','https:']);
 const controls=/[\x00-\x1f\x7f]/g,CONTROL=/[\x00-\x1f\x7f]/;
+// Invisible format characters (text-direction marks, zero-width characters) can make a name read as something else.
+const FORMAT=/\p{Cf}/u,FORMATS=/\p{Cf}/gu;
+// Names a tracker on this PC or the home network would have; they are never contacted.
+const LOCAL_NAME=/(?:^|\.)(?:localhost|local|lan|home|internal|intranet|corp|localdomain|home\.arpa)$/i;
 
 function base32Hex(value){
   let bits='';
@@ -42,13 +49,16 @@ function parseMagnet(value){
     }else if(/^urn:btmh:/i.test(xt))newer=true;
   }
   if(!infoHash)throw new Error(newer?MESSAGES.version2:MESSAGES.invalid);
-  const name=String(params.get('dn')||'').replace(controls,'').trim().slice(0,200);
+  const name=String(params.get('dn')||'').replace(controls,'').replace(FORMATS,'').trim().slice(0,200);
   const trackers=[];
   for(const raw of params.getAll('tr')){
     if(trackers.length>=MAX_TRACKERS)break;
     if(typeof raw!=='string'||raw.length>MAX_TRACKER)continue;
     let u;try{u=new URL(raw);}catch{continue;}
     if(!TRACKER_SCHEMES.has(u.protocol)||u.username||u.password||!u.hostname||u.href.length>MAX_TRACKER)continue;
+    // Only public trackers: not this PC, the home network or a name without a dot.
+    const host=u.hostname.replace(/^\[|\]$/g,'').replace(/\.$/,'');
+    if(net.isIP(host)?!isPublicIP(host):(!host.includes('.')||LOCAL_NAME.test(host)))continue;
     if(!trackers.includes(u.href))trackers.push(u.href);
   }
   const magnet='magnet:?xt=urn:btih:'+infoHash+(name?'&dn='+encodeURIComponent(name):'')+trackers.map(tracker=>'&tr='+encodeURIComponent(tracker)).join('');
@@ -113,6 +123,9 @@ function text(value){
 function safePart(value){
   if(typeof value!=='string'||!value||value.length>MAX_PART||CONTROL.test(value))throw new Error(MESSAGES.names);
   if(value!==safeName(value,'')||value==='.'||value==='..')throw new Error(MESSAGES.names);
+  // "~1" is how Windows writes short names, so such a name could open another file.
+  if(/~\d/.test(value))throw new Error(MESSAGES.names);
+  if(FORMAT.test(value))throw new Error(MESSAGES.deceptive);
   return value;
 }
 const preferred=(dict,key)=>dict.has(key+'.utf-8')?dict.get(key+'.utf-8'):dict.get(key);
@@ -140,7 +153,8 @@ function readTorrent(buffer,infoHash){
       const length=entry.get('length'),parts=preferred(entry,'path');
       if(!Number.isSafeInteger(length)||length<0||!Array.isArray(parts)||!parts.length||parts.length>32)throw new Error(MESSAGES.damaged);
       const relative=[name,...parts.map(part=>safePart(text(part)))];
-      const key=relative.join('/').toLowerCase();
+      // Windows compares names in upper case.
+      const key=relative.join('/').toUpperCase();
       if(seen.has(key))throw new Error(MESSAGES.names);
       seen.add(key);
       // A padding file (BEP 47) holds no data of its own and is never downloaded.
@@ -156,6 +170,10 @@ function readTorrent(buffer,infoHash){
     files.push({index:1,path:name,length,padding:false});total=length;
   }
   if(!Number.isSafeInteger(total))throw new Error(MESSAGES.damaged);
+  // Names that the checks for browser downloads block (such as "invoice.pdf.exe",
+  // or an ending hidden behind spaces) are refused here too.
+  const {nameReasons}=require('./link-safety.cjs');
+  for(const file of files)for(const part of file.path.split('/'))if(nameReasons(part).some(reason=>reason.level==='blocked'))throw new Error(MESSAGES.deceptive);
   return {infoHash,name,files,totalLength:total,pieceLength};
 }
 

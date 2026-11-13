@@ -13,6 +13,7 @@ const MESSAGES=Object.freeze({
   limit:'PixelDrain’s free daily download limit is used up. Try again later or choose another mirror.',
   busy:'PixelDrain is limiting downloads from this connection right now. Try again later.',
   removed:'PixelDrain removed this file. Choose another mirror.',
+  virus:'PixelDrain flagged this file as possibly harmful. Choose another mirror.',
   missing:'File not found or deleted.',
   list:'Import this PixelDrain list to see its files first.',
   ready:'PixelDrain file found; contents have not been scanned.',
@@ -21,7 +22,9 @@ const MESSAGES=Object.freeze({
 });
 // PixelDrain's documented refusal codes ("value"). Messages from the server
 // are never shown; only these codes are read.
-const CHECK=new Set(['file_rate_limited_captcha_required','virus_detected_captcha_required','hotlink_detected','ip_download_limited_captcha_required','recpatcha_failed','recaptcha_failed']);
+// A file PixelDrain's own scan flagged is never offered, not even through the browser.
+const VIRUS=new Set(['virus_detected_captcha_required']);
+const CHECK=new Set(['file_rate_limited_captcha_required','hotlink_detected','ip_download_limited_captcha_required','recpatcha_failed','recaptcha_failed']);
 const LIMIT=new Set(['transfer_limit_exceeded','download_limit_exceeded']);
 const BUSY=new Set(['max_concurrent_downloads']);
 const GONE=new Set(['not_found','file_not_found']);
@@ -44,6 +47,7 @@ const isPixeldrainList=value=>pixeldrainLink(value)?.kind==='list';
 // The fixed message for one of PixelDrain's refusal codes, or null for an unknown one.
 function refusal(value){
   const code=typeof value==='string'?value.slice(0,80):'';
+  if(VIRUS.has(code)||/virus|malware/.test(code))return MESSAGES.virus;
   if(CHECK.has(code)||/captcha/.test(code))return MESSAGES.check;
   if(LIMIT.has(code))return MESSAGES.limit;
   if(BUSY.has(code))return MESSAGES.busy;
@@ -79,13 +83,13 @@ async function resolvePixeldrain(url,{fetcher,readText=readLimited}){
   if(response.status===404)return {status:'unavailable',message:MESSAGES.missing};
   if(body?.success===false){
     const message=refusal(body.value)||MESSAGES.failed;
-    return {status:[MESSAGES.missing,MESSAGES.removed].includes(message)?'unavailable':'manual',message};
+    return {status:[MESSAGES.missing,MESSAGES.removed,MESSAGES.virus].includes(message)?'unavailable':'manual',message};
   }
   if(response.status!==200||!body)return {status:'manual',message:MESSAGES.failed};
   const availability=typeof body.availability==='string'?body.availability:'';
   if(availability){
     const message=refusal(availability)||MESSAGES.failed;
-    return {status:[MESSAGES.missing,MESSAGES.removed].includes(message)?'unavailable':'manual',message};
+    return {status:[MESSAGES.missing,MESSAGES.removed,MESSAGES.virus].includes(message)?'unavailable':'manual',message};
   }
   if(body.can_download===false)return {status:'manual',message:MESSAGES.check};
   const size=Number.isSafeInteger(body.size)&&body.size>0?body.size:0;

@@ -24,7 +24,7 @@ const mirrorPage=links=>`<!DOCTYPE html><html><head><title>Mirror list Game.part
   ${links.map(([host,link,validity='valid'])=>`<footer class="panel-footer"><a href="${link}" target="_blank" namehost="${host}" link="${link}" validity="${validity}" class="host btn"><i class="fa fa-download"></i> Download</a></footer>`).join('\n')}
   <script>location.href='https://evil.example/'</script></body></html>`;
 function providersFixture(fetcher){
-  const context={module:{exports:{}},URL,Buffer,TextDecoder,TextEncoder,console,require(name){
+  const context={module:{exports:{}},URL,Buffer,TextDecoder,TextEncoder,console,structuredClone,require(name){
     if(name==='./net.cjs')return {safeFetch:fetcher};
     return name.startsWith('./')?require(path.join(__dirname,'../src',name)):require(name);
   }};
@@ -73,6 +73,8 @@ test('a PixelDrain file is downloaded only when its details say it can be, and s
   assert.equal(asked[0].url,'https://pixeldrain.com/api/file/abcd1234/info');assert.equal(asked[0].options.headers.Accept,'application/json');
   const cases=[
     [json({availability:'file_rate_limited_captcha_required',name:'x',size:1,message:SECRET}),'manual',pixeldrain.MESSAGES.check],
+    [json({availability:'virus_detected_captcha_required',name:'x',size:1,message:SECRET}),'unavailable',pixeldrain.MESSAGES.virus],
+    [json({success:false,value:'virus_detected_captcha_required',message:SECRET},403),'unavailable',pixeldrain.MESSAGES.virus],
     [json({success:false,value:'transfer_limit_exceeded',message:SECRET},403),'manual',pixeldrain.MESSAGES.limit],
     [json({success:false,value:'max_concurrent_downloads',message:SECRET},403),'manual',pixeldrain.MESSAGES.busy],
     [json({success:false,value:'unavailable_for_legal_reasons',message:SECRET},451),'unavailable',pixeldrain.MESSAGES.removed],
@@ -124,8 +126,8 @@ test('MultiUp links are read strictly and always looked up on its own mirror pag
     assert.equal(multiup.multiupLink(bad),null,bad);
   let asked='';
   const list=await multiup.mirrorList(`https://multiup.io/download/${HASH}/Game.part1.rar`,{fetcher:async url=>{asked=url;return page(mirrorPage([['gofile.io','https://gofile.io/d/SeVS3kSe']]));},readText:response=>response.text()});
-  assert.equal(asked,`https://multiup.io/en/mirror/${HASH}`);assert.deepEqual(list,{mirrors:['https://gofile.io/d/SeVS3kSe'],missing:false});
-  assert.deepEqual(await multiup.mirrorList(`https://multiup.io/download/${HASH}/a`,{fetcher:async()=>page('gone',404),readText:r=>r.text()}),{mirrors:[],missing:true});
+  assert.equal(asked,`https://multiup.io/en/mirror/${HASH}`);assert.deepEqual(list,{mirrors:['https://gofile.io/d/SeVS3kSe'],missing:false,unreadable:false});
+  assert.deepEqual(await multiup.mirrorList(`https://multiup.io/download/${HASH}/a`,{fetcher:async()=>page('gone',404),readText:r=>r.text()}),{mirrors:[],missing:true,unreadable:false});
   await assert.rejects(multiup.mirrorList(`https://multiup.io/download/${HASH}/a`,{fetcher:async()=>page('busy',503),readText:r=>r.text()}),{message:multiup.MESSAGES.failed});
 });
 
@@ -140,9 +142,10 @@ test('a MultiUp mirror page gives only public HTTPS copies that MultiUp does not
     ['again','https://pixeldrain.com/u/abcd1234'],
     ['js','javascript:alert(1)']
   ]));
-  assert.deepEqual(result,{mirrors:['https://pixeldrain.com/u/abcd1234','https://1fichier.com/?xq161wcgo0qw7uza1k24&af=62851'],missing:false});
-  assert.deepEqual(multiup.parseMirrors('<html><head><title>MultiUp.io</title></head><body>/ File Not Found Available on USENET</body></html>'),{mirrors:[],missing:true});
-  assert.deepEqual(multiup.parseMirrors('<html><body>Something else</body></html>'),{mirrors:[],missing:false});
+  assert.deepEqual(result,{mirrors:['https://pixeldrain.com/u/abcd1234','https://1fichier.com/?xq161wcgo0qw7uza1k24&af=62851'],missing:false,unreadable:false});
+  assert.deepEqual(multiup.parseMirrors('<html><head><title>MultiUp.io</title></head><body>/ File Not Found Available on USENET</body></html>'),{mirrors:[],missing:true,unreadable:false});
+  assert.deepEqual(multiup.parseMirrors('<html><body>Something else</body></html>'),{mirrors:[],missing:false,unreadable:true},'a page without copies is one Ravenshelf cannot read');
+  assert.deepEqual(multiup.parseMirrors(mirrorPage([['a','https://a.example/f','invalid'],['b','https://b.example/f','invalid']])),{mirrors:[],missing:true,unreadable:false},'every copy invalid: the file is gone');
   assert.equal(multiup.parseMirrors(mirrorPage(Array.from({length:150},(_,i)=>['h',`https://files${i}.example/f`]))).mirrors.length,100);
 });
 
@@ -170,8 +173,9 @@ test('expanding links follows lists and mirror pages, never contacts closed host
   assert.deepEqual(plain(result.links).map(link=>[link.host,link.url]),[
     ['PixelDrain','https://pixeldrain.com/u/pd111111'],
     ['PixelDrain','https://pixeldrain.com/u/aaaa1111'],['PixelDrain','https://pixeldrain.com/u/bbbb2222'],
+    ['MultiUpload',`https://multiup.io/download/${'b'.repeat(32)}/Game.part2.rar`],
     ['FuckingFast','https://fuckingfast.co/abc#Game.part4.rar']
-  ]);
+  ],'a MultiUpload file without a usable copy stays, to open in the browser');
   assert.deepEqual(plain(result.warnings),[hosts.CLOSED_HOSTS[0].message,multiup.MESSAGES.none,hosts.CLOSED_HOSTS[1].message,multiup.MESSAGES.missing]);
   assert.equal(asked.some(url=>/zippyshare|bayfiles/.test(url)),false);
 });
@@ -200,6 +204,31 @@ test('a game page offers PixelDrain and MultiUpload and names the closed mirrors
   const game=t.parseDetail(html,'https://fitgirl-repacks.site/old/');
   assert.deepEqual(game.groups.map(group=>[group.host,group.urls]),[['MultiUpload',[paste('1')]],['PixelDrain',[paste('2')]]]);
   assert.deepEqual(game.closedMirrors,['ZippyShare','BayFiles','LetsUpload']);
+});
+
+test('importing a game page keeps each host its own group, and looks nothing up until a host is chosen',async()=>{
+  const paste=`https://pastefg.hermietkreeft.site/?${'2'.repeat(16)}#11111111111111111111111111111112`;
+  const html=`<article><h1 class="entry-title"><a href="https://fitgirl-repacks.site/game/">Game</a></h1><div class="entry-content"><h3>#1 Game</h3>
+    <a href="https://fuckingfast.co/aaa#Game.part1.rar">Filehoster: FuckingFast</a>
+    <a href="https://multiup.io/download/${HASH}/Game.part1.rar">Filehoster: MultiUpload</a>
+    <a href="${paste}">Filehoster: PixelDrain</a></div></article>`;
+  const asked=[];
+  const providers=providersFixture(async url=>{asked.push(url);if(url==='https://fitgirl-repacks.site/game/')return page(html);throw new Error('unexpected '+url);});
+  const result=await providers.expandLinks('https://fitgirl-repacks.site/game/');
+  assert.deepEqual(plain(result.links).map(link=>[link.host,link.url]),[['FuckingFast','https://fuckingfast.co/aaa#Game.part1.rar'],['MultiUpload',`https://multiup.io/download/${HASH}/Game.part1.rar`],['PixelDrain',paste]]);
+  assert.deepEqual(asked,['https://fitgirl-repacks.site/game/'],'only the game page was requested');
+});
+
+test('a MultiUpload copy must be a link to one file, and lookups that fail keep the link with a plain note',async()=>{
+  const providers=providersFixture(async url=>{
+    if(url===`https://multiup.io/en/mirror/${HASH}`)return page(mirrorPage([['pixeldrain.com','https://pixeldrain.com/l/List1234'],['datanodes.to','https://datanodes.to/dn1/Game.part1.rar']]));
+    if(url==='https://multiup.io/en/mirror/'+'d'.repeat(32))return page('<html><body>Please wait</body></html>');
+    if(url==='https://pixeldrain.com/api/list/Slow1234')throw new Error('timed out');
+    throw new Error('unexpected '+url);
+  });
+  const result=await providers.expandLinks([`https://multiup.io/download/${HASH}/a`,`https://multiup.io/download/${'d'.repeat(32)}/b`,'https://pixeldrain.com/l/Slow1234'].join('\n'));
+  assert.deepEqual(plain(result.links).map(link=>link.url),['https://datanodes.to/dn1/Game.part1.rar',`https://multiup.io/download/${'d'.repeat(32)}/b`],'a PixelDrain list is not taken as a copy');
+  assert.deepEqual(plain(result.warnings),[multiup.MESSAGES.failed,pixeldrain.MESSAGES.failed]);
 });
 
 const tick=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
