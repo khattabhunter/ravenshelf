@@ -71,6 +71,41 @@ test('state reads are bounded and retain a single descriptor across short reads'
   fs.truncateSync(w.file,MAX_BYTES+1);reads=0;assert.equal(loadLibrary(w.file,{io}).canSave,false);assert.equal(reads,0);assert.equal(fs.statSync(w.file).size,MAX_BYTES+1);
 });
 
+test('state validates the opened descriptor before any pathname check or content read',t=>{
+  const w=fixture(t),bytes=Buffer.from('{"downloads":[]}');fs.writeFileSync(w.file,bytes);const calls=[];
+  const io=delegate({openSync(...args){calls.push('open');return fs.openSync(...args);},fstatSync(...args){calls.push('fstat');return fs.fstatSync(...args);},lstatSync(...args){calls.push('lstat');return fs.lstatSync(...args);},readSync(...args){calls.push('read');return fs.readSync(...args);}});
+  assert.deepEqual(readStateFile(w.file,io),bytes);assert.deepEqual(calls.slice(0,2),['open','fstat']);assert.ok(calls.indexOf('lstat')<calls.indexOf('read'));
+});
+
+test('unsafe opened descriptors are closed without reading or trusting their pathname',t=>{
+  const w=fixture(t);save(w.file,{downloads:[]});
+  for(const override of [{isFile:()=>false},{isSymbolicLink:()=>true},{nlink:2n},{size:BigInt(MAX_BYTES)+1n},{size:-1n},{ino:0n}]){
+    let reads=0,closes=0,paths=0;
+    const io=delegate({fstatSync(...args){const stat=fs.fstatSync(...args);return new Proxy(stat,{get(target,key){if(Object.hasOwn(override,key))return override[key];const value=target[key];return typeof value==='function'?value.bind(target):value;}});},readSync(...args){reads++;return fs.readSync(...args);},closeSync(...args){closes++;return fs.closeSync(...args);},lstatSync(...args){paths++;return fs.lstatSync(...args);}});
+    assert.throws(()=>readStateFile(w.file,io),/Unsafe library file/);assert.equal(reads,0);assert.equal(closes,1);assert.equal(paths,0);
+  }
+});
+
+test('a pathname replaced after opening cannot substitute content or become a new profile',t=>{
+  const w=fixture(t),original=Buffer.from('{"downloads":[]}'),replacement=Buffer.from('{"settings":{"language":"ar"}}'),held=path.join(w.root,'opened.json');fs.writeFileSync(w.file,original);
+  let reads=0,closes=0;
+  const io=delegate({openSync(file,...args){const fd=fs.openSync(file,...args);fs.renameSync(file,held);fs.writeFileSync(file,replacement);return fd;},readSync(...args){reads++;return fs.readSync(...args);},closeSync(...args){closes++;return fs.closeSync(...args);}});
+  const result=loadLibrary(w.file,{io});assert.equal(result.canSave,false);assert.equal(result.warning,BLOCKED);assert.equal(reads,0);assert.equal(closes,1);assert.deepEqual(fs.readFileSync(w.file),replacement);assert.deepEqual(fs.readFileSync(held),original);
+  fs.unlinkSync(w.file);fs.renameSync(held,w.file);
+  const vanished=delegate({openSync(file,...args){const fd=fs.openSync(file,...args);fs.renameSync(file,held);return fd;}});
+  assert.equal(loadLibrary(w.file,{io:vanished}).canSave,false,'a missing pathname after a successful open is not a new profile');
+});
+
+test('junction parents and final-path links are rejected before reading from an opened handle',t=>{
+  const w=fixture(t);save(w.file,{downloads:[]});const linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');
+  let reads=0;const io=delegate({readSync(...args){reads++;return fs.readSync(...args);}});
+  assert.equal(loadLibrary(path.join(linked,'library.json'),{io}).canSave,false);assert.equal(reads,0);fs.unlinkSync(linked);
+  // Model Windows, where openSync has no O_NOFOLLOW flag and can return a
+  // regular target handle. lstat must still reject a final-path reparse link.
+  const finalLink=delegate({readSync(...args){reads++;return fs.readSync(...args);},lstatSync(file,...args){const stat=fs.lstatSync(file,...args);if(file!==w.file)return stat;return new Proxy(stat,{get(target,key){if(key==='isSymbolicLink')return ()=>true;const value=target[key];return typeof value==='function'?value.bind(target):value;}});}});
+  assert.equal(loadLibrary(w.file,{io:finalLink}).canSave,false);assert.equal(reads,0);
+});
+
 test('hard-linked state, junction parents, raced content and failed backups remain untouched',t=>{
   const w=fixture(t),other=path.join(w.root,'original.json');save(other,{downloads:[]});fs.linkSync(other,w.file);const hard=loadLibrary(w.file);assert.equal(hard.warning,BLOCKED);assert.equal(hard.canSave,false);fs.unlinkSync(w.file);
   const linked=path.join(w.root,'linked');fs.symlinkSync(w.root,linked,process.platform==='win32'?'junction':'dir');assert.equal(loadLibrary(path.join(linked,'original.json')).canSave,false);fs.unlinkSync(linked);

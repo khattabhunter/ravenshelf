@@ -115,29 +115,36 @@ function validateLibrary(value){
 }
 function readStateFile(file,io=fs,verification={}){
   file=path.resolve(file);
-  const stat=io.lstatSync(file,{bigint:true});
-  verification.existed=true;
-  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1n||stat.size>BigInt(MAX_BYTES))throw new Error('Unsafe library file.');
-  const ancestors=[];
-  for(let parent=path.dirname(file);;parent=path.dirname(parent)){const current=io.lstatSync(parent,{bigint:true});if(!current.isDirectory()||current.isSymbolicLink())throw new Error('Unsafe library folder.');ancestors.push([parent,current]);if(parent===path.parse(parent).root)break;}
   const same=(a,b)=>a.ino!==0n&&a.ino===b.ino&&a.dev===b.dev&&a.birthtimeNs===b.birthtimeNs;
   const unchanged=(a,b)=>same(a,b)&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.nlink===b.nlink;
+  const regular=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.ino!==0n&&stat.nlink===1n&&stat.size>=0n&&stat.size<=BigInt(MAX_BYTES);
   let fd;
   try{
+    // Validate the handle we actually opened, not a pathname checked before
+    // opening. NOFOLLOW/NONBLOCK are unavailable on Windows: there, explicit
+    // pathname and junction checks below still run before the first byte read.
     fd=io.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
-    const verify=()=>{
-      if(!unchanged(stat,io.fstatSync(fd,{bigint:true}))||!unchanged(stat,io.lstatSync(file,{bigint:true})))throw new Error('Library changed.');
+    verification.existed=true;
+    const stat=io.fstatSync(fd,{bigint:true});
+    if(!regular(stat))throw new Error('Unsafe library file.');
+    const ancestors=[];
+    for(let parent=path.dirname(file);;parent=path.dirname(parent)){const current=io.lstatSync(parent,{bigint:true});if(!current.isDirectory()||current.isSymbolicLink()||current.ino===0n)throw new Error('Unsafe library folder.');ancestors.push([parent,current]);if(parent===path.parse(parent).root)break;}
+    const verifyPath=()=>{
+      const named=io.lstatSync(file,{bigint:true});
+      if(!regular(named)||!unchanged(stat,named))throw new Error('Library changed.');
       for(const [parent,before]of ancestors){const current=io.lstatSync(parent,{bigint:true});if(!current.isDirectory()||current.isSymbolicLink()||!same(before,current))throw new Error('Library folder changed.');}
+    };
+    const verify=()=>{
+      const opened=io.fstatSync(fd,{bigint:true});
+      if(!regular(opened)||!unchanged(stat,opened))throw new Error('Library changed.');
+      verifyPath();
     };
     verify();const bytes=Buffer.alloc(Number(stat.size));let position=0;
     while(position<bytes.length){const count=io.readSync(fd,bytes,position,bytes.length-position,position);if(!count)throw new Error('Library changed.');position+=count;}
     verify();
     // Recovery writes recheck the original and every parent immediately before
     // and after creating the sibling. No second unbounded read is needed.
-    verification.check=()=>{
-      if(!unchanged(stat,io.lstatSync(file,{bigint:true})))throw new Error('Library changed.');
-      for(const [parent,before]of ancestors){const current=io.lstatSync(parent,{bigint:true});if(!current.isDirectory()||current.isSymbolicLink()||!same(before,current))throw new Error('Library folder changed.');}
-    };
+    verification.check=verifyPath;
     return bytes;
   }finally{if(fd!==undefined)io.closeSync(fd);}
 }
