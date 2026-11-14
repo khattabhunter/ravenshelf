@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.6 — Long names with emoji
+
+Maintenance update.
+
+- **A long file name is no longer cut through an emoji.** File names are cut to 180 characters. An emoji counts as two, and when the cut fell between them, half an emoji stayed at the end of the name. Half an emoji can't be passed to Windows, so the file got a broken character (�) instead, and its name on disk was not the name Ravenshelf had checked and listed. Now the half is dropped too, and a space or dot left before it is removed as usual. Only names over 180 characters with such a character at the cut change. See [release notes](docs/RELEASE-0.10.6.md).
+
 ## 0.10.5 — More reliable tests
 
 Maintenance update. The app works the same as 0.10.4.

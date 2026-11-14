@@ -7,9 +7,11 @@
 // port digits as device names, and CONIN$ and CONOUT$ name the console.
 // Readers and cleanup must reject the same names the downloader prefixes,
 // without normalizing an existing path into another.
+// A long name is cut at 180 UTF-16 units, never through an emoji (two units):
+// half of one cannot be passed to Windows, which would get U+FFFD instead.
 const isWindowsDeviceName=value=>typeof value==='string'&&/^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)/i.test(value);
 function safeName(value,fallback='download') {
-  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. ]+$/g,'');
+  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. \ud800-\udbff]+$/,'');
   if(!s || s==='.' || s==='..') s=fallback;
   if(isWindowsDeviceName(s)) s='_'+s;
   return s;

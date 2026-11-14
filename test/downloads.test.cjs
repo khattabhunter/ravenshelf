@@ -377,6 +377,30 @@ test('the cleaning of file names is pinned, name by name: it has not changed sin
   assert.equal(safeName('','Imported files'),'Imported files');assert.equal(safeName('..','Imported files'),'Imported files');assert.equal(safeName('Game: Title','Imported files'),'Game_ Title');
 });
 
+test('a long file name is cut between characters, never through one', async t => {
+  // An emoji is two UTF-16 units. Half of one cannot be passed to Windows, which would
+  // get U+FFFD instead, so the file on disk would not have the name that was checked.
+  const EMOJI='\u{1F600}',whole=name=>!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(name);
+  const cases=[['a'.repeat(179)+EMOJI+' trailer.zip','a'.repeat(179)],['a'.repeat(178)+' '+EMOJI+'.rar','a'.repeat(178)],['a'.repeat(178)+'.'+EMOJI+'x','a'.repeat(178)],
+    ['a'.repeat(178)+EMOJI+'tail.7z','a'.repeat(178)+EMOJI],[EMOJI.repeat(100),EMOJI.repeat(90)],['CON .'+EMOJI.repeat(100),'_CON .'+EMOJI.repeat(87)],
+    ['CON'+' '.repeat(176)+EMOJI+'x','_CON'],['abc\ud83d.','abc'],['a'.repeat(177)+'\ud83d.'+EMOJI,'a'.repeat(177)]];
+  for(const [input,expected] of cases){
+    const name=safeName(input),label=JSON.stringify(input.slice(170));
+    assert.equal(name,expected,label);assert.ok(whole(name),label);assert.equal(safeName(name),name,label+': cleaning twice changes nothing');
+    assert.equal(Buffer.from(name,'utf8').toString('utf8'),name,label+': the name on disk is the name that was checked');
+    assert.doesNotMatch(name,/[. ]$/,label);
+  }
+  // Only the half at the cut goes: whole emoji before it stay.
+  assert.equal(safeName(EMOJI+'a'.repeat(177)+EMOJI+'z'),EMOJI+'a'.repeat(177));
+  // The queue saves the same whole name.
+  const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
+  const long='Game '+'b'.repeat(174)+EMOJI+' part01.rar';
+  const {ids:[id]}=manager.add({gameTitle:'Game',links:[link('long-emoji',long)]});
+  const d=manager.downloads.find(item=>item.id===id);
+  assert.equal(d.name,'Game '+'b'.repeat(174));assert.ok(whole(d.name));
+  await finished(manager);
+});
+
 test('the queue cleans every file name it is handed, so no name can put a file outside its folder', async t => {
   const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
   const unsafe=['../../escaped.rar','..'+String.fromCharCode(92,46,46,92)+'escaped2.rar','a'+String.fromCharCode(92)+'b.rar','sub/dir/file.rar','CON','x.rar. ','C:'+String.fromCharCode(92)+'Windows'+String.fromCharCode(92)+'evil.dll','nul.7z','..','wide'+String.fromCharCode(0xff0e,0xff45,0xff58,0xff45)];
