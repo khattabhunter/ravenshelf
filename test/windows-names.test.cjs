@@ -60,3 +60,26 @@ test('the updater helper refuses exactly the device names the app refuses',()=>{
  for(const name of unsafe)assert.equal(csPattern.test(name),true,name);
  for(const name of normal)assert.equal(csPattern.test(name),false,name);
 });
+
+test('the DEL character is replaced like other control characters, so storage checks and cleanup accept the saved name',async t=>{
+ const DEL=String.fromCharCode(0x7f);
+ assert.equal(safeName('Game'+DEL+'Setup.rar'),'Game_Setup.rar');
+ assert.equal(safeName(DEL),'_');
+ assert.equal(folderName('Game'+DEL+'Title'),'Game_Title');
+ assert.equal(safeName(safeName('a'+DEL+'b.zip')),'a_b.zip','cleaning twice changes nothing');
+ const base=path.resolve(__dirname,'.windows-name-fixtures');fs.mkdirSync(base,{recursive:true});
+ const root=fs.mkdtempSync(path.join(base,'del-'));
+ t.after(()=>{assert.equal(path.dirname(root),base);fs.rmSync(root,{recursive:true,force:true});});
+ // The storage check counts an archive saved under the cleaned name.
+ const archives=path.join(root,'archives');fs.mkdirSync(archives);
+ fs.writeFileSync(path.join(archives,safeName('Game'+DEL+'part1.rar')),'fixture');
+ const scanned=await scanConfiguredArchives({root:archives});
+ assert.equal(scanned.scan.skippedEntries,0);assert.equal(scanned.scan.archivesFound,1);assert.equal(scanned.untrackedBytes,7);
+ // Delete files removes a finished browser download saved under the cleaned name.
+ const folder=path.join(root,'Browser downloads');fs.mkdirSync(folder);
+ const name=safeName('report'+DEL+'.txt');fs.writeFileSync(path.join(folder,name),'fixture');
+ const downloads=[{id:'del',name,folder,status:'completed',origin:'browser'}];
+ const cleanup=createDownloadCleanup({getDownloads:()=>downloads});
+ const preview=await cleanup.preview(['del']);assert.equal(preview.items.length,1);assert.equal(preview.warnings.length,0);
+ const result=await cleanup.deletePreview({ids:['del'],token:preview.token});assert.deepEqual(result.removedIds,['del']);assert.equal(fs.existsSync(path.join(folder,name)),false);
+});
