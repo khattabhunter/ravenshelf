@@ -365,10 +365,10 @@ test('safe filenames remove path separators, reserved devices, and trailing Wind
   assert.equal(/[. ]$/.test(safeName('a'.repeat(179) + '.more')), false, 'truncation must not leave a trailing dot');
 });
 
-test('the cleaning of file names is pinned, name by name: it has not changed since 0.6.1', () => {
+test('the cleaning of file names is pinned, name by name: the same as 0.6.1, except DEL becomes "_" since 0.10.7', () => {
   const wide=text=>text.split('').map(char=>char==='.'?char:String.fromCharCode(char.charCodeAt(0)+0xfee0)).join('');
   const cases=[['a .','a'],['a. . .','a'],['part01.rar .','part01.rar'],['  spaced.zip  ','spaced.zip'],['x.rar. ','x.rar'],['x'.repeat(179)+' y','x'.repeat(179)],['a'.repeat(200),'a'.repeat(180)],
-    ['../../outside.rar','.._.._outside.rar'],['a\\b.rar','a_b.rar'],['a/b:c*d?e"f<g>h|i.rar','a_b_c_d_e_f_g_h_i.rar'],['tab'+String.fromCharCode(9)+'here.zip','tab_here.zip'],
+    ['../../outside.rar','.._.._outside.rar'],['a\\b.rar','a_b.rar'],['a/b:c*d?e"f<g>h|i.rar','a_b_c_d_e_f_g_h_i.rar'],['tab'+String.fromCharCode(9)+'here.zip','tab_here.zip'],['del'+String.fromCharCode(127)+'here.zip','del_here.zip'],
     ['CON','_CON'],['con.txt','_con.txt'],['COM1.rar','_COM1.rar'],['lpt9','_lpt9'],['NUL.tar.gz','_NUL.tar.gz'],['aux','_aux'],['prn.','_prn'],['conx','conx'],['com10.txt','com10.txt'],
     ['.','download'],['..','download'],['...','download'],['','download'],[' ','download'],
     [wide('setup.exe'),'setup.exe'],['photo.jpg'+String.fromCharCode(0xff0e)+'exe','photo.jpg.exe'],['game.zip','game.zip'],['My Mod v1.2-12604-1-2.7z','My Mod v1.2-12604-1-2.7z']];
@@ -420,6 +420,17 @@ test('the queue cleans every file name it is handed, so no name can put a file o
   await finished(manager);
   const folder=manager.downloads[0].folder;
   assert.deepEqual(fs.readdirSync(path.dirname(folder)),[path.basename(folder)],'nothing was written beside the game folder');
+});
+
+test('a DEL character in a file name or game title becomes "_" in the queue', async t => {
+  // The storage check and Delete files refuse a name with DEL, so it is never saved with one.
+  const DEL=String.fromCharCode(0x7f);
+  const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
+  const {ids:[id]}=manager.add({gameTitle:'Game'+DEL+'Title',links:[link('del','part'+DEL+'01.rar')]});
+  const d=manager.downloads.find(item=>item.id===id);
+  assert.equal(d.name,'part_01.rar');assert.equal(path.basename(d.folder),'Game_Title');
+  assert.doesNotMatch(d.name+d.folder,/\x7f/);
+  await finished(manager);
 });
 
 test('an ordinary download is known by the address it was found at, not by the direct address behind it', async t => {

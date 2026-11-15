@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.7 — Names with the DEL character
+
+Maintenance update.
+
+- **A file name with the DEL character is saved with `_` in its place.** DEL is an invisible control character. Ravenshelf already replaced the other control characters in names with `_`, but kept DEL. **Check space** and **Delete files** refuse a name with DEL, so such a file was missed by Check space and could not be deleted from Ravenshelf. Now DEL becomes `_` like the others, in file names and in game folder names. Downloads already in your list keep their names (a file saved with DEL before this update is still missed by Check space). See [release notes](docs/RELEASE-0.10.7.md).
+
 ## 0.10.6 — Long names with emoji
 
 Maintenance update.

@@ -9,9 +9,11 @@
 // without normalizing an existing path into another.
 // A long name is cut at 180 UTF-16 units, never through an emoji (two units):
 // half of one cannot be passed to Windows, which would get U+FFFD instead.
+// DEL (0x7f) becomes "_" like the other control characters: the storage check
+// and Delete files refuse a name that has it.
 const isWindowsDeviceName=value=>typeof value==='string'&&/^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)/i.test(value);
 function safeName(value,fallback='download') {
-  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. \ud800-\udbff]+$/,'');
+  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. \ud800-\udbff]+$/,'');
   if(!s || s==='.' || s==='..') s=fallback;
   if(isWindowsDeviceName(s)) s='_'+s;
   return s;
