@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.8 — Long names cleaned twice
+
+Maintenance update.
+
+- **A very long file name that starts with a Windows device name is saved exactly as it was checked.** Ravenshelf puts `_` in front of names like `CON` or `NUL`, because Windows reads them as devices, not files. For a name that was already 180 characters long, that `_` made it 181. A file from a protected host window (FuckingFast, DataNodes or FileKeeper) has its name cleaned twice, once for the check and once in the queue, and the second time cut the last letter: a name checked as `….rar` could be saved as `….ra`. Now a name that is cleaned again stays the same. A rare invisible blank character at the very end of a name (for example U+2028) is now removed the first time too. Ordinary names don't change. See [release notes](docs/RELEASE-0.10.8.md).
+
 ## 0.10.7 — Names with the DEL character
 
 Maintenance update.

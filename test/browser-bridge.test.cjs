@@ -478,9 +478,9 @@ test('a name is judged in the form it will be saved in, and the review shows tha
   await bare.bridge.action({id:named.id,action:'download',acknowledgeRisk:true});
   assert.equal(safeName(bare.events.queued[0].filename),'SkyUI patch.exe');
   // The queue cleans a name once. What is judged and shown is that one cleaning of that very name, also for a
-  // name that a second cleaning would change: a Windows device name gets a "_" in front, which makes it longer.
+  // long Windows device name: the "_" in front makes it 181 long, and cleaning it again keeps it whole.
   const LONG_DEVICE='con.'+'a'.repeat(171)+'.exex',LONG_PROGRAM='con.'+'x'.repeat(172)+'.exe';
-  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE),'_'+LONG_DEVICE);assert.notEqual(safeName(safeName(LONG_DEVICE)),safeName(LONG_DEVICE),'cleaned twice, its ending would be cut');
+  assert.equal(LONG_DEVICE.length,180);assert.equal(safeName(LONG_DEVICE),'_'+LONG_DEVICE);assert.equal(safeName(safeName(LONG_DEVICE)),safeName(LONG_DEVICE),'cleaned twice, its ending stays');
   assert.equal(LONG_PROGRAM.length,180);assert.equal(safeName(LONG_PROGRAM),'_'+LONG_PROGRAM);
   const device=decide({url:`https://cdn.example/${LONG_DEVICE}`}).id,program=decide({url:`https://cdn.example/${LONG_PROGRAM}`}).id;
   await until(()=>bridge.snapshot().captures.every(capture=>capture.status!=='checking'),'more inspections');
