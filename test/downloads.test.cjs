@@ -401,6 +401,36 @@ test('a long file name is cut between characters, never through one', async t =>
   await finished(manager);
 });
 
+test('cleaning a clean name changes nothing, so a name cleaned twice is saved as it was checked', async t => {
+  const {isWindowsDeviceName}=require('../src/safe-name.cjs');
+  // A long device name keeps the "_" in front as its 181st character, also when it is cleaned again.
+  const LONG_DEVICE='_con.'+'a'.repeat(176);
+  assert.equal(safeName('con.'+'a'.repeat(176)),LONG_DEVICE);assert.equal(safeName(LONG_DEVICE),LONG_DEVICE);
+  assert.equal(safeName('_con.'+'a'.repeat(200)),LONG_DEVICE,'a name that already has the "_" is cut to the same 181');
+  assert.equal(safeName('_conx'+'a'.repeat(200)),'_conx'+'a'.repeat(175),'any other name is cut at 180');
+  assert.equal(safeName('CON'+'.'.repeat(177)+'x'),'_CON');
+  // Blanks that trim() drops do not stay at the end after a dot or a cut.
+  for(const blank of ['\u1680','\u2028','\u2029','\ufeff']){
+    assert.equal(safeName('abc'+blank+'.'),'abc',JSON.stringify(blank));
+    assert.equal(safeName('a'.repeat(179)+blank+'tail.zip'),'a'.repeat(179),JSON.stringify(blank));
+  }
+  // Names built around every edge: none is changed by a second cleaning, and only a "_" before a device name passes 180.
+  const EMOJI='\u{1F600}',edges=['con','CON .','nul   ','conin$','com\u00b9','lpt3 .','_con.','_NUL ','_conx','a','\u00e9',EMOJI],ends=['.',' ','\u1680','\u2028','\ufeff','\ud83d','.rar','x'];
+  for(const start of edges)for(const fill of [0,1,170,174,175,176,177,178,179,200])for(const end of ends){
+    const input=start+'b'.repeat(fill)+end,once=safeName(input),label=JSON.stringify(start)+' '+fill+' '+JSON.stringify(end);
+    assert.equal(safeName(once),once,label);
+    assert.ok(once.length<=180||(once.length===181&&isWindowsDeviceName(once.slice(1))),label);
+    assert.doesNotMatch(once,/[\s.\ud800-\udbff]$/,label);
+  }
+  // A protected host's file is cleaned and checked, then queued: the queue keeps that name.
+  const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
+  const checked=safeName('CON.'+'b'.repeat(172)+'.rar');
+  assert.equal(checked,'_CON.'+'b'.repeat(172)+'.rar');
+  const {ids:[id]}=manager.add({gameTitle:'Game',links:[link('long-device',checked)]});
+  assert.equal(manager.downloads.find(item=>item.id===id).name,checked,'saved as the archive it was checked to be');
+  await finished(manager);
+});
+
 test('the queue cleans every file name it is handed, so no name can put a file outside its folder', async t => {
   const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
   const unsafe=['../../escaped.rar','..'+String.fromCharCode(92,46,46,92)+'escaped2.rar','a'+String.fromCharCode(92)+'b.rar','sub/dir/file.rar','CON','x.rar. ','C:'+String.fromCharCode(92)+'Windows'+String.fromCharCode(92)+'evil.dll','nul.7z','..','wide'+String.fromCharCode(0xff0e,0xff45,0xff58,0xff45)];

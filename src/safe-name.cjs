@@ -7,13 +7,21 @@
 // port digits as device names, and CONIN$ and CONOUT$ name the console.
 // Readers and cleanup must reject the same names the downloader prefixes,
 // without normalizing an existing path into another.
-// A long name is cut at 180 UTF-16 units, never through an emoji (two units):
+// A long name is cut at 180 UTF-16 units (181 with a device name's "_", see
+// below), never through an emoji (two units):
 // half of one cannot be passed to Windows, which would get U+FFFD instead.
 // DEL (0x7f) becomes "_" like the other control characters: the storage check
 // and Delete files refuse a name that has it.
+// Cleaning a clean name changes nothing. Some names are cleaned twice (a
+// protected host's file is checked, then queued), so both must be the same:
+// the "_" before a device name is the one character a name may have past 180,
+// and a blank that trim() would drop (U+1680, U+2028, U+2029, U+FEFF) never
+// stays at the end.
 const isWindowsDeviceName=value=>typeof value==='string'&&/^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)/i.test(value);
+const cut=(value,limit)=>value.slice(0,limit).replace(/[\s.\ud800-\udbff]+$/,'');
 function safeName(value,fallback='download') {
-  let s=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g,'_').trim().slice(0,180).replace(/[. \ud800-\udbff]+$/,'');
+  const clean=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g,'_').trim();
+  let s=cut(clean,clean.startsWith('_')&&isWindowsDeviceName(clean.slice(1))?181:180);
   if(!s || s==='.' || s==='..') s=fallback;
   if(isWindowsDeviceName(s)) s='_'+s;
   return s;
