@@ -401,6 +401,28 @@ test('a long file name is cut between characters, never through one', async t =>
   await finished(manager);
 });
 
+test('half an emoji inside a name becomes "_", so two such names are two files on disk', async t => {
+  // A name from a JSON reply can hold half of an emoji anywhere, not only at the cut.
+  // Windows gets U+FFFD for it, so "Game \ud83d.rar" and "Game \ud83e.rar" would be one file.
+  const cases=[['Game \ud83d Setup.rar','Game _ Setup.rar'],['Game \ude00 Setup.rar','Game _ Setup.rar'],['\ude00\ud83d.zip','__.zip'],['abc\ude00','abc_'],
+    ['a\ud83d😀b.7z','a_\u{1F600}b.7z'],['a\ude00😀b.7z','a_\u{1F600}b.7z'],['con\ude00.txt','con_.txt'],['_con.\ud83d'+'a'.repeat(200),'_con._'+'a'.repeat(175)]];
+  for(const [input,expected] of cases){
+    const name=safeName(input),label=JSON.stringify(input.slice(0,24));
+    assert.equal(name,expected,label);
+    assert.equal(Buffer.from(name,'utf8').toString('utf8'),name,label+': the name on disk is the name that was checked');
+    assert.equal(safeName(name),name,label+': cleaning twice changes nothing');
+  }
+  // A first half at the end, also before dots and spaces, still goes as before; a second half there becomes "_".
+  assert.equal(safeName('abc\ud83d.'),'abc');assert.equal(safeName('abc\ud83d'),'abc');assert.equal(safeName('\ud83d'),'download');
+  assert.equal(safeName('abc\ude00 .'),'abc_');assert.equal(safeName('a'.repeat(179)+'\ude00tail.zip'),'a'.repeat(179)+'_');
+  const {manager}=fixture(t,async()=>response('no',{'content-type':'text/html'},500));
+  const {ids}=manager.add({gameTitle:'Game \ud83d Title',links:[link('half-1','Game \ud83d.rar'),link('half-2','Game \ud83e.rar')]});
+  const items=ids.map(id=>manager.downloads.find(item=>item.id===id));
+  assert.deepEqual(items.map(d=>d.name),['Game _.rar','Game _ (1).rar']);
+  assert.equal(path.basename(items[0].folder),'Game _ Title');
+  await finished(manager);
+});
+
 test('cleaning a clean name changes nothing, so a name cleaned twice is saved as it was checked', async t => {
   const {isWindowsDeviceName}=require('../src/safe-name.cjs');
   // A long device name keeps the "_" in front as its 181st character, also when it is cleaned again.
