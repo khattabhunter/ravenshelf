@@ -10,6 +10,10 @@
 // A long name is cut at 180 UTF-16 units (181 with a device name's "_", see
 // below), never through an emoji (two units):
 // half of one cannot be passed to Windows, which would get U+FFFD instead.
+// For the same reason a half inside a name (a name from a JSON reply can have
+// one) becomes "_", after the cut: otherwise two names that differ only in a
+// half would be one file on disk. A first half at the end is dropped by the
+// cut, as before.
 // DEL (0x7f) becomes "_" like the other control characters: the storage check
 // and Delete files refuse a name that has it.
 // Cleaning a clean name changes nothing. Some names are cleaned twice (a
@@ -19,9 +23,10 @@
 // stays at the end.
 const isWindowsDeviceName=value=>typeof value==='string'&&/^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\.|$)/i.test(value);
 const cut=(value,limit)=>value.slice(0,limit).replace(/[\s.\ud800-\udbff]+$/,'');
+const whole=value=>value.replace(/\p{Cs}/gu,'_');
 function safeName(value,fallback='download') {
   const clean=String(value || fallback).normalize('NFKC').replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g,'_').trim();
-  let s=cut(clean,clean.startsWith('_')&&isWindowsDeviceName(clean.slice(1))?181:180);
+  let s=whole(cut(clean,clean.startsWith('_')&&isWindowsDeviceName(clean.slice(1))?181:180));
   if(!s || s==='.' || s==='..') s=fallback;
   if(isWindowsDeviceName(s)) s='_'+s;
   return s;

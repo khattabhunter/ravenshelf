@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.9 — Broken characters inside names
+
+Maintenance update.
+
+- **Half of an emoji inside a file name is saved as `_`.** An emoji counts as two characters. A name that a website sends can have only one half of one, anywhere in the name. Half an emoji can't be passed to Windows, so the file got a broken character (�) instead, and its name on disk was not the name Ravenshelf had checked and listed. Two names that differed only in such a half became the same file on disk, and Ravenshelf couldn't see that they clash. 0.10.6 only dropped such a half at the end of a name. Now a half inside a name becomes `_`, like other characters Windows can't store, in file names and in game folder names. Ordinary names, and names with whole emoji, don't change. See [release notes](docs/RELEASE-0.10.9.md).
+
 ## 0.10.8 — Long names cleaned twice
 
 Maintenance update.

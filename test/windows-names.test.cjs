@@ -61,6 +61,17 @@ test('the updater helper refuses exactly the device names the app refuses',()=>{
  for(const name of normal)assert.equal(csPattern.test(name),false,name);
 });
 
+test('a name with half an emoji inside is saved on disk under exactly the cleaned name',t=>{
+ const base=path.resolve(__dirname,'.windows-name-fixtures');fs.mkdirSync(base,{recursive:true});
+ const root=fs.mkdtempSync(path.join(base,'half-'));
+ t.after(()=>{assert.equal(path.dirname(root),base);fs.rmSync(root,{recursive:true,force:true});});
+ const names=['Game \ud83d part1.rar','Game \ude00 part2.rar'].map(value=>safeName(value));
+ assert.deepEqual(names,['Game _ part1.rar','Game _ part2.rar']);
+ assert.equal(folderName('Game \ud83d Title'),'Game _ Title');
+ for(const name of names)fs.writeFileSync(path.join(root,name),'fixture');
+ assert.deepEqual(fs.readdirSync(root).sort(),names,'the files on disk have the names that were checked');
+});
+
 test('the DEL character is replaced like other control characters, so storage checks and cleanup accept the saved name',async t=>{
  const DEL=String.fromCharCode(0x7f);
  assert.equal(safeName('Game'+DEL+'Setup.rar'),'Game_Setup.rar');
