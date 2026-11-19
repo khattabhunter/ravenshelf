@@ -158,6 +158,31 @@ test('HEAD 405 uses a one-byte GET probe, cancels its body and reports total siz
   assert.equal(probe.timeoutMs,10000);
 });
 
+test('a size check sent on to a link that refuses it with 403 asks again for just one byte',async()=>{
+  // Some links are signed for downloads only and refuse a size check (HEAD).
+  const elsewhere='https://cdn.example.net/signed/Game.part01.rar?signature=fixture';
+  for(const url of ['https://files.example.org/Game.part01.rar','https://fs1.filekeeper.net:8443/files/Game.part01.rar']){
+    let cancelled=false;
+    const f=fixture({defaultFetch:async(_url,options)=>options.method==='HEAD'?response(null,{status:403,url:elsewhere}):fileResponse({
+      url:elsewhere,status:206,headers:{'content-length':'1','content-range':'bytes 0-0/55555'},body:new ReadableStream({cancel(){cancelled=true;}}),
+    })});
+    const result=await f.providers.resolveLink(url);
+    assert.equal(result.status,'ready',result.message);assert.equal(result.size,55555);assert.equal(cancelled,true);
+    assert.deepEqual(f.defaultCalls.map(x=>[x.method,x.headers.Range]),[['HEAD',undefined],['GET','bytes=0-0']]);
+  }
+  // A 403 from the address that was asked is still reported, without asking again.
+  for(const url of ['https://files.example.org/Game.part01.rar','https://files.example.org/Game.part01.rar#part']){
+    const f=fixture({defaultFetch:async()=>response(null,{status:403,url:url.replace(/#.*$/,'')})});
+    const result=await f.providers.resolveLink(url);
+    assert.equal(result.status,'manual');assert.match(result.message,/HTTP 403/);
+    assert.deepEqual(f.defaultCalls.map(x=>x.method),['HEAD']);
+  }
+  // Other refusals after a redirect are reported as before.
+  const f=fixture({defaultFetch:async()=>response(null,{status:404,url:elsewhere})});
+  assert.equal((await f.providers.resolveLink('https://files.example.org/Game.part01.rar')).status,'unavailable');
+  assert.deepEqual(f.defaultCalls.map(x=>x.method),['HEAD']);
+});
+
 test('HEAD 501 probe handles the observed FuckingFast full-end header quirk without downloading the body',async()=>{
   let cancelled=false;
   const f=fixture({file:(_url,options)=>options.method==='HEAD'?response(null,{status:501}):fileResponse({

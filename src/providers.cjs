@@ -387,9 +387,14 @@ async function probeDirect(url, filename, host, referer,fetcher=safeFetch) {
   const reportedLength=value=>{const raw=value.headers.get('content-length');if(raw===null||!/^\d+$/.test(raw))return 0;const n=Number(raw);return Number.isSafeInteger(n)&&n>=0?n:0;};
   // HEAD may legitimately omit size even when GET provides Content-Range.
   // Do not mistake the one-byte probe's Content-Length for the whole archive,
-  // or issue a second request for a challenge/error/HTML HEAD response.
+  // or issue a second request for a challenge/error/HTML HEAD response
+  // (except a 403 after being sent on, below).
   const missingHeadSize=response.status===200&&!reportedLength(response)&&!pageType(response.headers.get('content-type'));
-  if([405,501].includes(response.status)||missingHeadSize){
+  // A host can send the check on to a link that is signed for downloads only
+  // and refuses HEAD with 403 (a HEAD stays HEAD after 303, as in browsers).
+  const asked=validUrl(url);asked.hash='';
+  const refusedElsewhere=response.status===403&&Boolean(response.url)&&response.url!==asked.href;
+  if([405,501].includes(response.status)||missingHeadSize||refusedElsewhere){
     // Availability only: ask for one byte and cancel as soon as headers arrive,
     // including when a server ignores Range and offers the full file instead.
     response=await fetcher(validUrl(url).href,{method:'GET',headers:{...headers,Range:'bytes=0-0'},timeoutMs:10000});
