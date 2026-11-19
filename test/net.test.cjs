@@ -70,6 +70,28 @@ test('cross-origin redirects strip credentials and turn ordinary POST redirect i
  assert.equal(seen.length,2);assert.equal(seen[1].method,'GET');assert.equal(seen[1].body,undefined);
  assert.equal(seen[1].headers.has('Cookie'),false);assert.equal(seen[1].headers.has('Authorization'),false);assert.equal(seen[1].headers.has('Content-Type'),false);
 });
+test('a HEAD check that is sent on with 303 stays a HEAD check, as in browsers',async()=>{
+ // A size check (HEAD) must never turn into a download of the file itself.
+ for(const head of ['HEAD','head']) {
+   const seen=[];const h=harness(async(url,options)=>{
+     seen.push({url,method:options.method,body:options.body});
+     return seen.length===1?new Response(null,{status:303,headers:{location:'https://cdn.example.net/file.rar'}}):new Response(null,{status:200,headers:{'content-length':'1234'}});
+   });
+   const response=await h.safeFetch('https://files.example.org/file.rar',{method:head});
+   assert.equal(response.headers.get('content-length'),'1234');
+   assert.deepEqual(seen.map(call=>[call.url,call.method]),[['https://files.example.org/file.rar',head],['https://cdn.example.net/file.rar',head]],head);
+   assert.equal(seen[1].body,undefined);
+ }
+ // 303 still turns other requests into GET without a body.
+ for(const method of ['POST','GET']) {
+   const seen=[];const h=harness(async(url,options)=>{
+     seen.push({method:options.method,body:options.body,headers:new Headers(options.headers)});
+     return seen.length===1?new Response(null,{status:303,headers:{location:'/done'}}):new Response('ok');
+   });
+   assert.equal(await(await h.safeFetch('https://example.org/form',{method,body:method==='POST'?'a=1':undefined,headers:method==='POST'?{'Content-Type':'application/x-www-form-urlencoded'}:{}})).text(),'ok');
+   assert.equal(seen[1].method,'GET',method);assert.equal(seen[1].body,undefined,method);assert.equal(seen[1].headers.has('Content-Type'),false,method);
+ }
+});
 test('manual redirect mode leaves the host form destination for the caller',async()=>{
  let calls=0;const h=harness(async()=>{calls++;return new Response(null,{status:302,headers:{location:'https://other.example/file'}});});
  const result=await h.safeFetch('https://example.org/form',{redirect:'manual'});

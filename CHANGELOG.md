@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.10 — Link checks stay checks
+
+Maintenance update.
+
+- **A link check no longer turns into a download when a file host sends it on with "see other".** Before a file is queued, Ravenshelf asks the file host only for the file's size and type (an HTTP `HEAD` request). When a host answered "see other" (HTTP 303) with another address, Ravenshelf asked that address for the whole file instead. It stopped as soon as the answer started, but the host saw a download start, which can count against its download limit. Now the check stays a check, as in web browsers. Other requests sent on with "see other" continue as before.
+- **A link that refuses the check after being sent on is asked again for just one byte.** Some download links only allow downloads and refuse a size check (HTTP 403). When the host sent the check on to such a link, Ravenshelf now asks again for one byte, as it already did for hosts that don't answer size checks, instead of saying **open it in your browser** right away. A refusal at the address that was asked is reported as before. See [release notes](docs/RELEASE-0.10.10.md).
+
 ## 0.10.9 — Broken characters inside names
 
 Maintenance update.
