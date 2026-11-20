@@ -92,6 +92,40 @@ test('a HEAD check that is sent on with 303 stays a HEAD check, as in browsers',
    assert.equal(seen[1].method,'GET',method);assert.equal(seen[1].body,undefined,method);assert.equal(seen[1].headers.has('Content-Type'),false,method);
  }
 });
+test('a form sent on with 301 or 302 becomes GET whatever the case of its method, as in browsers',async()=>{
+ // The network library sends "post" as POST, so the form must never be posted
+ // again to the next address, which can be another site.
+ for(const method of ['POST','post','Post']) for(const status of [301,302]) {
+   const seen=[];const h=harness(async(url,options)=>{
+     seen.push({url,method:options.method,body:options.body,headers:new Headers(options.headers)});
+     return seen.length===1?new Response(null,{status,headers:{location:'https://other.example/file'}}):new Response('ok');
+   });
+   assert.equal(await(await h.safeFetch('https://example.org/form',{method,body:'token=value',headers:{'Content-Type':'application/x-www-form-urlencoded'}})).text(),'ok');
+   const label=method+' '+status;
+   assert.deepEqual(seen.map(call=>call.url),['https://example.org/form','https://other.example/file'],label);
+   assert.equal(seen[0].method,method,label);
+   assert.equal(seen[1].method,'GET',label);assert.equal(seen[1].body,undefined,label);assert.equal(seen[1].headers.has('Content-Type'),false,label);
+ }
+ // 307 and 308 keep the method and the form, whatever its case.
+ for(const method of ['POST','post','Post']) for(const status of [307,308]) {
+   const seen=[];const h=harness(async(url,options)=>{
+     seen.push({method:options.method,body:options.body,headers:new Headers(options.headers)});
+     return seen.length===1?new Response(null,{status,headers:{location:'/again'}}):new Response('ok');
+   });
+   await h.safeFetch('https://example.org/form',{method,body:'token=value',headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+   const label=method+' '+status;
+   assert.equal(seen[1].method,method,label);assert.equal(seen[1].body,'token=value',label);assert.equal(seen[1].headers.get('Content-Type'),'application/x-www-form-urlencoded',label);
+ }
+ // 301 and 302 leave other methods as they are.
+ for(const method of ['GET','HEAD','head']) {
+   const seen=[];const h=harness(async(url,options)=>{
+     seen.push(options.method);
+     return seen.length===1?new Response(null,{status:301,headers:{location:'/moved'}}):new Response(null,{status:200});
+   });
+   await h.safeFetch('https://example.org/file',{method});
+   assert.deepEqual(seen,[method,method],method);
+ }
+});
 test('manual redirect mode leaves the host form destination for the caller',async()=>{
  let calls=0;const h=harness(async()=>{calls++;return new Response(null,{status:302,headers:{location:'https://other.example/file'}});});
  const result=await h.safeFetch('https://example.org/form',{redirect:'manual'});

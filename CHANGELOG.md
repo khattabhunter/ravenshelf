@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.11 — Forms are not sent twice
+
+Maintenance update.
+
+- **A form that a website answers with "moved" is never posted again to the new address.** When a site answers a form (an HTTP `POST` request) with "moved" (HTTP 301 or 302), Ravenshelf's network layer goes on to the new address with an ordinary request, without the form's data, as web browsers do. This rule only worked when the request's name was written in capital letters (`POST`). The network library sends `post` as `POST` too, so a request written in small letters would have sent the form's data again to the new address, which can be another site. Ravenshelf's own form requests are written in capital letters and handle "moved" answers themselves, so downloads work exactly as before; the rule is now the same however the name is written. See [release notes](docs/RELEASE-0.10.11.md).
+
 ## 0.10.10 — Link checks stay checks
 
 Maintenance update.
