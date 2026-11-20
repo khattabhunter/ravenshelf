@@ -83,7 +83,11 @@ async function safeFetch(value, options={}) {
     }
     // As in browsers (Fetch standard), 303 turns a request into GET, but a HEAD
     // check stays HEAD: a size check must never download the file itself.
-    if((res.status===303&&String(method).toUpperCase()!=='HEAD') || ((res.status===301||res.status===302)&&method==='POST')) {
+    // 301 and 302 turn a form (POST) into GET. The method is compared in any
+    // case, as the network library sends "post" as POST: a form is never posted
+    // again to the next address.
+    const upper=String(method).toUpperCase();
+    if((res.status===303&&upper!=='HEAD') || ((res.status===301||res.status===302)&&upper==='POST')) {
       method='GET'; body=undefined; headers.delete('content-type'); headers.delete('content-length');
     }
     url=next;
