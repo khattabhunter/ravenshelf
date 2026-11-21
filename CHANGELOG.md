@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.12 — Invisible characters no longer hide a disguised program
+
+Maintenance update.
+
+- **A disguised program is blocked also when invisible characters are hidden in its name.** Ravenshelf blocks a program whose name pretends to be another kind of file, such as `invoice.pdf.exe`, and a program whose `.exe` ending is pushed out of sight with spaces. A name could get around both checks with characters that are not drawn, such as a zero-width space between `.pdf` and `.exe`: it looked exactly like `invoice.pdf.exe`, but only got the normal "this is a program" warning. Now a name is judged by how it reads: characters that are not drawn (zero-width marks, soft hyphens, variation selectors, tags) are left out, and characters drawn as a blank (Hangul fillers, the blank Braille character) count as spaces. This applies to browser downloads and to file names inside torrents. Ordinary names, also Persian and Arabic names with a zero-width non-joiner and names with emoji, get the same result as before. See [release notes](docs/RELEASE-0.10.12.md).
+
 ## 0.10.11 — Forms are not sent twice
 
 Maintenance update.

@@ -16,6 +16,16 @@ const DISK_IMAGES=new Set(['iso','img','vhd','vhdx']);
 const ARCHIVES=new Set(['zip','rar','7z','gz','tgz','bz2','xz','tar','cab']);
 const PLAIN_TYPES=new Set(['pdf','doc','docx','xls','xlsx','ppt','pptx','odt','ods','odp','rtf','txt','csv','jpg','jpeg','png','gif','bmp','webp','svg','mp4','mkv','avi','mov','wmv','webm','m4v','mp3','wav','flac','m4a','ogg','aac','epub','srt']);
 const BIDI=/[؜‎‏‪-‮⁦-⁩]/;
+// A name is judged by how it reads. The Hangul fillers and the blank Braille
+// pattern are drawn as blanks, so they read as spaces; the other characters
+// Unicode marks default-ignorable (zero-width marks, soft hyphens, variation
+// selectors, tags) are not drawn at all, so they are left out. So "invoice.pdf"
+// + a zero-width space + ".exe" is blocked like invoice.pdf.exe, while a flag
+// emoji (built with tag characters) never counts as padding. The real
+// extension is still read from the name itself.
+const BLANKS=/[\u115f\u1160\u3164\uffa0\u2800]/g;
+const INVISIBLE=/\p{Default_Ignorable_Code_Point}/gu;
+const looks=name=>name.replace(BLANKS,' ').replace(INVISIBLE,'');
 const LEVELS={info:0,warning:1,blocked:2};
 
 function extensionOf(name){
@@ -41,9 +51,10 @@ const reason=(code,level,message)=>({code,level,message});
 function nameReasons(filename){
   const name=String(filename||'');const reasons=[];const ext=extensionOf(name);
   if(BIDI.test(name))reasons.push(reason('spoofed-name','blocked','The file name uses hidden or reversed text to disguise its real type.'));
-  const double=/\.([a-z0-9]{2,5})\s*\.([a-z0-9]{2,5})$/i.exec(name.replace(/[. ]+$/,''));
+  const shown=looks(name);
+  const double=/\.([a-z0-9]{2,5})\s*\.([a-z0-9]{2,5})$/i.exec(shown.replace(/[. ]+$/,''));
   if(double&&PLAIN_TYPES.has(double[1].toLowerCase())&&(PROGRAMS.has(ext)||SCRIPTS.has(ext)))reasons.push(reason('double-extension','blocked',`The name looks like a .${double[1].toLowerCase()} file, but it is really a .${ext} program.`));
-  else if(/\s{3,}\.[a-z0-9]{2,5}$/i.test(name)&&(PROGRAMS.has(ext)||SCRIPTS.has(ext)))reasons.push(reason('padded-name','blocked',`The name hides its .${ext} ending behind a run of spaces.`));
+  else if(/\s{3}\.[a-z0-9]{2,5}$/i.test(shown)&&(PROGRAMS.has(ext)||SCRIPTS.has(ext)))reasons.push(reason('padded-name','blocked',`The name hides its .${ext} ending behind a run of spaces.`));
   if(!reasons.some(item=>item.level==='blocked')){
     if(PROGRAMS.has(ext))reasons.push(reason('program','warning',`.${ext} files are programs that can change your PC. Run it only if you trust where it came from.`));
     else if(SCRIPTS.has(ext))reasons.push(reason('script','warning',`.${ext} files run commands as soon as they are opened. Open it only if you are sure it is safe.`));

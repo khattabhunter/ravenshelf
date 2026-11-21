@@ -2,6 +2,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {inspectLink,assessDownload,nameReasons,contentReasons,sniffBytes,extensionOf,nameFromURL,SNIFF_BYTES}=require('../src/link-safety.cjs');
+const {safeName}=require('../src/safe-name.cjs');
 
 const MZ=Buffer.concat([Buffer.from('MZ'),Buffer.alloc(200,1)]);
 function response(body,{status=200,headers={}}={}){return new Response(body,{status,headers});}
@@ -41,6 +42,37 @@ test('deceptive file names are blocked and risky types need confirmation',()=>{
   for(const name of ['game.iso','disk.vhdx','image.img'])assert.deepEqual(levels(name),['disk-image:warning'],name);
   for(const name of ['Game.part01.rar','fg-01.bin','setup-0.001','archive.7z','manual.pdf','song.mp3.zip','file.tar.gz','setup.part1.exe.txt'])assert.deepEqual(levels(name),[],name);
   assert.equal(extensionOf('archive.TAR.GZ. '),'gz');
+});
+
+test('invisible characters do not hide a double extension, and blank ones count as padding',()=>{
+  const levels=name=>nameReasons(name).map(item=>`${item.code}:${item.level}`);
+  const code=mark=>[...mark].map(c=>'U+'+c.codePointAt(0).toString(16)).join(' ');
+  // Zero-width marks, soft hyphen, variation selectors and tags are not drawn,
+  // and fillers and the blank Braille pattern are drawn as blanks, so these
+  // names look like invoice.pdf.exe (or "invoice.pdf .exe") and are blocked.
+  for(const mark of ['\u200b','\u200c','\u200d','\u2060','\u00ad','\u034f','\u180e','\u3164','\u115f','\uffa0','\ufe0f','\u{e0020}','\u2800','\u200b\u2060'])
+    assert.deepEqual(levels(`invoice.pdf${mark}.exe`),['double-extension:blocked'],code(mark));
+  assert.deepEqual(levels('invoice.p\u200bdf.exe'),['double-extension:blocked']);
+  assert.match(nameReasons('photo.j\u00adpg.scr')[0].message,/looks like a \.jpg file, but it is really a \.scr program/);
+  // The same verdicts for the name Ravenshelf saves (NFKC turns U+3164 into U+1160).
+  assert.deepEqual(levels(safeName('invoice.pdf\u3164.exe')),['double-extension:blocked']);
+  assert.deepEqual(levels(safeName('readme\u3164\u3164\u3164.exe')),['padded-name:blocked']);
+  // Blanks push an ending out of sight like spaces; characters that are not drawn don't.
+  for(const pad of ['\u3164\u3164\u3164','\u115f\u1160\uffa0','\u2800\u2800\u2800',' \u200b \u200b '])
+    assert.deepEqual(levels(`readme${pad}.exe`),['padded-name:blocked'],code(pad));
+  for(const pad of ['\u200b\u200b\u200b','\ufe0f\ufe0f\ufe0f',' \u200b '])
+    assert.deepEqual(levels(`readme${pad}.exe`),['program:warning'],code(pad));
+  // Such characters in ordinary names change nothing: a Persian word with a
+  // zero-width non-joiner, emoji (a flag is built with tag characters), and a
+  // name Windows does not run as .exe.
+  assert.deepEqual(levels('\u0646\u0635\u0628\u200c\u06a9\u0646\u0646\u062f\u0647.exe'),['program:warning']);
+  assert.deepEqual(levels('\u2764\ufe0f setup.exe'),['program:warning']);
+  assert.deepEqual(levels('Patch EN \u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}.exe'),['program:warning']);
+  assert.deepEqual(levels('love \u2764\ufe0f  .exe'),['program:warning']);
+  assert.deepEqual(levels('family \u{1f468}\u200d\u{1f469}\u200d\u{1f467}.mp4'),[]);
+  assert.deepEqual(levels('\u06a9\u062a\u0627\u0628\u200c\u0647\u0627.pdf'),[]);
+  assert.deepEqual(levels('invoice.pdf.ex\u200be'),[]);
+  assert.deepEqual(levels('song.mp3\u200b.zip'),[]);
 });
 
 test('a Windows program inside a document or media name is blocked',()=>{
