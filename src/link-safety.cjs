@@ -16,15 +16,17 @@ const DISK_IMAGES=new Set(['iso','img','vhd','vhdx']);
 const ARCHIVES=new Set(['zip','rar','7z','gz','tgz','bz2','xz','tar','cab']);
 const PLAIN_TYPES=new Set(['pdf','doc','docx','xls','xlsx','ppt','pptx','odt','ods','odp','rtf','txt','csv','jpg','jpeg','png','gif','bmp','webp','svg','mp4','mkv','avi','mov','wmv','webm','m4v','mp3','wav','flac','m4a','ogg','aac','epub','srt']);
 const BIDI=/[؜‎‏‪-‮⁦-⁩]/;
-// A name is judged by how it reads. The Hangul fillers and the blank Braille
-// pattern are drawn as blanks, so they read as spaces; the other characters
-// Unicode marks default-ignorable (zero-width marks, soft hyphens, variation
-// selectors, tags) are not drawn at all, so they are left out. So "invoice.pdf"
-// + a zero-width space + ".exe" is blocked like invoice.pdf.exe, while a flag
+// A name is judged by how it reads. The Hangul fillers, the blank Braille
+// pattern and the musical null notehead (U+1D159) are drawn as blanks, so they
+// read as spaces; the other characters Unicode marks default-ignorable
+// (zero-width marks, soft hyphens, variation selectors, tags) and the C1
+// control characters (U+0080 to U+009F, which a saved name keeps) are
+// usually not drawn at all, so they are left out. So "invoice.pdf" + a
+// zero-width space + ".exe" is blocked like invoice.pdf.exe, while a flag
 // emoji (built with tag characters) never counts as padding. The real
 // extension is still read from the name itself.
-const BLANKS=/[\u115f\u1160\u3164\uffa0\u2800]/g;
-const INVISIBLE=/\p{Default_Ignorable_Code_Point}/gu;
+const BLANKS=/[\u115f\u1160\u3164\uffa0\u2800\u{1d159}]/gu;
+const INVISIBLE=/[\p{Default_Ignorable_Code_Point}\x80-\x9f]/gu;
 const looks=name=>name.replace(BLANKS,' ').replace(INVISIBLE,'');
 const LEVELS={info:0,warning:1,blocked:2};
 

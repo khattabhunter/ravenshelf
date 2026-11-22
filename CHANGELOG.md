@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.13 — Control characters no longer hide a disguised program
+
+Maintenance update.
+
+- **The disguised-program check also catches control characters and the blank music symbol.** Since 0.10.12, a name such as `invoice.pdf` + an invisible character + `.exe` is blocked like `invoice.pdf.exe`. Two kinds of characters still got through: the C1 control characters (U+0080 to U+009F), which are usually not drawn and which a saved name keeps, and the "null notehead" music symbol (U+1D159), which is drawn as a blank. Such a name only got the normal "this is a program" warning. Now control characters are left out and the blank music symbol counts as a space, like the other invisible and blank characters. This applies to browser downloads and to file names inside torrents. Ordinary names, also names with text decoded the wrong way, get the same result as before. See [release notes](docs/RELEASE-0.10.13.md).
+
 ## 0.10.12 — Invisible characters no longer hide a disguised program
 
 Maintenance update.

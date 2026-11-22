@@ -75,6 +75,33 @@ test('invisible characters do not hide a double extension, and blank ones count 
   assert.deepEqual(levels('song.mp3\u200b.zip'),[]);
 });
 
+test('control characters do not hide a double extension, and the blank musical symbol counts as padding',()=>{
+  const levels=name=>nameReasons(name).map(item=>`${item.code}:${item.level}`);
+  const code=mark=>[...mark].map(c=>'U+'+c.codePointAt(0).toString(16)).join(' ');
+  // C1 control characters (U+0080 to U+009F) are usually not drawn, and the null
+  // notehead (U+1D159) is drawn as a blank, so these names look like
+  // invoice.pdf.exe (or "invoice.pdf .exe") and are blocked.
+  for(const mark of ['\u0080','\u0085','\u008d','\u009b','\u009f','\u{1d159}','\u0085\u200b'])
+    assert.deepEqual(levels(`invoice.pdf${mark}.exe`),['double-extension:blocked'],code(mark));
+  assert.deepEqual(levels('invoice.p\u0090df.exe'),['double-extension:blocked']);
+  assert.deepEqual(levels('invoice.p\u0090df.scr'),['double-extension:blocked']);
+  // The same verdicts for the name Ravenshelf saves.
+  for(const mark of ['\u0085','\u009f','\u{1d159}'])
+    assert.deepEqual(levels(safeName(`invoice.pdf${mark}.exe`)),['double-extension:blocked'],code(mark));
+  // The blank musical symbol pushes an ending out of sight like spaces;
+  // control characters, which are not drawn, don't.
+  assert.deepEqual(levels('readme\u{1d159}\u{1d159}\u{1d159}.exe'),['padded-name:blocked']);
+  assert.deepEqual(levels('readme \u{1d159}\u2800.exe'),['padded-name:blocked']);
+  assert.deepEqual(levels('readme\u0085\u0085\u0085.exe'),['program:warning']);
+  // Ordinary names keep their result: text decoded with the wrong code page
+  // (an en dash read as "â" plus two C1 characters), music symbols, and a
+  // name Windows does not run as .exe.
+  assert.deepEqual(levels('Game \u00e2\u0080\u0093 Setup.exe'),['program:warning']);
+  assert.deepEqual(levels('Caf\u00c3\u0083\u00c2\u00a9 menu.pdf'),[]);
+  assert.deepEqual(levels('score \u{1d11e}\u{1d159}.mp3'),[]);
+  assert.deepEqual(levels('invoice.pdf.ex\u0085e'),[]);
+});
+
 test('a Windows program inside a document or media name is blocked',()=>{
   assert.deepEqual(contentReasons('statement.pdf','windows-program').map(item=>item.level),['blocked']);
   assert.deepEqual(contentReasons('clip.mp4','windows-program').map(item=>item.level),['blocked']);
