@@ -38,6 +38,21 @@ test('programs that a page builds in the browser are blocked locally',()=>{
   for(const name of ['photo.png','notes.txt','archive.zip','']) assert.equal(P.downloadPlan({id:1,url:'blob:https://site.example/1',filename:name},on).kind,'ignore',name);
 });
 
+test('page-built files are blocked for every program, script and disk-image type the app knows',()=>{
+  const on={capture:true};
+  const {PROGRAMS,SCRIPTS,DISK_IMAGES}=require('../src/link-safety.cjs');
+  const risky=[...PROGRAMS,...SCRIPTS,...DISK_IMAGES];
+  for(const ext of risky)for(const url of ['blob:https://bad.example/1234-5678','data:application/octet-stream;base64,AA==']){
+    const plan=P.downloadPlan({id:1,url,filename:'C:\\Users\\Player\\Downloads\\report.'+ext},on);
+    assert.equal(plan.kind,'block',`${ext} (${url.slice(0,5)})`);
+    assert.equal(plan.params?.name,'report.'+ext,`${ext}: the block names the file without its folder`);
+  }
+  // The types the extension used to miss, in other spellings: Excel add-ins, web queries,
+  // SYLK sheets, ClickOnce apps, gadgets and settings shortcuts.
+  for(const name of ['Invoice.XLL','prices.iqy','sheet.slk','app.application','tool.gadget','x.settingcontent-ms','report.xll.'])assert.equal(P.downloadPlan({id:1,url:'blob:https://bad.example/1',filename:name},on).kind,'block',name);
+  for(const name of ['sheet.xlsx','table.csv','book.pdf','photo.png','song.mp3','game.rar','page.html'])assert.equal(P.downloadPlan({id:1,url:'blob:https://site.example/1',filename:name},on).kind,'ignore',name);
+});
+
 test('threat rules, the redirect rule and the switches build valid, correctly ranked browser rules',()=>{
   const rule=P.threatRule({id:5,category:'malware',domains:['bad.example','xn--80ak6aa92e.com','under_score.example','UPPER.example','bad example','http://x.example','1.2.3.4','-lead.example','a'.repeat(64)+'.example']});
   assert.deepEqual(rule.condition.requestDomains,['bad.example','xn--80ak6aa92e.com','under_score.example']);
