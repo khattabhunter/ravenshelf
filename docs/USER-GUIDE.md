@@ -1,10 +1,10 @@
 # Ravenshelf user guide
 
-This guide follows Ravenshelf 0.10.13 for Windows ([release notes](RELEASE-0.10.13.md)). Sections marked 0.10.3 or 0.10.4 describe what changed in that version.
+This guide follows Ravenshelf 0.10.14 for Windows ([release notes](RELEASE-0.10.14.md)). Sections marked 0.10.3 or 0.10.4 describe what changed in that version.
 
 ## Start and update Ravenshelf
 
-Download `Ravenshelf-0.10.13-Windows.exe` from the [v0.10.13 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.13). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
+Download `Ravenshelf-0.10.14-Windows.exe` from the [v0.10.14 release](https://github.com/khattabhunter/ravenshelf/releases/tag/v0.10.14). Open it normally; an installer and administrator access are not required. Ravenshelf is currently an unsigned preview.
 
 To move from an older version, exit it fully before opening the new executable. From 0.10.3, use **Exit Ravenshelf** rather than hiding its window in the background. Preferences, collections and the queue stay in your Windows profile. Unfinished downloads reopen paused, so you can choose when to resume them.
 
@@ -253,7 +253,7 @@ Paste your own free VirusTotal API key under **Settings → Browser extension**.
 ### Limits
 
 - The extension handles eligible file downloads (including images, direct video/audio files and [mod files from Nexus Mods](#nexus-mods-downloads)), plus [YouTube videos](#youtube-downloads) through their separate workflow. It cannot extract every video playing on a website or decrypt DRM-protected streams.
-- Ordinary browser-created `blob:` and `data:` media remains in the browser because Ravenshelf cannot fetch it independently. Page-created executable files retain the existing malware-protection block. A completed save is not replaced with a Ravenshelf review.
+- Ordinary browser-created `blob:` and `data:` media remains in the browser because Ravenshelf cannot fetch it independently. Programs, scripts and disk images that a page creates itself are blocked: the same types Ravenshelf warns about for other downloads, including Excel add-ins (`.xll`) since 0.10.14. A completed save is not replaced with a Ravenshelf review.
 - Checks and lists reduce risk; none of them proves a file or site is safe. Keep Windows protections and Microsoft Defender scans on.
 - Sites that need your browser sign-in can only be downloaded with **Download in browser instead**, because Ravenshelf never uses your browser cookies.
 - The extension is loaded in Developer mode (Chrome, Edge, Brave) or as a temporary add-on (Firefox) because it isn't published in the browser stores yet. Chrome may remind you about developer-mode extensions.

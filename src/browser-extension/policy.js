@@ -15,7 +15,11 @@
     { id: 'malware', from: 1, to: 99 }, { id: 'phishing', from: 100, to: 199 },
     { id: 'threats', from: 200, to: 499 }, { id: 'popups', from: 500, to: 699 }
   ]);
-  const LOCAL_DANGEROUS = new Set(['exe', 'msi', 'msix', 'msixbundle', 'appx', 'appxbundle', 'appinstaller', 'com', 'scr', 'pif', 'cpl', 'bat', 'cmd', 'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'hta', 'jar', 'lnk', 'url', 'scf', 'reg', 'inf', 'msc', 'iso', 'img', 'vhd', 'vhdx']);
+  // Programs, scripts and disk images that a page builds itself (blob: and
+  // data: links) are blocked. The same types the app treats as programs,
+  // scripts and disk images (src/link-safety.cjs); a test checks that every
+  // one of those is blocked here.
+  const LOCAL_DANGEROUS = new Set(['exe', 'msi', 'msix', 'msixbundle', 'appx', 'appxbundle', 'appinstaller', 'com', 'scr', 'pif', 'cpl', 'bat', 'cmd', 'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'hta', 'jar', 'lnk', 'url', 'scf', 'reg', 'inf', 'msc', 'application', 'gadget', 'settingcontent-ms', 'xll', 'iqy', 'slk', 'iso', 'img', 'vhd', 'vhdx']);
   const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
   const MAX_URL = 8192;
   // YouTube videos go to Ravenshelf by video ID only, in the canonical form.

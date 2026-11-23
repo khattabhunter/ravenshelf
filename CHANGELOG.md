@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.14 — Page-built Excel add-ins and scripts are blocked
+
+Maintenance update.
+
+- **The browser extension blocks every program, script and disk-image type Ravenshelf knows when a web page builds the file itself.** A page can build a file inside the browser (a `blob:` or `data:` link) instead of linking to it. Ravenshelf cannot download such a file again to check it, so the extension blocks the risky types right away. Its list was missing six types that Ravenshelf itself treats as scripts: Excel add-ins (`.xll`), Excel web queries (`.iqy`), SYLK sheets (`.slk`), ClickOnce apps (`.application`), Windows gadgets (`.gadget`) and settings shortcuts (`.settingcontent-ms`). A page-built file of these types went to the browser without a word. Now they are blocked like `.exe`, and a test makes sure the extension blocks every type on Ravenshelf's own list. Other page-built files (pictures, videos, documents, archives) stay in the browser as before. Reload the browser extension after updating. See [release notes](docs/RELEASE-0.10.14.md).
+
 ## 0.10.13 — Control characters no longer hide a disguised program
 
 Maintenance update.
