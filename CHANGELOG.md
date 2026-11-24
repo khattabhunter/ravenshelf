@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.15 — Long program endings can't be disguised
+
+Maintenance update.
+
+- **A disguised program is blocked also when its ending is long.** Ravenshelf blocks a program whose name pretends to be another kind of file, such as `invoice.pdf.exe`, and a program whose ending is pushed out of sight with spaces. Both checks only read endings of up to five letters, so six program and script types that Ravenshelf knows got only the normal "this is a program" warning when disguised: `.application` (ClickOnce apps), `.appinstaller`, `.msixbundle`, `.appxbundle`, `.gadget` and `.settingcontent-ms`. For example, `invoice.pdf.application` was not blocked. Now these checks read the whole ending, the same way Ravenshelf reads a file's type everywhere else. This applies to browser downloads and to file names inside torrents. In Arabic, the warnings for five of these types (all except `.gadget`) were shown in English; now they are shown in Arabic too. Other names get the same result as before. See [release notes](docs/RELEASE-0.10.15.md).
+
 ## 0.10.14 — Page-built Excel add-ins and scripts are blocked
 
 Maintenance update.

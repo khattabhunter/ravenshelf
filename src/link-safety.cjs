@@ -28,10 +28,17 @@ const BIDI=/[؜‎‏‪-‮⁦-⁩]/;
 const BLANKS=/[\u115f\u1160\u3164\uffa0\u2800\u{1d159}]/gu;
 const INVISIBLE=/[\p{Default_Ignorable_Code_Point}\x80-\x9f]/gu;
 const looks=name=>name.replace(BLANKS,' ').replace(INVISIBLE,'');
+// One pattern for the real ending, used by extensionOf and by the disguise
+// checks, so long endings (.application, .appinstaller, .settingcontent-ms)
+// are judged like .exe. src/renderer/i18n.js reads {ext} the same way.
+const ENDING='\\.([a-z0-9-]{1,24})$';
+const ENDING_AT_END=new RegExp(ENDING,'i');
+const DOUBLE=new RegExp('\\.([a-z0-9]{2,5})\\s*'+ENDING,'i');
+const PADDED=new RegExp('\\s{3}'+ENDING,'i');
 const LEVELS={info:0,warning:1,blocked:2};
 
 function extensionOf(name){
-  const match=/\.([a-z0-9-]{1,24})$/i.exec(String(name||'').trim().replace(/[. ]+$/,''));
+  const match=ENDING_AT_END.exec(String(name||'').trim().replace(/[. ]+$/,''));
   return match?match[1].toLowerCase():'';
 }
 function sniffBytes(bytes){
@@ -54,9 +61,9 @@ function nameReasons(filename){
   const name=String(filename||'');const reasons=[];const ext=extensionOf(name);
   if(BIDI.test(name))reasons.push(reason('spoofed-name','blocked','The file name uses hidden or reversed text to disguise its real type.'));
   const shown=looks(name);
-  const double=/\.([a-z0-9]{2,5})\s*\.([a-z0-9]{2,5})$/i.exec(shown.replace(/[. ]+$/,''));
+  const double=DOUBLE.exec(shown.replace(/[. ]+$/,''));
   if(double&&PLAIN_TYPES.has(double[1].toLowerCase())&&(PROGRAMS.has(ext)||SCRIPTS.has(ext)))reasons.push(reason('double-extension','blocked',`The name looks like a .${double[1].toLowerCase()} file, but it is really a .${ext} program.`));
-  else if(/\s{3}\.[a-z0-9]{2,5}$/i.test(shown)&&(PROGRAMS.has(ext)||SCRIPTS.has(ext)))reasons.push(reason('padded-name','blocked',`The name hides its .${ext} ending behind a run of spaces.`));
+  else if(PADDED.test(shown)&&(PROGRAMS.has(ext)||SCRIPTS.has(ext)))reasons.push(reason('padded-name','blocked',`The name hides its .${ext} ending behind a run of spaces.`));
   if(!reasons.some(item=>item.level==='blocked')){
     if(PROGRAMS.has(ext))reasons.push(reason('program','warning',`.${ext} files are programs that can change your PC. Run it only if you trust where it came from.`));
     else if(SCRIPTS.has(ext))reasons.push(reason('script','warning',`.${ext} files run commands as soon as they are opened. Open it only if you are sure it is safe.`));

@@ -211,6 +211,10 @@ test('texts from the main process are shown in Arabic, and unchanged in English'
   const messages = [
     ...linkSafety.nameReasons('holiday.jpg.exe'), ...linkSafety.nameReasons('setup.exe'), ...linkSafety.nameReasons('run.bat'),
     ...linkSafety.nameReasons('disk.iso'), ...linkSafety.nameReasons('notes.txt       .exe'),
+    // Long endings, with a hyphen too, are file endings like .exe.
+    ...linkSafety.nameReasons('invoice.pdf.settingcontent-ms'), ...linkSafety.nameReasons('readme      .appinstaller'),
+    ...linkSafety.nameReasons('setup.msixbundle'), ...linkSafety.nameReasons('Windows.settingcontent-ms'),
+    ...[...linkSafety.PROGRAMS, ...linkSafety.SCRIPTS, ...linkSafety.DISK_IMAGES].flatMap(ext => linkSafety.nameReasons(`file.${ext}`)),
     ...linkSafety.contentReasons('song.mp3', 'windows-program'), ...linkSafety.contentReasons('pack.zip', 'windows-program'),
     ...linkSafety.assessDownload({ filename: 'a.zip', chain: [{ host: 'a.test' }, { host: 'b.test', listed: { label: 'phishing sites' } }, { host: 'c.test' }] }).reasons,
     ...linkSafety.assessDownload({ filename: 'a.zip', virusTotal: [{ status: 'ok', kind: 'file', malicious: 3 }, { status: 'ok', kind: 'domain', subject: 'b.test', malicious: 1 }] }).reasons
