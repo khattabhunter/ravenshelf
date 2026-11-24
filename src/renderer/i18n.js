@@ -29,7 +29,7 @@
   // the window and the notifications already filled in, so they are found by
   // these patterns, and the values found are put into the Arabic version of
   // the same text. {status}, {count}, {n} and {version} are numbers and {ext}
-  // a file ending; {message}, {reason}, {list}, {subject} and {tool} are texts
+  // a file ending (read like extensionOf in src/link-safety.cjs); {message}, {reason}, {list}, {subject} and {tool} are texts
   // of the app and are translated too; {chain} is a list of sites. Any other
   // value (a file, folder, host or game name) is kept as it is.
   const TEMPLATES = Object.freeze([
@@ -84,7 +84,7 @@
     Object.freeze(['Full details are temporarily unavailable for {n} entry.', 'Full details are temporarily unavailable for {n} entries.']),
     Object.freeze(['The link passed through {n} other site: {chain}.', 'The link passed through {n} other sites: {chain}.'])
   ]);
-  const VALUE = { host: '[^\\s:/]+', status: '[1-5]\\d{2}', count: '\\d+', n: '\\d+', version: '\\d[0-9A-Za-z.+-]*', ext: '[A-Za-z0-9]{1,8}', shown: '[A-Za-z0-9]{1,8}' };
+  const VALUE = { host: '[^\\s:/]+', status: '[1-5]\\d{2}', count: '\\d+', n: '\\d+', version: '\\d[0-9A-Za-z.+-]*', ext: '[A-Za-z0-9-]{1,24}', shown: '[A-Za-z0-9]{1,8}' };
   const TRANSLATED = new Set(['message', 'reason', 'list', 'tool']);
   // Longer texts (pages, notes) are shown as they came: matching them is not
   // worth the time.

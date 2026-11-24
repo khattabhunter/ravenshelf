@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {inspectLink,assessDownload,nameReasons,contentReasons,sniffBytes,extensionOf,nameFromURL,SNIFF_BYTES}=require('../src/link-safety.cjs');
+const {inspectLink,assessDownload,nameReasons,contentReasons,sniffBytes,extensionOf,nameFromURL,PROGRAMS,SCRIPTS,SNIFF_BYTES}=require('../src/link-safety.cjs');
 const {safeName}=require('../src/safe-name.cjs');
 
 const MZ=Buffer.concat([Buffer.from('MZ'),Buffer.alloc(200,1)]);
@@ -42,6 +42,24 @@ test('deceptive file names are blocked and risky types need confirmation',()=>{
   for(const name of ['game.iso','disk.vhdx','image.img'])assert.deepEqual(levels(name),['disk-image:warning'],name);
   for(const name of ['Game.part01.rar','fg-01.bin','setup-0.001','archive.7z','manual.pdf','song.mp3.zip','file.tar.gz','setup.part1.exe.txt'])assert.deepEqual(levels(name),[],name);
   assert.equal(extensionOf('archive.TAR.GZ. '),'gz');
+});
+
+test('every program and script ending is blocked when disguised, however long it is',()=>{
+  const levels=name=>nameReasons(name).map(item=>`${item.code}:${item.level}`);
+  // Endings longer than five letters (.application, .appinstaller,
+  // .msixbundle, .settingcontent-ms …) are disguised the same way as .exe.
+  for(const ext of [...PROGRAMS,...SCRIPTS]){
+    assert.deepEqual(levels(`invoice.pdf.${ext}`),['double-extension:blocked'],ext);
+    assert.deepEqual(levels(`Invoice.PDF .${ext.toUpperCase()}`),['double-extension:blocked'],ext);
+    assert.deepEqual(levels(`readme      .${ext}`),['padded-name:blocked'],ext);
+    assert.deepEqual(levels(`invoice.pdf\u200b.${ext}`),['double-extension:blocked'],ext);
+  }
+  assert.match(nameReasons('invoice.pdf.settingcontent-ms')[0].message,/looks like a \.pdf file, but it is really a \.settingcontent-ms program/);
+  assert.match(nameReasons('readme      .appinstaller')[0].message,/hides its \.appinstaller ending/);
+  // Names that are not programs keep their result.
+  for(const name of ['notes.pdf.backup-copy','photo.jpg.part-01','report.docx      .tar-gz','setup.exe.txt'])assert.deepEqual(levels(name),[],name);
+  assert.deepEqual(levels('setup.appinstaller'),['program:warning']);
+  assert.deepEqual(levels('Windows.settingcontent-ms'),['script:warning']);
 });
 
 test('invisible characters do not hide a double extension, and blank ones count as padding',()=>{
